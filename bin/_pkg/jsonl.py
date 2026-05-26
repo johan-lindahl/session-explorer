@@ -60,6 +60,7 @@ RENAME SERIALIZATION:
 """
 
 import json
+import os
 from typing import Optional
 
 
@@ -95,3 +96,58 @@ def first_user_prompt(path: str) -> Optional[str]:
                     if isinstance(item, dict) and item.get("type") == "text":
                         return item.get("text")
     return None
+
+
+def session_name(path: str) -> Optional[str]:
+    """Returns the Claude-assigned session name, or None.
+
+    Precedence: the LAST `custom-title` line's `customTitle` wins (user rename).
+    Falls back to the LAST `ai-title` line's `aiTitle` (AI-generated, refined
+    repeatedly during the session). Returns None if neither line type is present.
+    """
+    last_custom = None
+    last_ai = None
+    for msg in _iter_messages(path):
+        t = msg.get("type")
+        if t == "custom-title":
+            v = msg.get("customTitle")
+            if v:
+                last_custom = v
+        elif t == "ai-title":
+            v = msg.get("aiTitle")
+            if v:
+                last_ai = v
+    return last_custom or last_ai
+
+
+def tokens_estimate(path: str) -> int:
+    """Approximate context size.
+
+    Returns `cache_read_input_tokens` from the latest assistant message
+    (accurate per the spec's "Why not sum input_tokens" note). Falls back to
+    `os.path.getsize(path) // 4` when no assistant message has been written yet.
+    Zero for missing/empty files.
+    """
+    last_cache_read = None
+    for msg in _iter_messages(path):
+        if msg.get("type") == "assistant":
+            usage = msg.get("message", {}).get("usage") or {}
+            val = usage.get("cache_read_input_tokens")
+            if val:
+                last_cache_read = val
+    if last_cache_read is not None:
+        return int(last_cache_read)
+    try:
+        return os.path.getsize(path) // 4
+    except FileNotFoundError:
+        return 0
+
+
+def last_active_at(path: str) -> Optional[str]:
+    """ISO8601 timestamp of the LAST line that carries one; None if missing/empty."""
+    last = None
+    for msg in _iter_messages(path):
+        ts = msg.get("timestamp")
+        if ts:
+            last = ts
+    return last
