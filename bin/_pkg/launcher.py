@@ -7,6 +7,7 @@ Windows in M5. The fallback path prints the absolute command to stdout
 
 from __future__ import annotations
 
+import os
 import platform
 import shlex
 import subprocess
@@ -27,6 +28,10 @@ def launch(target_command: str) -> int:
     On unsupported platforms, prints the command to stdout (for clipboard copy
     by the slash command) and returns a non-zero code.
     """
+    if os.environ.get("SESSION_EXPLORER_DRY_RUN") == "1":
+        print(f"DRY RUN: would launch: {target_command}")
+        return 0
+
     system = platform.system()
     if system == "Darwin":
         cmd = build_macos_command(target_command)

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import sys
 
 from . import __version__
 from . import index as _index
+from . import launcher as _launcher
 
 
 def _index_path() -> str:
@@ -110,6 +112,14 @@ def _cmd_index(args) -> int:
     return 2
 
 
+def _cmd_launch() -> int:
+    here = os.path.dirname(os.path.realpath(__file__))
+    # bin/_pkg/cli.py → bin/session-explorer
+    bin_path = os.path.normpath(os.path.join(here, "..", "session-explorer"))
+    target = f"{shlex.quote(bin_path)} list; echo; echo Press Enter to close; read"
+    return _launcher.launch(target)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -120,7 +130,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_index(args)
     if args.cmd == "list":
         return _cmd_list()
-    # launch lands in later task
+    if args.cmd == "launch":
+        return _cmd_launch()
+    # Safety net for any unknown subcommand
     print(f"(not implemented) cmd={args.cmd}", file=sys.stderr)
     return 2
 

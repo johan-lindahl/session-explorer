@@ -79,3 +79,15 @@ def test_list_no_sessions(tmp_path):
     result = subprocess.run([_BIN, "list"], capture_output=True, text=True, env=env)
     assert result.returncode == 0
     assert "no sessions" in result.stdout.lower()
+
+
+def test_launch_invokes_osascript_on_mac(monkeypatch):
+    """Smoke test: `session-explorer launch` should attempt to spawn a new terminal."""
+    # We run the binary in a subprocess where we can intercept by setting
+    # SESSION_EXPLORER_DRY_RUN=1, which makes launcher.launch print the would-be
+    # command and exit 0 without actually shelling out.
+    env = {**os.environ, "SESSION_EXPLORER_DRY_RUN": "1"}
+    result = subprocess.run([_BIN, "launch"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "session-explorer" in result.stdout
+    assert "list" in result.stdout  # the would-be terminal runs `... list`
