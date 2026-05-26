@@ -53,3 +53,29 @@ def test_index_refresh_via_cli(tmp_path):
     )
     result = subprocess.run([_BIN, "index", "--refresh"], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
+
+
+def test_list_groups_by_project_and_folder(tmp_path):
+    transcript = tmp_path / "01ABC.jsonl"
+    shutil.copy(os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = tmp_path / "index.json"
+    env = {**os.environ, "SESSION_EXPLORER_INDEX": str(idx_path)}
+    subprocess.run(
+        [_BIN, "index", "--record", "01ABC", str(transcript), "/Users/jl/proj/foo"],
+        check=True, env=env,
+    )
+
+    result = subprocess.run([_BIN, "list"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0
+    out = result.stdout
+    assert "foo" in out                  # project label
+    assert "planning/" in out             # folder, parsed from first dash
+    assert "sprint14-custom" in out       # display name (custom-title wins, with first-dash stripped)
+    assert "15K" in out or "15.2K" in out or "15234" in out
+
+
+def test_list_no_sessions(tmp_path):
+    env = {**os.environ, "SESSION_EXPLORER_INDEX": str(tmp_path / "absent.json")}
+    result = subprocess.run([_BIN, "list"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0
+    assert "no sessions" in result.stdout.lower()
