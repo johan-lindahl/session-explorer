@@ -9,6 +9,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 3. **One slash command — `/session-explorer`** — opens a TUI in a new terminal window. Browsing, organizing, renaming, deleting, resuming: all happen there.
 4. **Folders come for free, from the name.** `planning-sprint14` lives in folder `planning` as session `sprint14`. The first dash separates folder from name; the rest stays in the name. Single-level by design.
 5. **Install once via a Claude Code marketplace.** Active across every project the user opens Claude Code in. Optional `install.sh` for users not on the marketplace.
+6. **Surface context size at a glance.** Every row in the explorer shows an approximate token count and message count, so bloated sessions are obvious before you resume.
 
 ## Non-goals
 
@@ -17,6 +18,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 - Not a replacement for Claude Code's native `/resume`. It augments it; the native picker keeps working.
 - No web UI. Terminal only.
 - No multi-level folder hierarchies. One level is enough; deeper structure goes back to "use longer names".
+- No in-place `/compact` in v1. The explorer surfaces context size but doesn't drive compaction; running `/compact` stays a manual step inside a resumed session. Revisit once Claude Code exposes a non-interactive compaction CLI or stable SDK affordance.
 
 ## Background: Claude Code's session surface
 
@@ -83,18 +85,18 @@ Only the **first** dash is the separator. Dashes after the first stay in the nam
 Built on **Textual** (Python). Launched in a new terminal window by the `/session-explorer` slash command. Single tree view:
 
 ```
-session-explorer · 47 sessions across 6 projects             / filter
+session-explorer · 47 sessions across 6 projects                                       / filter
 
 ▼ acme-web (3)
     planning/
-      sprint14            main          · 2h ago  · audit AC mods…
+      sprint14            main         2h    ~38K  (19%)    47 msgs   audit AC mods…
     audits/
-      q1-review    feature/...   · 5d ago  · grant audit
+      q1-review    feature/…    5d    ~127K (64%)   152 msgs   grant audit
 ▼ acme-api (8)
     refactors/
-      checkout-cleanup    feat/x        · 1d ago  · helper extraction
+      checkout-cleanup    feat/x       1d    ~12K   (6%)    18 msgs   helper extraction
 ▼ (unnamed) (15)
-      cd0fc4              main          · 3d ago  · brainstorm naming
+      cd0fc4              main         3d    ~4K    (2%)     9 msgs   brainstorm naming
 ▶ session-explorer (4)
 ```
 
@@ -117,6 +119,20 @@ Outer level: project (`project_label`, auto-grouped from cwd). Inner level: fold
 | `q` `Esc` | Quit. |
 
 **Folder deletion** is intentionally not bound. Empty folders disappear when removed from `folders[]` (achievable by moving a session out and back); populated folders cease to exist when their last session is moved or deleted. v1 does not support "delete folder and everything in it" — too easy to lose work.
+
+### Stats columns
+
+Each session row shows:
+
+- **Age** since `last_active_at` (relative).
+- **Approx. tokens.** Derived from `cache_read_input_tokens` of the latest assistant message in the JSONL — accurate when caching is active. Falls back to `bytes / 4` when the session has no cached turns (early sessions, cache disabled). Always prefixed with `~` in the UI to signal it's an estimate.
+- **Context-window %.** v1 hardcodes a 200K denominator (Sonnet 4.6 default). Per-message model id isn't recorded in the JSONL, so model-aware sizing is an M2/M3 follow-up.
+- **Message count** (`wc -l` on the JSONL; always exact).
+- **First-prompt tail** (truncated; full text in the preview pane).
+
+These are pure caches in the index. The `SessionStart` hook refreshes them on every fire; `session-explorer index --refresh` recomputes them on demand.
+
+> **Why not sum `input_tokens` / `output_tokens`?** Claude Code's per-message token counts are streaming-time estimates and have been observed to be off by an order of magnitude in community reports. `cache_read_input_tokens` is logged after the API response and is reliable for sessions that use caching (the vast majority).
 
 ### Rename and move
 
@@ -172,7 +188,10 @@ In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogf
       "summary": "…",                          // from /summary if available
       "created_at": "2026-05-26T14:12:00Z",
       "last_active_at": "2026-05-26T15:48:00Z",
-      "message_count": 47
+      "message_count": 47,
+      "bytes": 481203,                          // JSONL file size
+      "tokens_estimate": 38234,                 // from cache_read_input_tokens, fallback bytes/4
+      "tokens_window_pct": 19                   // assumes 200K denominator (v1)
     }
   }
 }
@@ -301,6 +320,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 7. **Empty-folder accumulation.** `--gc` also prunes entries from `folders[]` that have remained empty for >90 days.
 8. **Launcher fallback.** No terminal detected → CLI prints the absolute command + copies to clipboard; the slash command's response shows "Run: …".
 9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. Index reader tolerates unknown fields; writer always writes `version: 1`.
+10. **Token estimate accuracy.** Per-message `input_tokens` / `output_tokens` in the JSONL are streaming-time estimates and can be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` so users know it's approximate.
 
 ## Milestones
 
@@ -308,7 +328,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 |---|---|
 | M0 | Spec lands. (This file.) |
 | M1 | Plugin manifest + `marketplace.json` + `SessionStart` hook with first-run setup + index core (`record`, `refresh`, `list`). Installable from a self-hosted marketplace. macOS terminal launcher. Reverse-engineer `/rename` JSONL format. |
-| M2 | Textual TUI: tree view, all keybindings, rename/move/delete/notes, preview pane. Linux launchers. |
+| M2 | Textual TUI: tree view, all keybindings, rename/move/delete/notes, preview pane, **context-size stats columns**. Linux launchers. |
 | M3 | `--gc` (sessions + empty folders); `session-explorer uninstall`; search across notes/prompts/summaries. |
 | M4 | bats + pytest suites; CI; README quickstart with both install paths. |
 | M5 | Submit to `anthropics/claude-plugins-community`. Windows / WSL launcher. |
@@ -316,5 +336,8 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 ## Open questions
 
 - **Claude's `/rename` JSONL format.** Decided during M1 by inspecting a real renamed transcript. Fallback: `display_name` override field in the index.
+- **Exact `message.usage` field path.** v1 reads `cache_read_input_tokens` from the latest assistant message; the precise JSON path is confirmed during M1 by inspecting a real transcript.
+- **Model-aware context window.** v1 hardcodes a 200K denominator. Per-message model id isn't in the JSONL; we'd need to read the session's startup config or Claude Code settings to pick the right window (200K Sonnet vs 1M Opus 1M-context vs 200K Haiku). Revisit in M2/M3 if the hardcode misleads Opus/Haiku users.
+- **In-place compaction.** Deferred past v1 (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.
 - **Preview-pane content.** Currently spec'd as notes + first prompt + summary + full path. May want to add "last assistant message" once we see how cramped the layout gets. Defer to M2 dogfooding.
 - **`session-explorer browse` as a standalone shell command.** Removed from this spec — the TUI is only reachable via the slash command's launcher. Easy to re-add as a thin CLI wrapper in M3 if users ask. Decision: ship without it; let usage tell us if it's needed.

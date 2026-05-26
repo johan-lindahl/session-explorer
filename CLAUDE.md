@@ -30,6 +30,8 @@ These are the constraints to preserve — violating any breaks the spec's contra
 - **Hooks never block startup.** `SessionStart` logs failures to `~/.claude/session-explorer.log` and exits 0.
 - **TUI runs in a separate terminal**, not inside Claude Code. Claude holds the terminal in raw mode; an interactive TUI must have its own TTY. Slash command spawns it via OS-detected launcher (`osascript` on macOS; `$TERMINAL` / `x-terminal-emulator` / known emulators on Linux).
 - **One Python dep: vendored Textual.** Bundled under `bin/_pkg/_vendor/`. No `pip install` runs on either install path. Don't add other deps casually.
+- **Don't sum `input_tokens` / `output_tokens` from the JSONL for context-size stats.** Those are streaming-time estimates and have been observed to be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` to set expectations.
+- **No in-place `/compact`.** v1 surfaces context size only; compaction stays a manual `/compact` inside a resumed Claude session. Don't reintroduce SDK-driven compaction without revisiting the spec.
 
 ## Commands
 
