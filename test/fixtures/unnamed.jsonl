@@ -1,0 +1,1 @@
+{"type":"user","parentUuid":null,"isSidechain":false,"promptId":"p1","message":{"role":"user","content":"poke around"},"uuid":"u1","timestamp":"2026-05-20T11:00:05.000Z","userType":"human","entrypoint":"cli","cwd":"/Users/jl/proj/bar","sessionId":"01XYZ","version":"2.0.0","gitBranch":"feat/x"}

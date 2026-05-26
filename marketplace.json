@@ -1,0 +1,14 @@
+{
+  "name": "session-explorer",
+  "owner": {
+    "name": "Johan Lindahl",
+    "email": "johan.lindahl@snojken.com"
+  },
+  "plugins": [
+    {
+      "name": "session-explorer",
+      "source": "./",
+      "description": "File-explorer-style session management for Claude Code"
+    }
+  ]
+}
