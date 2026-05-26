@@ -1,0 +1,14 @@
+{
+  "name": "session-explorer",
+  "version": "0.1.0",
+  "description": "File-explorer-style session management for Claude Code",
+  "commands": "commands/",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matchers": [],
+        "command": "$CLAUDE_PLUGIN_DIR/hooks/session-start.sh"
+      }
+    ]
+  }
+}
