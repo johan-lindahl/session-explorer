@@ -150,7 +150,7 @@ Just one — `/session-explorer`. The markdown command shells out to a small lau
 
 1. Detects the OS (`uname -s`).
 2. Picks a terminal launcher (see next section).
-3. Spawns `$CLAUDE_PLUGIN_DIR/bin/session-explorer` in a new window.
+3. Spawns `$CLAUDE_PLUGIN_ROOT/bin/session-explorer` in a new window.
 4. Returns to Claude immediately (fire-and-forget; no output to wait on).
 
 If no terminal launcher succeeds, the slash command prints the absolute command and copies it to the clipboard (`pbcopy` on macOS, `xclip -selection clipboard` on Linux). The user can then paste into any terminal.
@@ -208,14 +208,20 @@ One `SessionStart` hook, declared in `plugin.json`:
   "name": "session-explorer",
   "version": "0.1.0",
   "description": "File-explorer-style session management for Claude Code",
-  "commands": "commands/",
   "hooks": {
     "SessionStart": [
-      { "matchers": [], "command": "$CLAUDE_PLUGIN_DIR/hooks/session-start.sh" }
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-start.sh" }
+        ]
+      }
     ]
   }
 }
 ```
+
+(`commands/` is auto-discovered; no need to declare it. The env var Claude Code
+sets is `CLAUDE_PLUGIN_ROOT`, not `CLAUDE_PLUGIN_DIR`.)
 
 The hook (bash) reads stdin (`session_id`, `transcript_path`, `cwd`, `source`) and:
 
@@ -254,11 +260,11 @@ Who writes the `36500`:
 /plugin install session-explorer
 ```
 
-`bin/session-explorer` is on the Bash-tool PATH automatically. Slash commands and hooks reference `$CLAUDE_PLUGIN_DIR`. **No manual config edits.**
+`bin/session-explorer` is on the Bash-tool PATH automatically. Slash commands and hooks reference `$CLAUDE_PLUGIN_ROOT`. **No manual config edits.**
 
 **Distribution channels:**
 
-- **Self-hosted marketplace** — the repo's own `marketplace.json` at root. Users register it with `/plugin marketplace add <owner>/<repo>`. No review. Recommended for v1 while iterating.
+- **Self-hosted marketplace** — the repo's own `.claude-plugin/marketplace.json`. Users register it with `/plugin marketplace add <owner>/<repo>`. No review. Recommended for v1 while iterating.
 - **Community marketplace** (`anthropics/claude-plugins-community`) — submit via [claude.ai/settings/plugins/submit](https://claude.ai/settings/plugins/submit) once stable. Automated safety screening + manual review. Pinned to a commit SHA.
 - **Official marketplace** — out of scope for v1.
 

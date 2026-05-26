@@ -52,12 +52,12 @@ with open('${SETTINGS}', 'w') as f:
 fi
 
 # --- Resolve the CLI ---
-# Marketplace install: CLAUDE_PLUGIN_DIR is set by Claude Code; CLI lives at $CLAUDE_PLUGIN_DIR/bin/session-explorer.
+# Marketplace install: CLAUDE_PLUGIN_ROOT is set by Claude Code; CLI lives at $CLAUDE_PLUGIN_ROOT/bin/session-explorer.
 # Plain install.sh: the binary is symlinked into ~/.local/bin/session-explorer.
 # Either way, also fall back to PATH lookup.
 CLI=""
-if [ -n "${CLAUDE_PLUGIN_DIR:-}" ] && [ -x "${CLAUDE_PLUGIN_DIR}/bin/session-explorer" ]; then
-  CLI="${CLAUDE_PLUGIN_DIR}/bin/session-explorer"
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -x "${CLAUDE_PLUGIN_ROOT}/bin/session-explorer" ]; then
+  CLI="${CLAUDE_PLUGIN_ROOT}/bin/session-explorer"
 elif [ -x "${HOME}/.local/bin/session-explorer" ]; then
   CLI="${HOME}/.local/bin/session-explorer"
 else
@@ -90,7 +90,7 @@ if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
     "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" 2>>"${LOG}" || log "warn: index --record failed for ${SID}"
   fi
 else
-  log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_DIR=${CLAUDE_PLUGIN_DIR:-(unset)}; ~/.local/bin checked; PATH checked"
+  log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-(unset)}; ~/.local/bin checked; PATH checked"
 fi
 
 exit 0

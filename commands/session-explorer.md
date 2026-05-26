@@ -5,4 +5,4 @@ allowed-tools: Bash
 
 Open the session-explorer in a new terminal window.
 
-!`"$CLAUDE_PLUGIN_DIR/bin/session-explorer" launch`
+!`"$CLAUDE_PLUGIN_ROOT/bin/session-explorer" launch`

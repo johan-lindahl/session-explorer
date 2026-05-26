@@ -18,7 +18,7 @@ def _run_hook(home: Path, stdin: str = "") -> subprocess.CompletedProcess:
     env = {
         **os.environ,
         "HOME": str(home),
-        "CLAUDE_PLUGIN_DIR": str(_REPO_ROOT),  # so the hook can find bin/session-explorer
+        "CLAUDE_PLUGIN_ROOT": str(_REPO_ROOT),  # so the hook can find bin/session-explorer
     }
     return subprocess.run(
         ["bash", str(_HOOK)],
@@ -122,7 +122,7 @@ def test_hook_writes_active_session_pointer(tmp_path):
 
 
 def test_hook_finds_cli_via_local_bin_when_plugin_dir_missing(tmp_path):
-    """When CLAUDE_PLUGIN_DIR is unset, hook should resolve CLI via ~/.local/bin/session-explorer."""
+    """When CLAUDE_PLUGIN_ROOT is unset, hook should resolve CLI via ~/.local/bin/session-explorer."""
     # Symlink the repo's binary into the tmp HOME's ~/.local/bin
     local_bin = tmp_path / ".local" / "bin"
     local_bin.mkdir(parents=True)
@@ -134,8 +134,8 @@ def test_hook_finds_cli_via_local_bin_when_plugin_dir_missing(tmp_path):
     )
     payload = '{"session_id":"01LB","transcript_path":"' + str(stub_jsonl) + '","cwd":"' + str(tmp_path) + '"}'
 
-    # Run hook WITHOUT CLAUDE_PLUGIN_DIR
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_DIR"}
+    # Run hook WITHOUT CLAUDE_PLUGIN_ROOT
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
     env.update({"HOME": str(tmp_path)})
     proc = subprocess.run(
         ["bash", str(_HOOK)],
