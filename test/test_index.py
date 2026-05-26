@@ -104,3 +104,37 @@ def test_record_session_preserves_notes(tmp_path):
 
     data = index.load(idx_path)
     assert data["sessions"]["01ABC"]["notes"] == "user notes"
+
+
+def test_refresh_all_recomputes_caches(tmp_path):
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/Users/jl/proj/foo")
+
+    # Simulate stale caches
+    def stale(data: dict) -> dict:
+        data["sessions"]["01ABC"]["message_count"] = 0
+        data["sessions"]["01ABC"]["tokens_estimate"] = 0
+        return data
+    index.mutate(idx_path, stale)
+
+    index.refresh_all(idx_path)
+
+    data = index.load(idx_path)
+    assert data["sessions"]["01ABC"]["message_count"] == 5  # named.jsonl now has 5 lines
+    assert data["sessions"]["01ABC"]["tokens_estimate"] == 15234
+
+
+def test_refresh_all_drops_missing_jsonl(tmp_path):
+    """If a session's JSONL no longer exists, refresh drops it from the index."""
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/x")
+
+    _os.unlink(transcript)
+    index.refresh_all(idx_path)
+
+    data = index.load(idx_path)
+    assert "01ABC" not in data["sessions"]

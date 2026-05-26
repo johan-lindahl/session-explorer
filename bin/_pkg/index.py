@@ -111,3 +111,24 @@ def record_session(index_path: str, session_id: str, transcript_path: str, cwd: 
         data["sessions"][session_id] = new_entry
         return data
     return mutate(index_path, mutator)
+
+
+def refresh_all(index_path: str) -> dict:
+    """Recompute every session's cached fields; prune entries whose JSONL is gone."""
+    data = load(index_path)
+    keep: "dict[str, dict]" = {}
+    for sid, entry in data.get("sessions", {}).items():
+        transcript = entry.get("transcript_path")
+        if transcript and os.path.exists(transcript):
+            keep[sid] = entry
+    data["sessions"] = keep
+    save(index_path, data)
+    # Now re-record each (preserves notes).
+    for sid, entry in keep.items():
+        record_session(
+            index_path,
+            session_id=sid,
+            transcript_path=entry["transcript_path"],
+            cwd=entry.get("project_path", ""),
+        )
+    return load(index_path)
