@@ -110,3 +110,40 @@ def test_hook_records_session_via_cli(tmp_path):
     data = json.loads(index_path.read_text())
     assert "01HOOK" in data["sessions"]
     assert data["sessions"]["01HOOK"]["name_cached"] == "work-sprint"
+
+
+def test_hook_writes_active_session_pointer(tmp_path):
+    """SPEC §Hooks step 4: hook writes session_id to ~/.claude/.session-explorer.current."""
+    proc = _run_hook(tmp_path, stdin='{"session_id":"01CUR","transcript_path":"/tmp/x","cwd":"/tmp"}')
+    assert proc.returncode == 0
+    pointer = tmp_path / ".claude" / ".session-explorer.current"
+    assert pointer.exists()
+    assert pointer.read_text() == "01CUR"
+
+
+def test_hook_finds_cli_via_local_bin_when_plugin_dir_missing(tmp_path):
+    """When CLAUDE_PLUGIN_DIR is unset, hook should resolve CLI via ~/.local/bin/session-explorer."""
+    # Symlink the repo's binary into the tmp HOME's ~/.local/bin
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "session-explorer").symlink_to(_REPO_ROOT / "bin" / "session-explorer")
+
+    stub_jsonl = tmp_path / "stub.jsonl"
+    stub_jsonl.write_text(
+        '{"type":"ai-title","aiTitle":"local-bin-test","sessionId":"01LB","timestamp":"2026-05-26T10:00:00Z"}\n'
+    )
+    payload = '{"session_id":"01LB","transcript_path":"' + str(stub_jsonl) + '","cwd":"' + str(tmp_path) + '"}'
+
+    # Run hook WITHOUT CLAUDE_PLUGIN_DIR
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_DIR"}
+    env.update({"HOME": str(tmp_path)})
+    proc = subprocess.run(
+        ["bash", str(_HOOK)],
+        input=payload, capture_output=True, text=True, env=env,
+    )
+    assert proc.returncode == 0
+
+    index_path = tmp_path / ".claude" / "session-explorer-index.json"
+    assert index_path.exists(), f"Index file not created via ~/.local/bin path. stderr: {proc.stderr}"
+    data = json.loads(index_path.read_text())
+    assert "01LB" in data["sessions"]

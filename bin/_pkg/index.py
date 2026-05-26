@@ -114,17 +114,23 @@ def record_session(index_path: str, session_id: str, transcript_path: str, cwd: 
 
 
 def refresh_all(index_path: str) -> dict:
-    """Recompute every session's cached fields; prune entries whose JSONL is gone."""
-    data = load(index_path)
-    keep: "dict[str, dict]" = {}
-    for sid, entry in data.get("sessions", {}).items():
-        transcript = entry.get("transcript_path")
-        if transcript and os.path.exists(transcript):
-            keep[sid] = entry
-    data["sessions"] = keep
-    save(index_path, data)
-    # Now re-record each (preserves notes).
-    for sid, entry in keep.items():
+    """Recompute every session's cached fields; prune entries whose JSONL is gone.
+
+    The prune phase runs inside mutate() so a concurrent hook can't lose a write
+    via a load/save race. record_session uses its own mutate() per call, which
+    correctly merges with any session added between iterations.
+    """
+    def prune(data: dict) -> dict:
+        keep: "dict[str, dict]" = {}
+        for sid, entry in data.get("sessions", {}).items():
+            transcript = entry.get("transcript_path")
+            if transcript and os.path.exists(transcript):
+                keep[sid] = entry
+        data["sessions"] = keep
+        return data
+
+    pruned = mutate(index_path, prune)
+    for sid, entry in pruned["sessions"].items():
         record_session(
             index_path,
             session_id=sid,

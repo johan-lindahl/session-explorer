@@ -51,15 +51,24 @@ with open('${SETTINGS}', 'w') as f:
   fi
 fi
 
-# --- Record the session into the index ---
-CLI="${CLAUDE_PLUGIN_DIR:-${HOME}/.local/share/session-explorer}/bin/session-explorer"
-if [ ! -x "${CLI}" ]; then
-  # Fallback: try PATH
+# --- Resolve the CLI ---
+# Marketplace install: CLAUDE_PLUGIN_DIR is set by Claude Code; CLI lives at $CLAUDE_PLUGIN_DIR/bin/session-explorer.
+# Plain install.sh: the binary is symlinked into ~/.local/bin/session-explorer.
+# Either way, also fall back to PATH lookup.
+CLI=""
+if [ -n "${CLAUDE_PLUGIN_DIR:-}" ] && [ -x "${CLAUDE_PLUGIN_DIR}/bin/session-explorer" ]; then
+  CLI="${CLAUDE_PLUGIN_DIR}/bin/session-explorer"
+elif [ -x "${HOME}/.local/bin/session-explorer" ]; then
+  CLI="${HOME}/.local/bin/session-explorer"
+else
   CLI="$(command -v session-explorer 2>/dev/null || echo "")"
 fi
 
-if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
-  # Parse session_id, transcript_path, cwd from PAYLOAD using python3 (via stdin to avoid quoting bugs).
+# Parse session_id, transcript_path, cwd from PAYLOAD using python3 (via stdin to avoid quoting bugs).
+SID=""
+TPATH=""
+CWD=""
+if [ -n "${PAYLOAD}" ]; then
   read -r SID TPATH CWD < <(printf '%s' "${PAYLOAD}" | python3 -c "
 import json, sys
 try:
@@ -68,12 +77,20 @@ try:
 except Exception:
     print('', '', '')
 " 2>/dev/null)
+fi
 
+# --- Write the active-session pointer (per SPEC §Hooks step 4) ---
+if [ -n "${SID}" ]; then
+  printf '%s' "${SID}" > "${CLAUDE_DIR}/.session-explorer.current" 2>/dev/null || true
+fi
+
+# --- Record the session into the index ---
+if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
   if [ -n "${SID}" ] && [ -n "${TPATH}" ] && [ -n "${CWD}" ]; then
     "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" 2>>"${LOG}" || log "warn: index --record failed for ${SID}"
   fi
 else
-  log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_DIR=${CLAUDE_PLUGIN_DIR:-(unset)}"
+  log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_DIR=${CLAUDE_PLUGIN_DIR:-(unset)}; ~/.local/bin checked; PATH checked"
 fi
 
 exit 0
