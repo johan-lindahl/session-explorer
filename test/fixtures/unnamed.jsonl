@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","sessionId":"01XYZ","cwd":"/Users/jl/proj/bar","gitBranch":"feat/x","timestamp":"2026-05-20T11:00:00Z"}
+{"type":"user","sessionId":"01XYZ","uuid":"u1","timestamp":"2026-05-20T11:00:05Z","message":{"role":"user","content":"poke around"}}
