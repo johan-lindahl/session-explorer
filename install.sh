@@ -66,4 +66,4 @@ PY
 chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/bin/session-explorer"
 
 echo
-echo "Install complete. Start a new Claude session; run /session-explorer to open the explorer."
+echo "Install complete. Start a new Claude session; run /session-explorer:open to open the explorer."

@@ -10,7 +10,7 @@ Pre-implementation. The repo currently contains only `SPEC.md` (no commits, no c
 
 `session-explorer` — a Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree. Single entry point:
 
-- **`/session-explorer`** spawns a new terminal window running a Textual TUI.
+- **`/session-explorer:open`** spawns a new terminal window running a Textual TUI. (Plugin commands are namespaced as `<plugin>:<command>`; the prefix is unavoidable.)
 - **The TUI is the entire UX**: browse, rename, move between folders, delete, edit notes, resume. No other slash commands.
 - **Index sidecar** at `~/.claude/session-explorer-index.json` caches per-session metadata + tracks user-created empty folders.
 - **`SessionStart` hook** records new sessions, refreshes the cache, and does idempotent first-run setup (neutralising `cleanupPeriodDays`).

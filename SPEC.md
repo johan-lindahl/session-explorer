@@ -6,7 +6,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 
 1. **Claude's name is the only metadata that matters.** `/rename <name>` (or `claude -n <name>` at startup) is the single source of truth for both the session's identity and its folder. The plugin never maintains a parallel "tag" field.
 2. **A name means "keep".** Any named session is preserved past Claude Code's native 30-day cleanup. Unnamed sessions remain subject to expiry. One concept, not two.
-3. **One slash command — `/session-explorer`** — opens a TUI in a new terminal window. Browsing, organizing, renaming, deleting, resuming: all happen there.
+3. **One slash command — `/session-explorer:open`** — opens a TUI in a new terminal window. Browsing, organizing, renaming, deleting, resuming: all happen there. (Claude Code namespaces plugin commands as `<plugin>:<command>`; the prefix is unavoidable.)
 4. **Folders come for free, from the name.** `planning-sprint14` lives in folder `planning` as session `sprint14`. The first dash separates folder from name; the rest stays in the name. Single-level by design.
 5. **Install once via a Claude Code marketplace.** Active across every project the user opens Claude Code in. Optional `install.sh` for users not on the marketplace.
 6. **Surface context size at a glance.** Every row in the explorer shows an approximate token count and message count, so bloated sessions are obvious before you resume.
@@ -53,7 +53,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 │     ├── bin/_pkg/                  ← Python package + vendored    │
 │     │                                Textual                      │
 │     ├── hooks/session-start.sh                                    │
-│     └── commands/session-explorer.md                              │
+│     └── commands/open.md                                          │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,7 +82,7 @@ Only the **first** dash is the separator. Dashes after the first stay in the nam
 
 ## The TUI
 
-Built on **Textual** (Python). Launched in a new terminal window by the `/session-explorer` slash command. Single tree view:
+Built on **Textual** (Python). Launched in a new terminal window by the `/session-explorer:open` slash command. Single tree view:
 
 ```
 session-explorer · 47 sessions across 6 projects                                       / filter
@@ -142,16 +142,18 @@ Both write a rename event to the session's JSONL in the same shape Claude's own 
 
 ### Resume flow
 
-`Enter` on a session causes the TUI to `exec claude --resume <id>` in the same (spawned) terminal window. The TUI process exits and Claude takes over the window. The original Claude session you typed `/session-explorer` from keeps running in its other window — two parallel Claude sessions is the expected outcome.
+`Enter` on a session causes the TUI to `exec claude --resume <id>` in the same (spawned) terminal window. The TUI process exits and Claude takes over the window. The original Claude session you typed `/session-explorer:open` from keeps running in its other window — two parallel Claude sessions is the expected outcome.
 
 ## The slash command
 
-Just one — `/session-explorer`. The markdown command shells out to a small launcher script that:
+Just one — `/session-explorer:open`. The markdown command (`commands/open.md`) shells out to a small launcher script that:
 
 1. Detects the OS (`uname -s`).
 2. Picks a terminal launcher (see next section).
-3. Spawns `$CLAUDE_PLUGIN_ROOT/bin/session-explorer` in a new window.
+3. Spawns the `session-explorer` CLI in a new window.
 4. Returns to Claude immediately (fire-and-forget; no output to wait on).
+
+**Note on `CLAUDE_PLUGIN_ROOT`:** the env var is set for `plugin.json` hook commands, MCP/LSP `command` strings, and monitor scripts — but **not** for slash-command shell blocks (the `` !`...` `` syntax in markdown). The slash command therefore can't reference `$CLAUDE_PLUGIN_ROOT/bin/session-explorer` directly; it locates the binary by searching `~/.local/bin/session-explorer` (plain installer) and `~/.claude/plugins/cache/*/session-explorer/*/bin/session-explorer` (marketplace install). The hook script and bundled CLI scripts still use `$CLAUDE_PLUGIN_ROOT` where appropriate.
 
 If no terminal launcher succeeds, the slash command prints the absolute command and copies it to the clipboard (`pbcopy` on macOS, `xclip -selection clipboard` on Linux). The user can then paste into any terminal.
 
@@ -298,7 +300,7 @@ session-explorer/
 ├── hooks/
 │   └── session-start.sh
 ├── commands/
-│   └── session-explorer.md               ← the one slash command
+│   └── open.md                           ← the one slash command (/session-explorer:open)
 ├── install.sh                            ← secondary install path
 ├── uninstall.sh
 └── test/

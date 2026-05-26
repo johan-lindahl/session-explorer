@@ -37,8 +37,11 @@ records the session into `~/.claude/session-explorer-index.json` automatically.
 From inside Claude:
 
 ```
-/session-explorer
+/session-explorer:open
 ```
+
+(Plugin commands are always namespaced as `<plugin-name>:<command>` — there's
+no way to drop the prefix.)
 
 This opens a new Terminal.app window showing your sessions grouped by project
 and (first-dash) folder. Press Enter in that window to close it.
