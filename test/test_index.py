@@ -2,6 +2,7 @@
 
 import json
 import os
+import os as _os
 import threading
 
 from _pkg import index
@@ -46,3 +47,60 @@ def test_concurrent_writes_dont_corrupt(tmp_path):
 
     final = index.load(path)
     assert len(final["folders"]) == 100
+
+
+import shutil
+
+
+_FIX = _os.path.join(_os.path.dirname(__file__), "fixtures")
+
+
+def test_record_session_creates_entry(tmp_path):
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/Users/jl/proj/foo")
+
+    data = index.load(idx_path)
+    assert "01ABC" in data["sessions"]
+    s = data["sessions"]["01ABC"]
+    assert s["name_cached"] == "planning-sprint14-custom"  # custom-title wins over ai-title
+    assert s["project_path"] == "/Users/jl/proj/foo"
+    assert s["project_label"] == "foo"
+    assert s["first_prompt"] == "plan sprint 14 work"
+    assert s["message_count"] == 5  # 4 original + the custom-title line added in Task 5
+    assert s["tokens_estimate"] == 15234
+    assert s["bytes"] > 0
+
+
+def test_record_session_idempotent(tmp_path):
+    """Calling record twice updates last_active_at but doesn't duplicate."""
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/Users/jl/proj/foo")
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/Users/jl/proj/foo")
+
+    data = index.load(idx_path)
+    assert len(data["sessions"]) == 1
+
+
+def test_record_session_preserves_notes(tmp_path):
+    """A user-edited 'notes' field survives a re-record."""
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/Users/jl/proj/foo")
+    # User edits notes
+    def add_notes(data: dict) -> dict:
+        data["sessions"]["01ABC"]["notes"] = "user notes"
+        return data
+    index.mutate(idx_path, add_notes)
+    # Re-record
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd="/Users/jl/proj/foo")
+
+    data = index.load(idx_path)
+    assert data["sessions"]["01ABC"]["notes"] == "user notes"
