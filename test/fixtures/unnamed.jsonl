@@ -1,2 +1,1 @@
-{"type":"system","subtype":"init","sessionId":"01XYZ","cwd":"/Users/jl/proj/bar","gitBranch":"feat/x","timestamp":"2026-05-20T11:00:00Z"}
-{"type":"user","sessionId":"01XYZ","uuid":"u1","timestamp":"2026-05-20T11:00:05Z","message":{"role":"user","content":"poke around"}}
+{"type":"user","parentUuid":null,"isSidechain":false,"promptId":"p1","message":{"role":"user","content":"poke around"},"uuid":"u1","timestamp":"2026-05-20T11:00:05.000Z","userType":"human","entrypoint":"cli","cwd":"/Users/jl/proj/bar","sessionId":"01XYZ","version":"2.0.0","gitBranch":"feat/x"}
