@@ -86,3 +86,27 @@ def test_hook_creates_claude_dir_if_missing(tmp_path):
     proc = _run_hook(tmp_path, stdin='{"session_id":"abc","transcript_path":"/tmp/x.jsonl","cwd":"/tmp"}')
     assert proc.returncode == 0
     assert (tmp_path / ".claude").is_dir()
+
+
+def test_hook_records_session_via_cli(tmp_path):
+    """The hook should call session-explorer index --record after first-run setup."""
+    # Create a stub JSONL the hook will index
+    stub_jsonl = tmp_path / "stub.jsonl"
+    stub_jsonl.write_text(
+        '{"type":"ai-title","aiTitle":"work-sprint","sessionId":"01HOOK","timestamp":"2026-05-26T10:00:00Z"}\n'
+        '{"type":"user","sessionId":"01HOOK","timestamp":"2026-05-26T10:00:01Z",'
+        '"message":{"role":"user","content":"hi"}}\n'
+    )
+
+    payload = '{"session_id":"01HOOK","transcript_path":"' + str(stub_jsonl) + '","cwd":"' + str(tmp_path) + '"}'
+    proc = _run_hook(tmp_path, stdin=payload)
+    assert proc.returncode == 0
+
+    # The hook should have created the index file with the session recorded
+    index_path = tmp_path / ".claude" / "session-explorer-index.json"
+    assert index_path.exists(), f"Index file not created. Hook stderr: {proc.stderr}"
+
+    import json
+    data = json.loads(index_path.read_text())
+    assert "01HOOK" in data["sessions"]
+    assert data["sessions"]["01HOOK"]["name_cached"] == "work-sprint"

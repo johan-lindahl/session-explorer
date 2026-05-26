@@ -51,6 +51,29 @@ with open('${SETTINGS}', 'w') as f:
   fi
 fi
 
-# --- Index recording lands in Task 14 ---
+# --- Record the session into the index ---
+CLI="${CLAUDE_PLUGIN_DIR:-${HOME}/.local/share/session-explorer}/bin/session-explorer"
+if [ ! -x "${CLI}" ]; then
+  # Fallback: try PATH
+  CLI="$(command -v session-explorer 2>/dev/null || echo "")"
+fi
+
+if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
+  # Parse session_id, transcript_path, cwd from PAYLOAD using python3 (via stdin to avoid quoting bugs).
+  read -r SID TPATH CWD < <(printf '%s' "${PAYLOAD}" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('session_id',''), d.get('transcript_path',''), d.get('cwd',''))
+except Exception:
+    print('', '', '')
+" 2>/dev/null)
+
+  if [ -n "${SID}" ] && [ -n "${TPATH}" ] && [ -n "${CWD}" ]; then
+    "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" 2>>"${LOG}" || log "warn: index --record failed for ${SID}"
+  fi
+else
+  log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_DIR=${CLAUDE_PLUGIN_DIR:-(unset)}"
+fi
 
 exit 0
