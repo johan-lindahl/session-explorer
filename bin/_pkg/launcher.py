@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -20,6 +21,48 @@ def build_macos_command(target_command: str) -> list[str]:
     # `target_command` is the full shell command line to run in the new window.
     apple = f'tell application "Terminal" to do script "{target_command}"'
     return ["osascript", "-e", apple]
+
+
+_LINUX_CANDIDATES = [
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "alacritty",
+    "kitty",
+    "wezterm",
+]
+
+# Per-emulator argv shape to pass through a single shell command.
+_LINUX_ARGV = {
+    "gnome-terminal": lambda binp, cmd: [binp, "--", "bash", "-lc", cmd],
+    "konsole":         lambda binp, cmd: [binp, "-e", "bash", "-lc", cmd],
+    "xfce4-terminal":  lambda binp, cmd: [binp, "-e", f"bash -lc {cmd!r}"],
+    "alacritty":       lambda binp, cmd: [binp, "-e", "bash", "-lc", cmd],
+    "kitty":           lambda binp, cmd: [binp, "bash", "-lc", cmd],
+    "wezterm":         lambda binp, cmd: [binp, "start", "--", "bash", "-lc", cmd],
+    "x-terminal-emulator": lambda binp, cmd: [binp, "-e", "bash", "-lc", cmd],
+}
+
+
+def build_linux_command(target_command: str, which=shutil.which) -> "list[str] | None":
+    # 1. $TERMINAL wins if it resolves.
+    env_term = os.environ.get("TERMINAL")
+    if env_term:
+        binp = which(env_term)
+        if binp:
+            argv_fn = _LINUX_ARGV.get(os.path.basename(env_term),
+                                      lambda b, c: [b, "-e", "bash", "-lc", c])
+            return argv_fn(binp, target_command)
+
+    # 2. Probe known emulators in order.
+    for name in _LINUX_CANDIDATES:
+        binp = which(name)
+        if binp:
+            argv_fn = _LINUX_ARGV.get(name, lambda b, c: [b, "-e", "bash", "-lc", c])
+            return argv_fn(binp, target_command)
+
+    return None
 
 
 def launch(target_command: str) -> int:
@@ -38,6 +81,11 @@ def launch(target_command: str) -> int:
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return 0
 
-    # M2/M5: detect $TERMINAL, x-terminal-emulator, etc.
+    if system == "Linux":
+        cmd = build_linux_command(target_command)
+        if cmd is not None:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return 0
+
     print(f"Unsupported platform '{system}'. Run this in any terminal:\n  {target_command}")
     return 2
