@@ -12,7 +12,8 @@ from typing import Any, Dict, List, Tuple
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.widgets import Footer, Header, Tree
+from textual.screen import ModalScreen
+from textual.widgets import Footer, Header, Input, Label, Tree
 from textual.widgets.tree import TreeNode
 
 from . import index as _index
@@ -37,6 +38,25 @@ def _row_label(sid: str, s: dict) -> str:
     return f"{display:<24} {age:>4}  {tokens:>6} {pct:>5}  {msgs:>4} msgs   {prompt}"
 
 
+class RenameScreen(ModalScreen[str]):
+    """Prompt for a new session name. Returns the entered string or '' on cancel."""
+
+    BINDINGS = [Binding("escape", "dismiss('')", "Cancel")]
+
+    def __init__(self, current: str) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("Rename session (Enter to confirm, Esc to cancel):"),
+            Input(value=self._current, id="rename-input"),
+        )
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+
 class SessionExplorerApp(App):
     CSS = """
     Tree { padding: 0 1; }
@@ -44,6 +64,7 @@ class SessionExplorerApp(App):
 
     BINDINGS = [
         Binding("enter", "resume", "Resume", priority=True),
+        Binding("r", "rename", "Rename"),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -52,6 +73,14 @@ class SessionExplorerApp(App):
         super().__init__()
         self._index_path = index_path or _index_path()
         self._resume_target: str | None = None
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # App-level bindings (especially priority ones like Enter→resume) must
+        # not fire while a modal screen is up; otherwise the modal's own Enter
+        # handler (e.g. Input submit) never runs.
+        if action in ("resume", "rename") and isinstance(self.screen, ModalScreen):
+            return False
+        return True
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -94,6 +123,30 @@ class SessionExplorerApp(App):
             return
         self._resume_target = node.data["sid"]
         self.exit()
+
+    def action_rename(self) -> None:
+        node = self._tree.cursor_node
+        if not node or not node.data or "sid" not in node.data:
+            self.bell()
+            return
+        sid = node.data["sid"]
+        current = node.data.get("name_cached") or ""
+        transcript = node.data.get("transcript_path")
+
+        def after(new_name: str | None) -> None:
+            if not new_name or new_name == current or not transcript:
+                return
+            from .rename import append_custom_title
+            append_custom_title(transcript, session_id=sid, new_name=new_name)
+            # Update cache immediately so the UI reflects the new name pre-hook.
+            from . import index as _index
+            def _mut(d: dict) -> dict:
+                d["sessions"].setdefault(sid, {})["name_cached"] = new_name
+                return d
+            _index.mutate(self._index_path, _mut)
+            self._populate()
+
+        self.push_screen(RenameScreen(current), after)
 
 
 def run() -> int:

@@ -57,3 +57,35 @@ async def test_enter_sets_resume_target(index_path):
         await pilot.press("enter")
         await pilot.pause()
     assert getattr(app, "_resume_target", None) == "sid-1"
+
+
+async def test_rename_updates_index(index_path, tmp_path):
+    # Add a transcript path to the session so rename can write to it.
+    import json
+    data = json.load(open(index_path))
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text('{"type":"user","uuid":"u1"}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(transcript)
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Navigate to the leaf and press r
+        await pilot.press("down")  # project node
+        await pilot.press("down")  # folder node
+        await pilot.press("down")  # session leaf
+        await pilot.press("r")
+        await pilot.pause()
+        # Type new name and submit
+        for ch in "renamed":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert json.load(open(index_path))["sessions"]["sid-1"]["name_cached"] == "renamed"
+    # Confirm the JSONL got the custom-title event appended.
+    lines = transcript.read_text().splitlines()
+    last = json.loads(lines[-1])
+    assert last == {"type": "custom-title", "customTitle": "renamed", "sessionId": "sid-1"}
