@@ -31,6 +31,11 @@ def test_fmt_age_days():
     assert fmt_age(iso) == "5d"
 
 
+def test_fmt_age_future_timestamp_clamps_to_zero():
+    iso = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    assert fmt_age(iso) == "0m"
+
+
 def test_fmt_pct():
     assert fmt_pct(19) == "(19%)"
     assert fmt_pct(0) == "(0%)"

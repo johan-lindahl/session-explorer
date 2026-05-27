@@ -20,6 +20,8 @@ def fmt_age(iso: Optional[str]) -> str:
     except ValueError:
         return iso
     delta = datetime.now(timezone.utc) - ts
+    if delta.total_seconds() < 0:
+        return "0m"
     if delta.days >= 1:
         return f"{delta.days}d"
     hours = delta.seconds // 3600
