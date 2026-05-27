@@ -70,6 +70,8 @@ def test_list_groups_by_project_and_folder(tmp_path):
     assert "foo" in out                                     # project label
     # named.jsonl's custom-title is "planning-sprint14-custom" → root row (no /).
     assert "planning-sprint14-custom" in out
+    # End-to-end token stat is plumbed through fmt_tokens to the row.
+    assert "15K" in out or "15.2K" in out or "15234" in out
 
 
 def test_list_no_sessions(tmp_path):
@@ -101,6 +103,8 @@ def test_list_renders_slash_path_as_nested(tmp_path):
     # Folder header printed as a path, session indented under it.
     assert "planning/" in out
     assert "sprint14" in out
+    # Folder header must precede the session row.
+    assert out.index("planning/") < out.index("sprint14")
 
 
 def test_launch_invokes_osascript_on_mac(monkeypatch):
