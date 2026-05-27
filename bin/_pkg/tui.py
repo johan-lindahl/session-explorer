@@ -7,7 +7,6 @@ several MB of code. Only happens when the user actually runs `tui`/`launch`.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Tuple
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -15,7 +14,6 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Label, OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
-from textual.widgets.tree import TreeNode
 
 from . import index as _index
 from .format import fmt_age, fmt_pct, fmt_tokens
@@ -180,7 +178,23 @@ class SessionExplorerApp(App):
         # handler (e.g. Input submit) never runs.
         if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "filter") and isinstance(self.screen, ModalScreen):
             return False
+        # When the filter Input is focused, swallow the global Esc→quit so Esc
+        # can hide the filter (handled in on_key) instead of killing the TUI.
+        if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+            return False
         return True
+
+    def on_key(self, event) -> None:
+        # Hide filter on Esc and refocus the tree; the bubble-up Esc-quit is
+        # gated off by check_action while the filter has focus.
+        if event.key == "escape" and self._filter.has_focus:
+            self._filter.value = ""
+            self._filter_needle = ""
+            self._filter.display = False
+            self._filter.disabled = True
+            self._tree.focus()
+            self._populate()
+            event.stop()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -290,7 +304,7 @@ class SessionExplorerApp(App):
         def after(target: str | None) -> None:
             if target is None or not transcript:
                 return
-            new_name = display if not target else f"{target}-{display or sid[:8]}"
+            new_name = (display or sid[:8]) if not target else f"{target}-{display or sid[:8]}"
             from .rename import append_custom_title
             append_custom_title(transcript, session_id=sid, new_name=new_name)
 
@@ -363,8 +377,11 @@ class SessionExplorerApp(App):
             self._populate()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        # Pressing Enter on the filter input returns focus to the tree.
+        # Pressing Enter on the filter input commits the needle, hides the bar,
+        # and returns focus to the tree. The needle stays applied; Esc clears it.
         if event.input is self._filter:
+            self._filter.display = False
+            self._filter.disabled = True
             self._tree.focus()
 
     def _refresh_preview(self) -> None:

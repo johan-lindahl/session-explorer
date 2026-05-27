@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import os
 import platform
-import shlex
 import shutil
 import subprocess
-import sys
 
 
 def build_macos_command(target_command: str) -> list[str]:

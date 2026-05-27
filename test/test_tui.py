@@ -228,6 +228,62 @@ async def test_filter_narrows_tree(index_path):
         assert "sid-2" not in sids_after
 
 
+async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path):
+    # Regression: move-to-(ungroup) of an unnamed session used to write an
+    # empty customTitle because the closure didn't fall back to sid[:8]
+    # in the no-target branch.
+    import json
+    data = json.load(open(index_path))
+    transcript = tmp_path / "tu.jsonl"
+    transcript.write_text('{"type":"user"}\n')
+    data["sessions"]["unnamed-sid-xyz"] = {
+        "project_label": "demo", "name_cached": None,
+        "last_active_at": "2026-05-25T00:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+        "transcript_path": str(transcript),
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        def find_leaf(node):
+            for c in node.children:
+                if c.data and c.data.get("sid") == "unnamed-sid-xyz":
+                    return c
+                got = find_leaf(c)
+                if got:
+                    return got
+            return None
+
+        leaf = find_leaf(app._tree.root)
+        assert leaf is not None
+        # Force the cursor onto the unnamed leaf. select_node alone doesn't
+        # always move the internal cursor used by action_move; setting the
+        # cursor_line directly is the reliable path.
+        app._tree.select_node(leaf)
+        app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        assert app._tree.cursor_node is leaf
+        await pilot.press("m")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        app.screen.dismiss("")  # ungroup
+        await pilot.pause()
+
+    name = json.load(open(index_path))["sessions"]["unnamed-sid-xyz"]["name_cached"]
+    # sid[:8] of "unnamed-sid-xyz" is "unnamed-"
+    assert name, f"customTitle must not be empty; got {name!r}"
+    assert name == "unnamed-"
+    # And the JSONL got the non-empty customTitle.
+    last = json.loads(transcript.read_text().splitlines()[-1])
+    assert last["customTitle"] == "unnamed-"
+
+
 async def test_new_folder_adds_to_index(index_path):
     from _pkg.tui import SessionExplorerApp, NewFolderScreen
     app = SessionExplorerApp(index_path=index_path)
