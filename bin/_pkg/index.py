@@ -99,8 +99,17 @@ def _project_label(cwd: str) -> str:
     return os.path.basename(cwd.rstrip("/")) or cwd
 
 
-def record_session(index_path: str, session_id: str, transcript_path: str, cwd: str) -> dict:
-    """Idempotent upsert. Preserves 'notes' and any other user-edited fields."""
+def record_session(index_path: str, session_id: str, transcript_path: str,
+                   cwd: str, folder_store_path: "str | None" = None) -> dict:
+    """Idempotent upsert. Preserves 'notes' and any other user-edited fields.
+
+    If the session's cached name contains `/`, the leading folder path is added
+    (idempotently) to the per-project folder store. `folder_store_path` defaults
+    to a sibling of `index_path`.
+    """
+    from . import folder_store as _fs
+    from .tree_model import split_path
+
     def mutator(data: dict) -> dict:
         existing = data["sessions"].get(session_id, {})
         try:
@@ -109,7 +118,7 @@ def record_session(index_path: str, session_id: str, transcript_path: str, cwd: 
             file_bytes = 0
         tokens = _jsonl.tokens_estimate(transcript_path)
         new_entry = {
-            **existing,  # preserve notes, etc.
+            **existing,
             "name_cached": _jsonl.session_name(transcript_path),
             "first_prompt": _jsonl.first_user_prompt(transcript_path),
             "message_count": _jsonl.message_count(transcript_path),
@@ -126,7 +135,16 @@ def record_session(index_path: str, session_id: str, transcript_path: str, cwd: 
             new_entry["created_at"] = datetime.now(timezone.utc).isoformat()
         data["sessions"][session_id] = new_entry
         return data
-    return mutate(index_path, mutator)
+    result = mutate(index_path, mutator)
+
+    entry = result["sessions"][session_id]
+    name = entry.get("name_cached") or ""
+    if "/" in name:
+        segments, _ = split_path(name)
+        if segments:
+            fs_path = folder_store_path or _fs.default_path_for(index_path)
+            _fs.add(fs_path, entry["project_label"], "/".join(segments))
+    return result
 
 
 def backfill(index_path: str, projects_root: "str | None" = None) -> int:

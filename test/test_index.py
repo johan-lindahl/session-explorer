@@ -259,3 +259,75 @@ def test_migrate_to_v2_v1_no_folders_field(tmp_path):
     assert index.load(idx_path)["version"] == 2
     # Folder store file not created when nothing to migrate.
     assert not os.path.exists(fs_path)
+
+
+def test_record_session_writes_folder_path_when_name_has_slash(tmp_path):
+    """A session named foo/bar/baz should add foo/bar to the folder store under its project."""
+    from _pkg import folder_store
+    import json
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    # Build a JSONL with a custom-title containing /.
+    jsonl = tmp_path / "S.jsonl"
+    jsonl.write_text(
+        '{"type":"user","sessionId":"S","cwd":"/u/x/acme-api",'
+        '"timestamp":"2026-05-26T10:00:00Z",'
+        '"message":{"role":"user","content":"hi"}}\n'
+        '{"type":"custom-title","customTitle":"team/planning/sprint14","sessionId":"S"}\n'
+    )
+    index.record_session(idx_path, session_id="S",
+                         transcript_path=str(jsonl), cwd="/u/x/acme-api",
+                         folder_store_path=fs_path)
+    paths = folder_store.list_paths(fs_path, "acme-api")
+    assert paths == ["team/planning"]
+
+
+def test_record_session_no_folder_write_when_name_has_no_slash(tmp_path):
+    from _pkg import folder_store
+    import os as _os
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    jsonl = tmp_path / "S.jsonl"
+    jsonl.write_text(
+        '{"type":"user","sessionId":"S","cwd":"/u/x/acme-api",'
+        '"timestamp":"2026-05-26T10:00:00Z",'
+        '"message":{"role":"user","content":"hi"}}\n'
+        '{"type":"custom-title","customTitle":"sprint14","sessionId":"S"}\n'
+    )
+    index.record_session(idx_path, session_id="S",
+                         transcript_path=str(jsonl), cwd="/u/x/acme-api",
+                         folder_store_path=fs_path)
+    # Folder store untouched (file never created — nothing to write).
+    assert not _os.path.exists(fs_path)
+
+
+def test_record_session_unnamed_does_not_touch_folder_store(tmp_path):
+    from _pkg import folder_store
+    import os as _os
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    jsonl = tmp_path / "S.jsonl"
+    jsonl.write_text('{"type":"user","sessionId":"S","cwd":"/u/x/acme-api",'
+                     '"timestamp":"2026-05-26T10:00:00Z",'
+                     '"message":{"role":"user","content":"hi"}}\n')
+    index.record_session(idx_path, session_id="S",
+                         transcript_path=str(jsonl), cwd="/u/x/acme-api",
+                         folder_store_path=fs_path)
+    assert not _os.path.exists(fs_path)
+
+
+def test_record_session_uses_default_folder_store_path(tmp_path):
+    """When folder_store_path is None, derive a sibling of the index file."""
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "session-explorer-index.json")
+    jsonl = tmp_path / "S.jsonl"
+    jsonl.write_text(
+        '{"type":"user","sessionId":"S","cwd":"/u/x/acme-api",'
+        '"timestamp":"2026-05-26T10:00:00Z",'
+        '"message":{"role":"user","content":"hi"}}\n'
+        '{"type":"custom-title","customTitle":"x/y","sessionId":"S"}\n'
+    )
+    index.record_session(idx_path, session_id="S",
+                         transcript_path=str(jsonl), cwd="/u/x/acme-api")
+    sibling = str(tmp_path / "session-explorer-folders.json")
+    assert folder_store.list_paths(sibling, "acme-api") == ["x"]
