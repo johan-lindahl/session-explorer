@@ -48,7 +48,9 @@ def _row_label(sid: str, s: dict, depth: int) -> str:
     _, display = split_path(s.get("name_cached"))
     display = display or sid[:8]
     # Each level of indent steals GUIDE_DEPTH cells from the name field.
-    # depth=1 (root child) → widest field; depth=2 → minus 1*G; depth=3 → minus 2*G…
+    # In practice depth=2 (ungrouped, direct project child) is the shallowest
+    # leaf and gets the widest field (= NAME_W + 0); depth=3 (one folder deep)
+    # → minus 1*G; depth=4 (two folders deep) → minus 2*G; and so on.
     name_w = max(8, NAME_W + 2 * GUIDE_DEPTH - depth * GUIDE_DEPTH)
     if len(display) > name_w:
         display = display[: name_w - 1] + "…"
@@ -293,19 +295,28 @@ class SessionExplorerApp(App):
         else:
             self.sub_title = f"{total} sessions across {len(tree)} projects"
 
-        def render(parent, node, depth):
+        # `child_depth` is the tree depth (number of guide levels) of any leaf
+        # or folder added at this level. With show_root=False, a session that
+        # sits directly under a project node is at tree depth 1; one under a
+        # folder is at depth 2; and so on. `_row_label` uses the same number
+        # to choose name-field width so stat columns land at a constant
+        # absolute screen column.
+        def render(parent, node, child_depth):
             for sid, s in node["_sessions"]:
                 if self._matches(sid, s):
-                    parent.add_leaf(_row_label(sid, s, depth + 1), data={"sid": sid, **s})
+                    parent.add_leaf(_row_label(sid, s, child_depth), data={"sid": sid, **s})
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
                 folder_node = parent.add(f"{name}/", expand=True)
-                render(folder_node, child, depth + 1)
+                render(folder_node, child, child_depth + 1)
 
         for project in sorted(tree):
             node = tree[project]
             proj_node = root.add(f"{project} ({count(node)})", expand=True)
-            render(proj_node, node, depth=1)
+            # Project sits at tree depth 0 (show_root=False); its direct
+            # children — both ungrouped sessions and top-level folders — are at
+            # tree depth 1.
+            render(proj_node, node, child_depth=1)
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node
@@ -368,6 +379,11 @@ class SessionExplorerApp(App):
         def after(target: "str | None") -> None:
             if target is None or not transcript:
                 return
+            # Normalise the typed path: drop empty/whitespace segments from
+            # `foo//bar`, `/foo/bar`, `foo/bar/`, etc., before persisting or
+            # joining with the leaf name.
+            if target:
+                target = "/".join(seg for seg in target.split("/") if seg.strip())
             leaf = display or sid[:8]
             new_name = leaf if not target else f"{target}/{leaf}"
             from .rename import append_custom_title
