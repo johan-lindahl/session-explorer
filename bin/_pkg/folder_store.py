@@ -15,7 +15,7 @@ import fcntl
 import json
 import os
 import tempfile
-from typing import Callable, Dict, Any, List
+from typing import Callable, Dict, Any
 
 _DEFAULT: Dict[str, Any] = {"version": 1, "projects": {}}
 
@@ -27,8 +27,10 @@ def default_path_for(index_path: str) -> str:
 
 
 def load(path: str) -> dict:
+    """Read the store. Returns a fresh default dict if the file is missing,
+    so callers can always mutate the result without aliasing _DEFAULT."""
     if not os.path.exists(path):
-        return {"version": 1, "projects": {}}
+        return _DEFAULT.copy() | {"projects": {}}
     with open(path, "r", encoding="utf-8") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         try:
@@ -38,6 +40,7 @@ def load(path: str) -> dict:
 
 
 def save(path: str, data: dict) -> None:
+    """Atomic write: temp file in the same directory + rename."""
     parent = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(parent, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".session-explorer-folders-", suffix=".tmp", dir=parent)
@@ -45,7 +48,7 @@ def save(path: str, data: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, sort_keys=True)
             f.write("\n")
-        os.replace(tmp, path)
+        os.replace(tmp, path)  # atomic on POSIX
     except Exception:
         if os.path.exists(tmp):
             os.unlink(tmp)
