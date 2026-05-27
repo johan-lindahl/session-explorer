@@ -89,3 +89,46 @@ async def test_rename_updates_index(index_path, tmp_path):
     lines = transcript.read_text().splitlines()
     last = json.loads(lines[-1])
     assert last == {"type": "custom-title", "customTitle": "renamed", "sessionId": "sid-1"}
+
+
+async def test_move_changes_folder(index_path, tmp_path):
+    # Add a transcript path + a second session contributing an existing folder.
+    import json
+    data = json.load(open(index_path))
+    transcript = tmp_path / "t2.jsonl"
+    transcript.write_text('{"type":"user","uuid":"u1"}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(transcript)
+    data["sessions"]["sid-2"] = {
+        "project_label": "demo", "name_cached": "archive-old",
+        "last_active_at": "2026-01-01T00:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp, MoveScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Navigate to sid-1 leaf. Tree layout (folders sorted alphabetically):
+        #   root → demo (project) → archive/ → archive-old (sid-2)
+        #                          → planning/ → planning-sprint14 (sid-1)
+        # So 5 downs: demo, archive/, old, planning/, sprint14.
+        for _ in range(5):
+            await pilot.press("down")
+        assert app._tree.cursor_node.data["sid"] == "sid-1"
+        await pilot.press("m")
+        await pilot.pause()
+        # Modal should now be on top of the stack.
+        assert isinstance(app.screen, MoveScreen)
+        # Pilot navigation of OptionList is flaky; dismiss the screen directly
+        # with a chosen folder name and let the callback run.
+        app.screen.dismiss("release")
+        await pilot.pause()
+
+    name = json.load(open(index_path))["sessions"]["sid-1"]["name_cached"]
+    # Display was 'sprint14' (from 'planning-sprint14'); new prefix is 'release'.
+    assert name == "release-sprint14"
+    # The JSONL got a custom-title event appended.
+    lines = transcript.read_text().splitlines()
+    last = json.loads(lines[-1])
+    assert last == {"type": "custom-title", "customTitle": "release-sprint14", "sessionId": "sid-1"}

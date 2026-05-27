@@ -13,7 +13,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, Tree
+from textual.widgets import Footer, Header, Input, Label, OptionList, Tree
+from textual.widgets.option_list import Option
 from textual.widgets.tree import TreeNode
 
 from . import index as _index
@@ -57,6 +58,39 @@ class RenameScreen(ModalScreen[str]):
         self.dismiss(event.value.strip())
 
 
+class MoveScreen(ModalScreen[str]):
+    """Pick or type a folder.
+
+    Returns the chosen folder name (empty string to ungroup, or None on cancel).
+    """
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, existing_folders: list[str], current: str) -> None:
+        super().__init__()
+        self._existing = sorted(set(existing_folders))
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        opts = [Option("(ungroup)", id="__none__")] + [
+            Option(f, id=f) for f in self._existing
+        ]
+        yield Vertical(
+            Label(
+                f"Move to folder (current: {self._current or '(none)'}). Pick or type:"
+            ),
+            OptionList(*opts, id="move-list"),
+            Input(placeholder="…or type a new folder name", id="move-input"),
+        )
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        opt_id = event.option.id
+        self.dismiss("" if opt_id == "__none__" else opt_id)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+
 class SessionExplorerApp(App):
     CSS = """
     Tree { padding: 0 1; }
@@ -65,6 +99,7 @@ class SessionExplorerApp(App):
     BINDINGS = [
         Binding("enter", "resume", "Resume", priority=True),
         Binding("r", "rename", "Rename"),
+        Binding("m", "move", "Move"),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -78,7 +113,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move") and isinstance(self.screen, ModalScreen):
             return False
         return True
 
@@ -147,6 +182,38 @@ class SessionExplorerApp(App):
             self._populate()
 
         self.push_screen(RenameScreen(current), after)
+
+    def action_move(self) -> None:
+        node = self._tree.cursor_node
+        if not node or not node.data or "sid" not in node.data:
+            self.bell()
+            return
+        sid = node.data["sid"]
+        name = node.data.get("name_cached") or ""
+        transcript = node.data.get("transcript_path")
+        current_folder, display = split_folder(name)
+        # Folder list = folders[] ∪ {folders seen in sessions}
+        data = _index.load(self._index_path)
+        folders = set(data.get("folders") or [])
+        for s in data.get("sessions", {}).values():
+            f, _ = split_folder(s.get("name_cached"))
+            if f:
+                folders.add(f)
+
+        def after(target: str | None) -> None:
+            if target is None or not transcript:
+                return
+            new_name = display if not target else f"{target}-{display or sid[:8]}"
+            from .rename import append_custom_title
+            append_custom_title(transcript, session_id=sid, new_name=new_name)
+
+            def _mut(d: dict) -> dict:
+                d["sessions"].setdefault(sid, {})["name_cached"] = new_name
+                return d
+            _index.mutate(self._index_path, _mut)
+            self._populate()
+
+        self.push_screen(MoveScreen(sorted(folders), current_folder), after)
 
 
 def run() -> int:
