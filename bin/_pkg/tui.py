@@ -43,6 +43,7 @@ class SessionExplorerApp(App):
     """
 
     BINDINGS = [
+        Binding("enter", "resume", "Resume", priority=True),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -50,6 +51,7 @@ class SessionExplorerApp(App):
     def __init__(self, index_path: str | None = None) -> None:
         super().__init__()
         self._index_path = index_path or _index_path()
+        self._resume_target: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -85,7 +87,19 @@ class SessionExplorerApp(App):
                 for sid, s in sessions:
                     folder_node.add_leaf(_row_label(sid, s), data={"sid": sid, **s})
 
+    def action_resume(self) -> None:
+        node = self._tree.cursor_node
+        if not node or not node.data or "sid" not in node.data:
+            self.bell()
+            return
+        self._resume_target = node.data["sid"]
+        self.exit()
+
 
 def run() -> int:
-    SessionExplorerApp().run()
+    app = SessionExplorerApp()
+    app.run()
+    target = getattr(app, "_resume_target", None)
+    if target:
+        os.execvp("claude", ["claude", "--resume", target])
     return 0

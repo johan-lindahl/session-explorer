@@ -42,3 +42,18 @@ async def test_tui_quit(index_path):
         await pilot.press("q")
         await pilot.pause()
     # Reaching here without timeout means quit worked.
+
+
+async def test_enter_sets_resume_target(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Navigate from root → project → folder → leaf.
+        # Tree shape: root (cursor starts here) → demo project → planning/ → sid-1 leaf
+        await pilot.press("down")  # project node
+        await pilot.press("down")  # folder node
+        await pilot.press("down")  # session leaf
+        await pilot.press("enter")
+        await pilot.pause()
+    assert getattr(app, "_resume_target", None) == "sid-1"
