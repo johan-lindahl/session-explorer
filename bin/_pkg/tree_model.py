@@ -7,7 +7,9 @@ Folder labels:
   ""           — ungrouped (session has a name but no dash)
   "(unnamed)"  — session has no name_cached at all (only when include_unnamed=True)
   "(unfiled)"  — synthetic project bucket holding pre-created empty folders
-  any other    — first-dash folder prefix
+  any other    — first-dash folder prefix (legacy split_folder), or a
+                 `/`-separated path segment (new split_path; replaces
+                 split_folder when all callers migrate)
 """
 
 from __future__ import annotations
