@@ -380,6 +380,9 @@ async def test_new_folder_under_project_adds_to_folder_store(index_path):
         await pilot.pause()
         await pilot.press("n"); await pilot.pause()
         assert isinstance(app.screen, NewFolderScreen)
+        # Cursor on a project node → modal opens with an empty prefix so the
+        # user types a top-level folder name unprefixed.
+        assert app.screen._prefix == ""
         app.screen.dismiss("audits/q1")
         await pilot.pause()
 
