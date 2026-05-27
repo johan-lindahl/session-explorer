@@ -160,6 +160,7 @@ class SessionExplorerApp(App):
         Binding("n", "new_folder", "New folder"),
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
+        Binding("u", "toggle_unnamed", "Toggle unnamed"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
         Binding("q", "quit", "Quit"),
@@ -170,13 +171,15 @@ class SessionExplorerApp(App):
         super().__init__()
         self._index_path = index_path or _index_path()
         self._resume_target: str | None = None
+        self._resume_cwd: str | None = None
         self._filter_needle: str = ""
+        self._show_unnamed: bool = False
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "filter") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "filter", "toggle_unnamed") and isinstance(self.screen, ModalScreen):
             return False
         # When the filter Input is focused, swallow the global Esc→quit so Esc
         # can hide the filter (handled in on_key) instead of killing the TUI.
@@ -230,7 +233,12 @@ class SessionExplorerApp(App):
     def _populate(self) -> None:
         self._tree.clear()
         data = _index.load(self._index_path)
-        tree = build_tree(data)
+        tree = build_tree(data, include_unnamed=self._show_unnamed)
+        unnamed_hidden = 0
+        if not self._show_unnamed:
+            unnamed_hidden = sum(
+                1 for s in data.get("sessions", {}).values() if not s.get("name_cached")
+            )
         root = self._tree.root
         root.expand()
         total = sum(
@@ -238,7 +246,10 @@ class SessionExplorerApp(App):
             for folders in tree.values()
             for sessions in folders.values()
         )
-        self.sub_title = f"{total} sessions across {len(tree)} projects"
+        if unnamed_hidden:
+            self.sub_title = f"{total} sessions across {len(tree)} projects · {unnamed_hidden} unnamed hidden (u)"
+        else:
+            self.sub_title = f"{total} sessions across {len(tree)} projects"
         for project in sorted(tree):
             folders = tree[project]
             proj_node = root.add(f"▼ {project} ({sum(len(v) for v in folders.values())})", expand=True)
@@ -258,6 +269,7 @@ class SessionExplorerApp(App):
             self.bell()
             return
         self._resume_target = node.data["sid"]
+        self._resume_cwd = node.data.get("project_path")
         self.exit()
 
     def action_rename(self) -> None:
@@ -366,6 +378,10 @@ class SessionExplorerApp(App):
         self._preview.display = not self._preview.display
         self._refresh_preview()
 
+    def action_toggle_unnamed(self) -> None:
+        self._show_unnamed = not self._show_unnamed
+        self._populate()
+
     def action_filter(self) -> None:
         self._filter.display = True
         self._filter.disabled = False
@@ -409,5 +425,12 @@ def run() -> int:
     app.run()
     target = getattr(app, "_resume_target", None)
     if target:
+        # chdir into the session's original project so `claude --resume`
+        # opens in the right workspace — without this, Claude inherits the
+        # spawned terminal's cwd (usually $HOME) and shows a fresh "trust
+        # folder" prompt instead of restoring the session.
+        cwd = getattr(app, "_resume_cwd", None)
+        if cwd and os.path.isdir(cwd):
+            os.chdir(cwd)
         os.execvp("claude", ["claude", "--resume", target])
     return 0

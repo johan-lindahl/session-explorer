@@ -89,7 +89,11 @@ def test_hook_creates_claude_dir_if_missing(tmp_path):
 
 
 def test_hook_records_session_via_cli(tmp_path):
-    """The hook should call session-explorer index --record after first-run setup."""
+    """The hook should call session-explorer index --record after first-run setup.
+
+    The stub JSONL has only an ai-title (no custom-title), so name_cached
+    must be None — ai-title alone does not count as a user-assigned name.
+    """
     # Create a stub JSONL the hook will index
     stub_jsonl = tmp_path / "stub.jsonl"
     stub_jsonl.write_text(
@@ -109,7 +113,7 @@ def test_hook_records_session_via_cli(tmp_path):
     import json
     data = json.loads(index_path.read_text())
     assert "01HOOK" in data["sessions"]
-    assert data["sessions"]["01HOOK"]["name_cached"] == "work-sprint"
+    assert data["sessions"]["01HOOK"]["name_cached"] is None
 
 
 def test_hook_writes_active_session_pointer(tmp_path):

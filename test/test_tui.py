@@ -13,6 +13,7 @@ def index_path():
         "sessions": {
             "sid-1": {
                 "project_label": "demo",
+                "project_path": "/tmp/demo-project",
                 "name_cached": "planning-sprint14",
                 "last_active_at": "2026-05-27T10:00:00Z",
                 "tokens_estimate": 12345,
@@ -57,6 +58,9 @@ async def test_enter_sets_resume_target(index_path):
         await pilot.press("enter")
         await pilot.pause()
     assert getattr(app, "_resume_target", None) == "sid-1"
+    # Resume must also capture the session's project_path so run() can chdir
+    # there before exec'ing `claude --resume`.
+    assert getattr(app, "_resume_cwd", None) == "/tmp/demo-project"
 
 
 async def test_rename_updates_index(index_path, tmp_path):
@@ -250,6 +254,9 @@ async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        # Unnamed sessions are hidden by default — surface them first.
+        await pilot.press("u")
+        await pilot.pause()
 
         def find_leaf(node):
             for c in node.children:
@@ -282,6 +289,37 @@ async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path
     # And the JSONL got the non-empty customTitle.
     last = json.loads(transcript.read_text().splitlines()[-1])
     assert last["customTitle"] == "unnamed-"
+
+
+async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["unnamed-xyz"] = {
+        "project_label": "demo", "name_cached": None,
+        "last_active_at": "2026-05-25T00:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        sids = _collect_leaf_sids(app._tree.root)
+        assert "sid-1" in sids
+        assert "unnamed-xyz" not in sids
+        # Subtitle should advertise the hidden count.
+        assert "unnamed hidden" in app.sub_title
+
+        await pilot.press("u")
+        await pilot.pause()
+        sids = _collect_leaf_sids(app._tree.root)
+        assert "unnamed-xyz" in sids
+
+        await pilot.press("u")
+        await pilot.pause()
+        sids = _collect_leaf_sids(app._tree.root)
+        assert "unnamed-xyz" not in sids
 
 
 async def test_new_folder_adds_to_index(index_path):

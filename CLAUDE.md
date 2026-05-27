@@ -19,8 +19,11 @@ Pre-implementation. The repo currently contains only `SPEC.md` (no commits, no c
 
 These are the constraints to preserve — violating any breaks the spec's contract:
 
-- **Claude's session name is the only "tag".** The plugin does not maintain a parallel tag field. `/rename` (or `claude -n`) is the single source of truth.
-- **"Kept" is implicit — a session is kept iff it has a name.** Don't reintroduce a separate `kept` flag.
+- **The user's session name is the only "tag".** The plugin does not maintain a parallel tag field. `/rename` (or `claude -n`) is the single source of truth — both write a `custom-title` event to the JSONL.
+- **`ai-title` is NOT a name.** Claude emits `ai-title` events automatically as it summarises an active session; those auto-generated titles are intentionally ignored by `jsonl.session_name()`. Only `custom-title` counts. Don't reintroduce the ai-title fallback.
+- **"Kept" is implicit — a session is kept iff it has a (custom-title) name.** Don't reintroduce a separate `kept` flag.
+- **Unnamed sessions are hidden from the TUI by default.** Press `u` to surface them for renaming or deletion. The index still tracks them (so `--gc` can expire stubs on schedule); only the default view filters them out. Don't conflate "hidden" with "deleted" — these are orthogonal.
+- **Worktree sessions group under the parent repo.** A cwd of `<repo>/.claude/worktrees/<name>` derives `project_label` from `<repo>`, not the worktree leaf — otherwise every worktree becomes its own top-level "project". `project_path` keeps the worktree path so resume chdir's into the correct working tree. See `index._project_label`.
 - **First-dash splits folder from name.** `planning-sprint14` → folder `planning`, display name `sprint14`. Dashes after the first stay in the name. Single-level folders only.
 - **Don't move or rewrite native JSONLs.** Sessions stay where Claude Code wrote them so `/resume` keeps working. The only legitimate write to a JSONL is appending a rename event in the same shape Claude's own `/rename` writes.
 - **Native cleanup is neutralised by setting `cleanupPeriodDays: 36500`.** The plugin's `--gc` does retention work, gated on `name_cached IS NULL`. Back up the prior value to `~/.claude/.session-explorer.backup` so uninstall can restore it.

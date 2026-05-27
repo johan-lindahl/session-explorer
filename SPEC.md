@@ -57,7 +57,9 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**Key idea — derive, don't store.** The plugin caches metadata for browse-speed but treats the JSONL as authoritative. Folder/name parsing happens at render time from the session's Claude-assigned name. "Kept" is `name != null`.
+**Key idea — derive, don't store.** The plugin caches metadata for browse-speed but treats the JSONL as authoritative. Folder/name parsing happens at render time from the session's user-assigned name. "Kept" is `name != null`.
+
+**What counts as a name.** Only `/rename` and `claude -n <name>` count — both write a `custom-title` event to the JSONL. The `ai-title` events that Claude emits automatically as a session evolves (refining its own descriptive summary) **do NOT** make a session "named" in this plugin's sense. The session-explorer treats those auto-generated titles as if they didn't exist, so the index's `name_cached` is populated only by explicit user intent.
 
 ## Naming and folders
 
@@ -66,7 +68,7 @@ The session's Claude-assigned name encodes both folder and name:
 ```
 <folder>-<rest-of-name>   → goes into folder; displayed as <rest-of-name>
 <just-a-name>             → ungrouped within its project
-(no name)                 → ungrouped within an "(unnamed)" sub-group
+(no name)                 → hidden by default; toggle with [u] to surface for renaming or deletion
 ```
 
 Only the **first** dash is the separator. Dashes after the first stay in the name.
@@ -85,22 +87,20 @@ Only the **first** dash is the separator. Dashes after the first stay in the nam
 Built on **Textual** (Python). Launched in a new terminal window by the `/session-explorer:open` slash command. Single tree view:
 
 ```
-session-explorer · 47 sessions across 6 projects                                       / filter
+session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (u)               / filter
 
 ▼ acme-web (3)
     planning/
-      sprint14            main         2h    ~38K  (19%)    47 msgs   audit AC mods…
+      sprint14            main         2h    ~38K  (19%)    47 msgs   audit modules…
     audits/
-      q1-review    feature/…    5d    ~127K (64%)   152 msgs   grant audit
+      q1-review           feature/…    5d    ~127K (64%)   152 msgs   grant audit
 ▼ acme-api (8)
     refactors/
       checkout-cleanup    feat/x       1d    ~12K   (6%)    18 msgs   helper extraction
-▼ (unnamed) (15)
-      cd0fc4              main         3d    ~4K    (2%)     9 msgs   brainstorm naming
 ▶ session-explorer (4)
 ```
 
-Outer level: project (`project_label`, auto-grouped from cwd). Inner level: folders parsed from session names. Unnamed sessions land in an `(unnamed)` sub-group within their project so they remain discoverable for renaming.
+Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: folders parsed from session names. **Unnamed sessions are hidden by default** — only "kept" sessions (those with a Claude-assigned name) appear in the default view, mirroring the spec's "kept ⇔ named" rule and cutting the visual noise from stub records (sessions started but never used). Press `u` to surface unnamed sessions when you need to rename or delete them; they then appear under an `(unnamed)` sub-group per project. The header advertises the hidden count.
 
 ### Keybindings
 
@@ -115,6 +115,7 @@ Outer level: project (`project_label`, auto-grouped from cwd). Inner level: fold
 | `m` | Move the selected session to a folder (lists existing folders; can type new). |
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
+| `u` | Toggle visibility of unnamed sessions (hidden by default). |
 | `/` | Live filter across name, notes, first prompt, summary. |
 | `q` `Esc` | Quit. |
 
@@ -142,7 +143,7 @@ Both write a rename event to the session's JSONL in the same shape Claude's own 
 
 ### Resume flow
 
-`Enter` on a session causes the TUI to `exec claude --resume <id>` in the same (spawned) terminal window. The TUI process exits and Claude takes over the window. The original Claude session you typed `/session-explorer:open` from keeps running in its other window — two parallel Claude sessions is the expected outcome.
+`Enter` on a session causes the TUI to `chdir(session.project_path)` and then `exec claude --resume <id>` in the same (spawned) terminal window. The chdir is essential — Claude Code keys projects on cwd, so resuming without it lands the user in the spawning terminal's cwd (usually `$HOME`) and triggers a fresh "trust this folder" prompt instead of restoring the session. If `project_path` no longer exists on disk, the chdir is skipped and Claude opens in whatever cwd it inherits. The TUI process exits and Claude takes over the window. The original Claude session you typed `/session-explorer:open` from keeps running in its other window — two parallel Claude sessions is the expected outcome.
 
 ## The slash command
 
@@ -182,11 +183,11 @@ In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogf
   "sessions": {
     "01HXYZ…uuid": {
       "name_cached": "planning-sprint14",      // last-seen Claude name; JSONL is authoritative
-      "notes": "production audit of AC modules\nfollow-up Q1",
-      "project_path": "/Volumes/Projects/AcmeCorp/acme-api",
-      "project_label": "acme-api",
-      "branch": "feature/43070-…",
-      "first_prompt": "audit which AC modules have zero production data",
+      "notes": "production audit of billing modules\nfollow-up Q1",
+      "project_path": "/Users/you/code/acme-api",  // cwd; resume chdir's here
+      "project_label": "acme-api",                  // grouping key; worktrees collapse to the parent repo
+      "branch": "feature/checkout-revamp",
+      "first_prompt": "audit which billing modules have zero production data",
       "summary": "…",                          // from /summary if available
       "created_at": "2026-05-26T14:12:00Z",
       "last_active_at": "2026-05-26T15:48:00Z",
@@ -200,6 +201,8 @@ In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogf
 ```
 
 `name_cached`, `last_active_at`, `message_count` are pure perf caches — refreshed by the hook on session start and by `session-explorer index --refresh` on demand. **No `tag` field. No `kept` field.** "Kept" is `name_cached != null`.
+
+**`session-explorer index --backfill`** populates the index from every JSONL under `~/.claude/projects/` that isn't already tracked. Pre-install sessions don't fire the `SessionStart` hook, so without backfill they'd be invisible. Backfill recovers `cwd` per session from the JSONL's envelope lines (via `jsonl.session_cwd()`) since the hook payload isn't available retrospectively. Existing entries are left untouched — backfill is additive; use `--refresh` to recompute caches for already-tracked sessions. Safe to re-run.
 
 ## Hooks
 

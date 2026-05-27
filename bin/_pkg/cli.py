@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     index_p = sub.add_parser("index", help="Index management.")
     index_p.add_argument("--record", nargs=3, metavar=("SESSION_ID", "TRANSCRIPT_PATH", "CWD"))
     index_p.add_argument("--refresh", action="store_true")
+    index_p.add_argument("--backfill", action="store_true",
+                         help="Scan ~/.claude/projects/ and index any session not yet tracked.")
     return p
 
 
@@ -98,7 +100,11 @@ def _cmd_index(args) -> int:
     if args.refresh:
         _index.refresh_all(path)
         return 0
-    print("index: pass --record SID TRANSCRIPT CWD or --refresh", file=sys.stderr)
+    if args.backfill:
+        added = _index.backfill(path)
+        print(f"Backfilled {added} session(s) from ~/.claude/projects/")
+        return 0
+    print("index: pass --record SID TRANSCRIPT CWD, --refresh, or --backfill", file=sys.stderr)
     return 2
 
 

@@ -355,7 +355,7 @@ def test_split_folder_one_dash():
 
 
 def test_split_folder_many_dashes():
-    assert split_folder("audits-q1-review") == ("audits", "q1-review")
+    assert split_folder("audits-q1-review-final") == ("audits", "q1-review-final")
 
 
 def _idx(sessions, folders=()):
@@ -373,11 +373,11 @@ def test_build_tree_groups_by_project_then_folder():
     })
     tree = build_tree(data)
     assert sorted(tree.keys()) == ["acme-api", "acme-web"]
-    acme = tree["acme-api"]
-    assert "refactors" in acme
-    assert {sid for sid, _ in acme["refactors"]} == {"a", "b"}
+    acme_api = tree["acme-api"]
+    assert "refactors" in acme_api
+    assert {sid for sid, _ in acme_api["refactors"]} == {"a", "b"}
     # within a folder, newest first
-    assert acme["refactors"][0][0] == "a"
+    assert acme_api["refactors"][0][0] == "a"
 
 
 def test_build_tree_unnamed_lands_in_unnamed_bucket():

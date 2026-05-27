@@ -114,25 +114,22 @@ def first_user_prompt(path: str) -> Optional[str]:
 
 
 def session_name(path: str) -> Optional[str]:
-    """Returns the Claude-assigned session name, or None.
+    """Returns the user-assigned session name, or None.
 
-    Precedence: the LAST `custom-title` line's `customTitle` wins (user rename).
-    Falls back to the LAST `ai-title` line's `aiTitle` (AI-generated, refined
-    repeatedly during the session). Returns None if neither line type is present.
+    Only the LAST `custom-title` line's `customTitle` counts as a name — that's
+    what `/rename` and `claude -n` write. The `ai-title` events Claude emits
+    automatically as the session evolves are intentionally NOT treated as
+    names, because the spec defines "kept" as "user-explicit name", not "any
+    title that happens to be in the JSONL" (CLAUDE.md, SPEC.md §Naming).
+    Returns None if no custom-title line is present.
     """
     last_custom = None
-    last_ai = None
     for msg in _iter_messages(path):
-        t = msg.get("type")
-        if t == "custom-title":
+        if msg.get("type") == "custom-title":
             v = msg.get("customTitle")
             if v:
                 last_custom = v
-        elif t == "ai-title":
-            v = msg.get("aiTitle")
-            if v:
-                last_ai = v
-    return last_custom or last_ai
+    return last_custom
 
 
 def tokens_estimate(path: str) -> int:
@@ -166,3 +163,17 @@ def last_active_at(path: str) -> Optional[str]:
         if ts:
             last = ts
     return last
+
+
+def session_cwd(path: str) -> Optional[str]:
+    """Return the FIRST `cwd` value found in any envelope line of the JSONL.
+
+    Used by `index --backfill` to recover the original project directory for
+    sessions whose hook-payload `cwd` was never recorded (i.e. sessions that
+    pre-date the plugin install). Returns None if no line carries a cwd.
+    """
+    for msg in _iter_messages(path):
+        v = msg.get("cwd")
+        if v:
+            return v
+    return None

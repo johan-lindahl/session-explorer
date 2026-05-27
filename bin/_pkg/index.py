@@ -82,6 +82,22 @@ def _git_branch(cwd: str) -> "str | None":
 
 _TOKEN_WINDOW = 200_000  # v1 hardcode (Sonnet 4.6 default); see SPEC open question
 
+_WORKTREE_MARKER = "/.claude/worktrees/"
+
+
+def _project_label(cwd: str) -> str:
+    """Group label for a session's cwd.
+
+    Git worktrees created by Claude Code live at
+    `<project_root>/.claude/worktrees/<name>`. Without special handling each
+    worktree's leaf name (e.g. `ai-weight-adjust`) becomes its own top-level
+    "project", fragmenting the tree. Collapse those back under the parent
+    project root so all of a repo's worktrees group together.
+    """
+    if _WORKTREE_MARKER in cwd:
+        cwd = cwd.split(_WORKTREE_MARKER, 1)[0]
+    return os.path.basename(cwd.rstrip("/")) or cwd
+
 
 def record_session(index_path: str, session_id: str, transcript_path: str, cwd: str) -> dict:
     """Idempotent upsert. Preserves 'notes' and any other user-edited fields."""
@@ -101,7 +117,7 @@ def record_session(index_path: str, session_id: str, transcript_path: str, cwd: 
             "tokens_estimate": tokens,
             "tokens_window_pct": min(100, int(tokens * 100 / _TOKEN_WINDOW)),
             "project_path": cwd,
-            "project_label": os.path.basename(cwd.rstrip("/")) or cwd,
+            "project_label": _project_label(cwd),
             "branch": _git_branch(cwd),
             "last_active_at": _jsonl.last_active_at(transcript_path) or datetime.now(timezone.utc).isoformat(),
             "transcript_path": transcript_path,
@@ -111,6 +127,43 @@ def record_session(index_path: str, session_id: str, transcript_path: str, cwd: 
         data["sessions"][session_id] = new_entry
         return data
     return mutate(index_path, mutator)
+
+
+def backfill(index_path: str, projects_root: "str | None" = None) -> int:
+    """Index every JSONL under ~/.claude/projects/ that isn't already tracked.
+
+    For each new session, recovers `cwd` from the JSONL's envelope lines via
+    `jsonl.session_cwd()` (the hook payload's cwd isn't available for
+    pre-install sessions). Skips sessions already in the index — existing
+    entries are refreshed via `--refresh`, not here.
+
+    Returns the count of newly-added sessions.
+    """
+    projects_root = projects_root or os.path.expanduser("~/.claude/projects")
+    if not os.path.isdir(projects_root):
+        return 0
+    existing = set(load(index_path).get("sessions", {}).keys())
+    added = 0
+    for project_dir in sorted(os.listdir(projects_root)):
+        full = os.path.join(projects_root, project_dir)
+        if not os.path.isdir(full):
+            continue
+        for fname in sorted(os.listdir(full)):
+            if not fname.endswith(".jsonl"):
+                continue
+            sid = fname[:-len(".jsonl")]
+            if sid in existing:
+                continue
+            transcript_path = os.path.join(full, fname)
+            cwd = _jsonl.session_cwd(transcript_path) or ""
+            try:
+                record_session(index_path, sid, transcript_path, cwd)
+                added += 1
+            except Exception:
+                # Pre-install JSONLs can be malformed in edge ways; skip
+                # silently rather than abort the whole scan.
+                continue
+    return added
 
 
 def refresh_all(index_path: str) -> dict:

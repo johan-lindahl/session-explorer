@@ -24,24 +24,39 @@ def test_first_user_prompt_empty():
 
 
 def test_session_name_named_returns_custom_title():
-    """custom-title wins over ai-title (precedence rule)."""
+    """custom-title is the only source of a session name (user /rename)."""
     name = jsonl.session_name(os.path.join(_FIX, "named.jsonl"))
     assert name == "planning-sprint14-custom"
 
 
-def test_session_name_falls_back_to_ai_title(tmp_path):
-    """Without a custom-title line, the last ai-title value wins."""
+def test_session_name_ignores_ai_title(tmp_path):
+    """ai-title alone does NOT count as a session name — only /rename does.
+
+    Without an explicit custom-title line, session_name returns None even when
+    Claude has emitted ai-title events during the session.
+    """
     p = tmp_path / "ai-only.jsonl"
     p.write_text(
         '{"type":"ai-title","aiTitle":"first-title","sessionId":"X"}\n'
         '{"type":"ai-title","aiTitle":"updated-title","sessionId":"X"}\n'
         '{"type":"user","sessionId":"X","timestamp":"2026-05-20T10:00:00Z","message":{"role":"user","content":"hi"}}\n'
     )
-    assert jsonl.session_name(str(p)) == "updated-title"
+    assert jsonl.session_name(str(p)) is None
 
 
 def test_session_name_unnamed_returns_none():
     assert jsonl.session_name(os.path.join(_FIX, "unnamed.jsonl")) is None
+
+
+def test_session_cwd_returns_first_cwd():
+    """The envelope cwd is on user/assistant lines, not the leading ai-title."""
+    assert jsonl.session_cwd(os.path.join(_FIX, "named.jsonl")) == "/Users/jl/proj/foo"
+
+
+def test_session_cwd_none_when_no_envelope(tmp_path):
+    p = tmp_path / "no-cwd.jsonl"
+    p.write_text('{"type":"ai-title","aiTitle":"x","sessionId":"X"}\n')
+    assert jsonl.session_cwd(str(p)) is None
 
 
 def test_tokens_estimate_named_uses_cache_read():

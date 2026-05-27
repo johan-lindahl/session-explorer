@@ -5,7 +5,7 @@ Layout:
 
 Folder labels:
   ""           — ungrouped (session has a name but no dash)
-  "(unnamed)"  — session has no name_cached at all
+  "(unnamed)"  — session has no name_cached at all (only when include_unnamed=True)
   "(unfiled)"  — synthetic project bucket holding pre-created empty folders
   any other    — first-dash folder prefix
 """
@@ -27,11 +27,13 @@ def split_folder(name: "str | None") -> Tuple[str, str]:
     return (folder, display)
 
 
-def build_tree(index_data: dict) -> ProjectsTree:
+def build_tree(index_data: dict, include_unnamed: bool = True) -> ProjectsTree:
     tree: ProjectsTree = {}
     for sid, s in index_data.get("sessions", {}).items():
-        project = s.get("project_label") or "(unknown)"
         name = s.get("name_cached")
+        if not name and not include_unnamed:
+            continue
+        project = s.get("project_label") or "(unknown)"
         if not name:
             folder = "(unnamed)"
         else:
