@@ -264,7 +264,6 @@ def test_migrate_to_v2_v1_no_folders_field(tmp_path):
 def test_record_session_writes_folder_path_when_name_has_slash(tmp_path):
     """A session named foo/bar/baz should add foo/bar to the folder store under its project."""
     from _pkg import folder_store
-    import json
     idx_path = str(tmp_path / "index.json")
     fs_path = str(tmp_path / "folders.json")
     # Build a JSONL with a custom-title containing /.

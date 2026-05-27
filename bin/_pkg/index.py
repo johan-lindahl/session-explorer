@@ -118,7 +118,7 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
             file_bytes = 0
         tokens = _jsonl.tokens_estimate(transcript_path)
         new_entry = {
-            **existing,
+            **existing,  # preserve notes and other user-edited fields
             "name_cached": _jsonl.session_name(transcript_path),
             "first_prompt": _jsonl.first_user_prompt(transcript_path),
             "message_count": _jsonl.message_count(transcript_path),
