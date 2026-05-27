@@ -360,21 +360,60 @@ async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
         assert "unnamed-xyz" not in sids
 
 
-async def test_new_folder_adds_to_index(index_path):
+async def test_new_folder_under_project_adds_to_folder_store(index_path):
+    """`n` on a project node creates a top-level folder in that project."""
     from _pkg.tui import SessionExplorerApp, NewFolderScreen
+    from _pkg import folder_store
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("n")
+        # cursor sits on the demo project (first child of the hidden root).
+        proj = app._tree.root.children[0]
+        app._tree.select_node(proj); app._tree.cursor_line = proj.line
         await pilot.pause()
+        await pilot.press("n"); await pilot.pause()
         assert isinstance(app.screen, NewFolderScreen)
-        # Dismiss the modal directly with a chosen folder name; the callback
-        # runs add_folder() and repopulates the tree.
-        app.screen.dismiss("audits/empty-shelf")
+        app.screen.dismiss("audits/q1")
         await pilot.pause()
 
-    folders = json.load(open(index_path)).get("folders", [])
-    assert "audits/empty-shelf" in folders
+    fs_path = folder_store.default_path_for(index_path)
+    assert "audits/q1" in folder_store.list_paths(fs_path, "demo")
+
+
+async def test_new_folder_under_folder_creates_child(index_path):
+    """`n` on a folder node creates a child path under it."""
+    from _pkg.tui import SessionExplorerApp, NewFolderScreen
+    from _pkg import folder_store
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["sid-1"]["name_cached"] = "planning/sprint14"
+    json.dump(data, open(index_path, "w"))
+
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Find the planning/ folder node.
+        def find(node, label_contains):
+            for c in node.children:
+                if label_contains in str(c.label): return c
+                got = find(c, label_contains)
+                if got: return got
+            return None
+        planning = find(app._tree.root, "planning/")
+        assert planning is not None
+        app._tree.select_node(planning); app._tree.cursor_line = planning.line
+        await pilot.pause()
+        await pilot.press("n"); await pilot.pause()
+        assert isinstance(app.screen, NewFolderScreen)
+        # The modal must prefill with "planning/" — the engineer types "retro".
+        screen = app.screen
+        assert screen._prefix == "planning/"
+        screen.dismiss("planning/retro")
+        await pilot.pause()
+
+    fs_path = folder_store.default_path_for(index_path)
+    paths = folder_store.list_paths(fs_path, "demo")
+    assert "planning/retro" in paths
 
 
 async def test_populate_renders_nested_folders(index_path, tmp_path):

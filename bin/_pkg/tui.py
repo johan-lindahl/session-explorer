@@ -124,14 +124,20 @@ class MoveScreen(ModalScreen[str]):
 
 
 class NewFolderScreen(ModalScreen[str]):
-    """Prompt for a new folder name. Returns the entered string or '' on cancel."""
+    """Prompt for a folder path. The Input is prefilled with `prefix` (which
+    ends in '/' when creating a child of an existing folder)."""
 
     BINDINGS = [Binding("escape", "dismiss('')", "Cancel")]
 
+    def __init__(self, project: str, prefix: str = "") -> None:
+        super().__init__()
+        self._project = project
+        self._prefix = prefix
+
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label("New folder name (Enter to confirm, Esc to cancel):"),
-            Input(id="newfolder-input"),
+            Label(f"New folder path under '{self._project}' (use / for nesting):"),
+            Input(value=self._prefix, id="newfolder-input"),
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -399,14 +405,46 @@ class SessionExplorerApp(App):
         self.push_screen(MoveScreen(project, sorted(paths), current_folder), after)
 
     def action_new_folder(self) -> None:
-        def after(name: str) -> None:
-            if not name:
+        from . import folder_store as _fs
+        project, prefix = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+
+        def after(path: str) -> None:
+            if not path:
                 return
-            from .folders import add_folder
-            add_folder(self._index_path, name)
+            # Normalize: collapse repeated/leading/trailing slashes; drop empty segs.
+            segs = [seg.strip() for seg in path.split("/") if seg.strip()]
+            if not segs:
+                return
+            _fs.add(_fs.default_path_for(self._index_path), project, "/".join(segs))
             self._populate()
 
-        self.push_screen(NewFolderScreen(), after)
+        self.push_screen(NewFolderScreen(project, prefix), after)
+
+    def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
+        """Return (project_label, prefix). prefix ends in '/' when the cursor sits
+        on a folder so child creation is one segment away from done."""
+        node = self._tree.cursor_node
+        if node is None or node is self._tree.root:
+            return (None, "")
+        # Walk ancestors, collecting folder segments, until we hit a project node
+        # (a direct child of root) or a session leaf (which we treat as its parent).
+        if node.data and "sid" in node.data:
+            node = node.parent  # treat session leaf as its containing folder/project
+        path: list[str] = []
+        while node is not None and node.parent is not self._tree.root and node is not self._tree.root:
+            # Folder labels look like "<segment>/". Strip the trailing slash.
+            label = str(node.label)
+            if label.endswith("/"):
+                path.insert(0, label[:-1])
+            node = node.parent
+        if node is None or node.parent is not self._tree.root:
+            return (None, "")
+        # Project node label looks like "<project> (count)" — strip the count suffix.
+        proj_label = str(node.label).rsplit(" (", 1)[0]
+        prefix = "/".join(path) + "/" if path else ""
+        return (proj_label, prefix)
 
     def action_delete(self) -> None:
         node = self._tree.cursor_node
