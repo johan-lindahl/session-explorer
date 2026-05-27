@@ -163,6 +163,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("space", "preview", "Preview", priority=True),
+        Binding("slash", "filter", "Filter"),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -171,12 +172,13 @@ class SessionExplorerApp(App):
         super().__init__()
         self._index_path = index_path or _index_path()
         self._resume_target: str | None = None
+        self._filter_needle: str = ""
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "filter") and isinstance(self.screen, ModalScreen):
             return False
         return True
 
@@ -186,6 +188,10 @@ class SessionExplorerApp(App):
         self._preview = Static("", id="preview")
         self._preview.display = False
         yield Horizontal(self._tree, self._preview)
+        self._filter = Input(placeholder="filter…", id="filter")
+        self._filter.display = False
+        self._filter.disabled = True  # also prevents focus while hidden
+        yield self._filter
         yield Footer()
 
     def on_mount(self) -> None:
@@ -193,6 +199,19 @@ class SessionExplorerApp(App):
         self._populate()
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
+
+    def _matches(self, sid: str, s: dict) -> bool:
+        if not self._filter_needle:
+            return True
+        n = self._filter_needle
+        haystacks = [
+            s.get("name_cached") or "",
+            s.get("notes") or "",
+            s.get("first_prompt") or "",
+            s.get("summary") or "",
+            sid,
+        ]
+        return any(n in h.lower() for h in haystacks)
 
     def _populate(self) -> None:
         self._tree.clear()
@@ -216,7 +235,8 @@ class SessionExplorerApp(App):
                 else:
                     folder_node = proj_node
                 for sid, s in sessions:
-                    folder_node.add_leaf(_row_label(sid, s), data={"sid": sid, **s})
+                    if self._matches(sid, s):
+                        folder_node.add_leaf(_row_label(sid, s), data={"sid": sid, **s})
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node
@@ -331,6 +351,21 @@ class SessionExplorerApp(App):
     def action_preview(self) -> None:
         self._preview.display = not self._preview.display
         self._refresh_preview()
+
+    def action_filter(self) -> None:
+        self._filter.display = True
+        self._filter.disabled = False
+        self._filter.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input is self._filter:
+            self._filter_needle = event.value.lower().strip()
+            self._populate()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Pressing Enter on the filter input returns focus to the tree.
+        if event.input is self._filter:
+            self._tree.focus()
 
     def _refresh_preview(self) -> None:
         if not self._preview.display:

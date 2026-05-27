@@ -194,6 +194,40 @@ async def test_preview_toggles(index_path):
         assert app._preview.display is False
 
 
+def _collect_leaf_sids(node):
+    sids = set()
+    for child in node.children:
+        if child.data and "sid" in child.data:
+            sids.add(child.data["sid"])
+        sids |= _collect_leaf_sids(child)
+    return sids
+
+
+async def test_filter_narrows_tree(index_path):
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["sid-2"] = {
+        "project_label": "demo", "name_cached": "release-x",
+        "last_active_at": "2026-05-26T00:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Without filter, both sessions render.
+        sids_before = _collect_leaf_sids(app._tree.root)
+        assert "sid-1" in sids_before and "sid-2" in sids_before
+
+        app._filter_needle = "planning"
+        app._populate()
+        sids_after = _collect_leaf_sids(app._tree.root)
+        assert "sid-1" in sids_after
+        assert "sid-2" not in sids_after
+
+
 async def test_new_folder_adds_to_index(index_path):
     from _pkg.tui import SessionExplorerApp, NewFolderScreen
     app = SessionExplorerApp(index_path=index_path)
