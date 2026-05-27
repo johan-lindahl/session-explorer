@@ -4,8 +4,9 @@ A Claude Code plugin that turns `~/.claude/projects/*.jsonl` transcripts into a
 file-explorer-style listing: browse, organize, and resume sessions from a single
 slash command.
 
-M1 ships the data layer plus a text-mode listing. M2 will replace the listing
-with a Textual TUI (arrows, expand/collapse, rename/move/delete).
+M2 ships a Textual TUI with arrow navigation, expand/collapse, rename, move,
+delete, notes, preview pane, and live filter. The text-mode `list` subcommand
+remains for scripting.
 
 See [`SPEC.md`](./SPEC.md) for the full design.
 
@@ -44,14 +45,31 @@ From inside Claude:
 no way to drop the prefix.)
 
 This opens a new Terminal.app window showing your sessions grouped by project
-and (first-dash) folder. Press Enter in that window to close it.
+and (first-dash) folder. Quit the TUI with `q` to close the window.
 
 From a regular shell:
 
 ```bash
 session-explorer list      # text listing
 session-explorer launch    # open in a new Terminal window
+session-explorer tui       # run the TUI in the current terminal
 ```
+
+## TUI keybindings
+
+| Key | Action |
+|---|---|
+| `↑` `↓` | Move between rows |
+| `←` `→` | Collapse / expand the current folder or project |
+| `Enter` | Resume the selected session (`exec claude --resume <id>`) |
+| `Space` | Toggle the preview pane (notes, first prompt, summary, path) |
+| `r` | Rename — also moves the session between folders |
+| `n` | Create an empty folder |
+| `m` | Move the selected session to a folder |
+| `d` | Delete the selected session (confirms; removes the JSONL too) |
+| `e` | Edit notes (Ctrl+S to save) |
+| `/` | Live filter across name, notes, first prompt, summary |
+| `q` `Esc` | Quit |
 
 ## How sessions are organized
 
@@ -87,4 +105,5 @@ and hook entry manually (plain install).
 
 ## Status
 
-M1 — text listing only. Active development.
+M2 — Textual TUI complete. Active development; `--gc`, uninstall command, and
+Windows launcher land in M3+.

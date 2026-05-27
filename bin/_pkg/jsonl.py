@@ -52,11 +52,26 @@ USER CONTENT SHAPE:
   - Subsequent user turns (tool results): message.content is a list of dicts
     with type="tool_result" or type="text"
 
-RENAME SERIALIZATION:
-  type="custom-title", field: customTitle (string), sessionId (string).
-  No "rename" event type observed. User title overrides ai-title.
-  Example shape (no real content):
-    {"type":"custom-title","customTitle":"<user label>","sessionId":"<uuid>"}
+RENAME SERIALIZATION (verified 2026-05-27 against 389 real custom-title lines
+across ~50 transcripts in ~/.claude/projects/):
+  Line shape (EXACT — no envelope fields):
+    {"type":"custom-title",
+     "customTitle":"<user label>",
+     "sessionId":"<uuid>"}
+  - All three fields are REQUIRED.
+  - NO envelope fields are written: no uuid, no parentUuid, no timestamp, no
+    cwd, no gitBranch, no version, no userType, no isSidechain. The plan's
+    anticipated envelope (uuid/parentUuid/timestamp) does NOT apply to
+    custom-title lines — Claude writes a minimal three-key object.
+  - 100% of 389 sampled lines had exactly the key set
+    {"type","customTitle","sessionId"} with no variation.
+  - sessionId on the custom-title line matches the JSONL filename's UUID.
+  - Multiple custom-title lines may appear in one file (observed up to 27).
+    Within a single file the value never drifted across the entire corpus
+    (0/~50 multi-line files showed distinct customTitle values), so in
+    practice first==last. The spec rule "LAST custom-title wins" is still
+    the safe semantic and is what session_name() implements.
+  - User title overrides ai-title.
 """
 
 import json

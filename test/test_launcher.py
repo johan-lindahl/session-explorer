@@ -32,3 +32,23 @@ def test_launch_unsupported_platform_returns_fallback(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc != 0
     assert "/abs/path/session-explorer" in captured.out
+
+
+def test_linux_uses_TERMINAL_env(monkeypatch):
+    monkeypatch.setenv("SESSION_EXPLORER_DRY_RUN", "1")
+    monkeypatch.setenv("TERMINAL", "kitty")
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    cmd = launcher.build_linux_command("echo hi", which=lambda x: "/usr/bin/kitty" if x == "kitty" else None)
+    assert cmd[0].endswith("kitty")
+
+
+def test_linux_falls_through_emulator_list(monkeypatch):
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    found = {"gnome-terminal": "/usr/bin/gnome-terminal"}
+    cmd = launcher.build_linux_command("echo hi", which=found.get)
+    assert cmd[0].endswith("gnome-terminal")
+
+
+def test_linux_no_emulator_returns_None(monkeypatch):
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    assert launcher.build_linux_command("echo hi", which=lambda _: None) is None
