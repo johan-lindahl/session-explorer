@@ -14,7 +14,7 @@ def index_path():
             "sid-1": {
                 "project_label": "demo",
                 "project_path": "/tmp/demo-project",
-                "name_cached": "planning-sprint14",
+                "name_cached": "planning/sprint14",
                 "last_active_at": "2026-05-27T10:00:00Z",
                 "tokens_estimate": 12345,
                 "tokens_window_pct": 6,
@@ -96,14 +96,16 @@ async def test_rename_updates_index(index_path, tmp_path):
 
 
 async def test_move_changes_folder(index_path, tmp_path):
-    # Add a transcript path + a second session contributing an existing folder.
+    """Moving a session to folder 'release' rewrites its custom-title to release/<display>."""
     import json
     data = json.load(open(index_path))
     transcript = tmp_path / "t2.jsonl"
     transcript.write_text('{"type":"user","uuid":"u1"}\n')
+    data["sessions"]["sid-1"]["name_cached"] = "planning/sprint14"
     data["sessions"]["sid-1"]["transcript_path"] = str(transcript)
     data["sessions"]["sid-2"] = {
-        "project_label": "demo", "name_cached": "archive-old",
+        "project_label": "demo", "project_path": "/tmp/demo",
+        "name_cached": "archive/old",
         "last_active_at": "2026-01-01T00:00:00Z",
         "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
     }
@@ -113,29 +115,28 @@ async def test_move_changes_folder(index_path, tmp_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Navigate to sid-1 leaf. Tree layout (folders sorted alphabetically):
-        #   root → demo (project) → archive/ → archive-old (sid-2)
-        #                          → planning/ → planning-sprint14 (sid-1)
-        # So 5 downs: demo, archive/, old, planning/, sprint14.
-        for _ in range(5):
-            await pilot.press("down")
-        assert app._tree.cursor_node.data["sid"] == "sid-1"
-        await pilot.press("m")
+        # Navigate to sid-1's leaf by searching.
+        def find_leaf(node, sid):
+            for c in node.children:
+                if c.data and c.data.get("sid") == sid:
+                    return c
+                got = find_leaf(c, sid)
+                if got:
+                    return got
+            return None
+        leaf = find_leaf(app._tree.root, "sid-1")
+        assert leaf is not None
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
         await pilot.pause()
-        # Modal should now be on top of the stack.
+        await pilot.press("m"); await pilot.pause()
         assert isinstance(app.screen, MoveScreen)
-        # Pilot navigation of OptionList is flaky; dismiss the screen directly
-        # with a chosen folder name and let the callback run.
         app.screen.dismiss("release")
         await pilot.pause()
 
     name = json.load(open(index_path))["sessions"]["sid-1"]["name_cached"]
-    # Display was 'sprint14' (from 'planning-sprint14'); new prefix is 'release'.
-    assert name == "release-sprint14"
-    # The JSONL got a custom-title event appended.
-    lines = transcript.read_text().splitlines()
-    last = json.loads(lines[-1])
-    assert last == {"type": "custom-title", "customTitle": "release-sprint14", "sessionId": "sid-1"}
+    assert name == "release/sprint14"
+    last = json.loads(transcript.read_text().splitlines()[-1])
+    assert last == {"type": "custom-title", "customTitle": "release/sprint14", "sessionId": "sid-1"}
 
 
 async def test_delete_removes_session(index_path, tmp_path):
@@ -233,15 +234,15 @@ async def test_filter_narrows_tree(index_path):
 
 
 async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path):
-    # Regression: move-to-(ungroup) of an unnamed session used to write an
-    # empty customTitle because the closure didn't fall back to sid[:8]
-    # in the no-target branch.
+    """Regression: move-to-(ungroup) of an unnamed session must write a non-empty
+    customTitle (sid[:8]) and must not contain /."""
     import json
     data = json.load(open(index_path))
     transcript = tmp_path / "tu.jsonl"
     transcript.write_text('{"type":"user"}\n')
     data["sessions"]["unnamed-sid-xyz"] = {
-        "project_label": "demo", "name_cached": None,
+        "project_label": "demo", "project_path": "/tmp/demo",
+        "name_cached": None,
         "last_active_at": "2026-05-25T00:00:00Z",
         "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
         "transcript_path": str(transcript),
@@ -250,63 +251,50 @@ async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path
 
     from _pkg.tui import SessionExplorerApp
     from textual.screen import ModalScreen
-
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Unnamed sessions are hidden by default — surface them first.
-        await pilot.press("u")
-        await pilot.pause()
-
-        def find_leaf(node):
+        await pilot.press("u"); await pilot.pause()  # surface unnamed
+        def find(node, sid):
             for c in node.children:
-                if c.data and c.data.get("sid") == "unnamed-sid-xyz":
+                if c.data and c.data.get("sid") == sid:
                     return c
-                got = find_leaf(c)
-                if got:
-                    return got
+                got = find(c, sid)
+                if got: return got
             return None
-
-        leaf = find_leaf(app._tree.root)
+        leaf = find(app._tree.root, "unnamed-sid-xyz")
         assert leaf is not None
-        # Force the cursor onto the unnamed leaf. select_node alone doesn't
-        # always move the internal cursor used by action_move; setting the
-        # cursor_line directly is the reliable path.
-        app._tree.select_node(leaf)
-        app._tree.cursor_line = leaf.line
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
         await pilot.pause()
-        assert app._tree.cursor_node is leaf
-        await pilot.press("m")
-        await pilot.pause()
+        await pilot.press("m"); await pilot.pause()
         assert isinstance(app.screen, ModalScreen)
-        app.screen.dismiss("")  # ungroup
+        app.screen.dismiss("")  # (ungroup)
         await pilot.pause()
 
     name = json.load(open(index_path))["sessions"]["unnamed-sid-xyz"]["name_cached"]
-    # sid[:8] of "unnamed-sid-xyz" is "unnamed-"
-    assert name, f"customTitle must not be empty; got {name!r}"
     assert name == "unnamed-"
-    # And the JSONL got the non-empty customTitle.
+    assert "/" not in name
     last = json.loads(transcript.read_text().splitlines()[-1])
     assert last["customTitle"] == "unnamed-"
 
 
 def test_row_label_columns_align_across_depth():
-    """A folder-grouped leaf (2 levels deep, NAME_W field) and an ungrouped leaf
-    (1 level shallower, NAME_W+GUIDE_DEPTH field) must land their stat block at
-    the same absolute screen column. In the bare row string that means the stat
-    suffix begins at the respective name-field width and is byte-identical."""
+    """A leaf one level shallower (depth=1, ungrouped) and a leaf one level
+    deeper (depth=2, folder-grouped) must place stat columns at the same
+    absolute screen column. In the bare row string this means the stat suffix
+    sits at `name_w` in each, and that `name_w` differs by GUIDE_DEPTH, which
+    exactly equals one tree-indent level."""
     from _pkg.tui import _row_label, _stat_suffix, NAME_W, GUIDE_DEPTH
     s = {"name_cached": "x", "last_active_at": None,
          "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 7,
          "first_prompt": "hello"}
-    grouped = _row_label("sid", s, NAME_W)
-    ungrouped = _row_label("sid", s, NAME_W + GUIDE_DEPTH)
-    # The stat suffix is the same and sits right after each (differently sized)
-    # name field; the size delta equals one tree level (GUIDE_DEPTH), which is
-    # exactly the indent difference the tree adds. So columns line up.
-    assert grouped[NAME_W:] == ungrouped[NAME_W + GUIDE_DEPTH:]
-    assert grouped[NAME_W:] == _stat_suffix("—", "~0", "(0%)", "7", "msgs", "hello")
+    ungrouped = _row_label("sid", s, depth=1)
+    grouped = _row_label("sid", s, depth=2)
+    # At depth=2: name_w = NAME_W. At depth=1: name_w = NAME_W + GUIDE_DEPTH.
+    name_w_grouped = NAME_W
+    name_w_ungrouped = NAME_W + GUIDE_DEPTH
+    assert grouped[name_w_grouped:] == ungrouped[name_w_ungrouped:]
+    assert grouped[name_w_grouped:] == _stat_suffix("—", "~0", "(0%)", "7", "msgs", "hello")
 
 
 def test_column_header_offset_matches_grouped_leaf():
@@ -324,10 +312,10 @@ def test_long_name_truncates_to_field_width():
     s = {"name_cached": "a" * 100, "last_active_at": None,
          "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
          "first_prompt": ""}
-    row = _row_label("sid", s, NAME_W)
-    # Name field never exceeds NAME_W, so columns can't be shoved right.
+    # depth=2 → name_w == NAME_W
+    row = _row_label("sid", s, depth=2)
     assert row[:NAME_W].endswith("…")
-    assert row[NAME_W] == " "  # the stat suffix's leading space, exactly at NAME_W
+    assert row[NAME_W] == " "  # stat suffix's leading space sits exactly at NAME_W
 
 
 async def test_column_header_rendered(index_path):
@@ -387,3 +375,71 @@ async def test_new_folder_adds_to_index(index_path):
 
     folders = json.load(open(index_path)).get("folders", [])
     assert "audits/empty-shelf" in folders
+
+
+async def test_populate_renders_nested_folders(index_path, tmp_path):
+    """A session named foo/bar should render as project → foo/ → bar leaf."""
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["sid-nested"] = {
+        "project_label": "demo",
+        "project_path": "/tmp/demo",
+        "name_cached": "planning/sprint99",
+        "last_active_at": "2026-05-27T11:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Find the planning/ folder node and check its child carries sid-nested.
+        def find(node, label_contains):
+            for c in node.children:
+                if label_contains in str(c.label):
+                    return c
+                got = find(c, label_contains)
+                if got:
+                    return got
+            return None
+        planning = find(app._tree.root, "planning/")
+        assert planning is not None
+        leaf = next((c for c in planning.children if c.data and c.data.get("sid") == "sid-nested"), None)
+        assert leaf is not None
+
+
+async def test_move_to_new_path_adds_to_folder_store(index_path, tmp_path):
+    """Typing a new path in MoveScreen auto-creates it in the folder store."""
+    import json
+    from _pkg import folder_store
+    data = json.load(open(index_path))
+    transcript = tmp_path / "tn.jsonl"
+    transcript.write_text('{"type":"user"}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(transcript)
+    data["sessions"]["sid-1"]["name_cached"] = "sprint14"
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp, MoveScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # cursor onto sid-1
+        def find(node, sid):
+            for c in node.children:
+                if c.data and c.data.get("sid") == sid: return c
+                got = find(c, sid)
+                if got: return got
+            return None
+        leaf = find(app._tree.root, "sid-1")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        await pilot.press("m"); await pilot.pause()
+        assert isinstance(app.screen, MoveScreen)
+        app.screen.dismiss("team/new-folder")  # auto-creates this path
+        await pilot.pause()
+
+    fs_path = folder_store.default_path_for(index_path)
+    paths = folder_store.list_paths(fs_path, "demo")
+    assert "team/new-folder" in paths
+    assert json.load(open(index_path))["sessions"]["sid-1"]["name_cached"] == "team/new-folder/sprint14"

@@ -17,7 +17,7 @@ from textual.widgets.option_list import Option
 
 from . import index as _index
 from .format import fmt_age, fmt_pct, fmt_tokens
-from .tree_model import build_tree, split_folder
+from .tree_model import build_nested_tree, split_path
 
 
 def _index_path() -> str:
@@ -41,10 +41,15 @@ def _stat_suffix(age: str, tok: str, pct: str, msgs: str, msgs_unit: str, prompt
     return f" {age:>4}  {tok:>6} {pct:>5}  {msgs:>4} {msgs_unit}   {prompt}"
 
 
-def _row_label(sid: str, s: dict, name_w: int) -> str:
-    _, display = split_folder(s.get("name_cached"))
+def _row_label(sid: str, s: dict, depth: int) -> str:
+    """Leaf row. `depth` is the number of tree levels above the leaf
+    (project = 1 level above ungrouped leaves; folder above that = 2 levels;
+    etc.). Used to choose the name_field width so stat columns align."""
+    _, display = split_path(s.get("name_cached"))
     display = display or sid[:8]
-    # Truncate so a long name can't overflow the field and shove the columns right.
+    # Each level of indent steals GUIDE_DEPTH cells from the name field.
+    # depth=1 (root child) → widest field; depth=2 → minus 1*G; depth=3 → minus 2*G…
+    name_w = max(8, NAME_W + 2 * GUIDE_DEPTH - depth * GUIDE_DEPTH)
     if len(display) > name_w:
         display = display[: name_w - 1] + "…"
     age = fmt_age(s.get("last_active_at"))
@@ -56,8 +61,8 @@ def _row_label(sid: str, s: dict, name_w: int) -> str:
 
 
 def _column_header() -> str:
-    """Header line whose labels sit above the stat columns. The name region is
-    padded to a grouped leaf's absolute stat offset (2 levels deep + NAME_W)."""
+    """Header line whose labels sit above the stat columns. Pads to a depth-2
+    leaf's absolute stat offset (2 levels of guide × GUIDE_DEPTH + NAME_W)."""
     name_region = NAME_W + 2 * GUIDE_DEPTH
     return f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
@@ -82,28 +87,30 @@ class RenameScreen(ModalScreen[str]):
 
 
 class MoveScreen(ModalScreen[str]):
-    """Pick or type a folder.
+    """Pick or type a folder path (e.g. 'planning/sprint14').
 
-    Returns the chosen folder name (empty string to ungroup, or None on cancel).
+    Returns "" to ungroup, the chosen/typed path string, or None on cancel.
     """
 
     BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
 
-    def __init__(self, existing_folders: list[str], current: str) -> None:
+    def __init__(self, project: str, existing_paths: list[str], current: str) -> None:
         super().__init__()
-        self._existing = sorted(set(existing_folders))
+        self._project = project
+        self._existing = sorted(set(existing_paths))
         self._current = current
 
     def compose(self) -> ComposeResult:
         opts = [Option("(ungroup)", id="__none__")] + [
-            Option(f, id=f) for f in self._existing
+            Option(p, id=p) for p in self._existing
         ]
         yield Vertical(
             Label(
-                f"Move to folder (current: {self._current or '(none)'}). Pick or type:"
+                f"Move within '{self._project}' (current: {self._current or '(none)'})."
+                " Pick or type a path (use / for nesting):"
             ),
             OptionList(*opts, id="move-list"),
-            Input(placeholder="…or type a new folder name", id="move-input"),
+            Input(placeholder="…or type a new path (e.g. team/planning)", id="move-input"),
         )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -264,9 +271,11 @@ class SessionExplorerApp(App):
         return any(n in h.lower() for h in haystacks)
 
     def _populate(self) -> None:
+        from . import folder_store as _fs
         self._tree.clear()
         data = _index.load(self._index_path)
-        tree = build_tree(data, include_unnamed=self._show_unnamed)
+        fs_data = _fs.load(_fs.default_path_for(self._index_path))
+        tree = build_nested_tree(data, fs_data, include_unnamed=self._show_unnamed)
         unnamed_hidden = 0
         if not self._show_unnamed:
             unnamed_hidden = sum(
@@ -274,29 +283,29 @@ class SessionExplorerApp(App):
             )
         root = self._tree.root
         root.expand()
-        total = sum(
-            len(sessions)
-            for folders in tree.values()
-            for sessions in folders.values()
-        )
+
+        def count(node):
+            return len(node["_sessions"]) + sum(count(c) for c in node["_folders"].values())
+
+        total = sum(count(p) for p in tree.values())
         if unnamed_hidden:
             self.sub_title = f"{total} sessions across {len(tree)} projects · {unnamed_hidden} unnamed hidden (u)"
         else:
             self.sub_title = f"{total} sessions across {len(tree)} projects"
+
+        def render(parent, node, depth):
+            for sid, s in node["_sessions"]:
+                if self._matches(sid, s):
+                    parent.add_leaf(_row_label(sid, s, depth + 1), data={"sid": sid, **s})
+            for name in sorted(node["_folders"]):
+                child = node["_folders"][name]
+                folder_node = parent.add(f"{name}/", expand=True)
+                render(folder_node, child, depth + 1)
+
         for project in sorted(tree):
-            folders = tree[project]
-            proj_node = root.add(f"{project} ({sum(len(v) for v in folders.values())})", expand=True)
-            for folder in sorted(folders):
-                sessions = folders[folder]
-                if folder and folder != "(unnamed)":
-                    folder_node = proj_node.add(f"{folder}/", expand=True)
-                    name_w = NAME_W  # grouped leaf: 2 levels deep
-                else:
-                    folder_node = proj_node
-                    name_w = NAME_W + GUIDE_DEPTH  # ungrouped leaf: 1 level shallower
-                for sid, s in sessions:
-                    if self._matches(sid, s):
-                        folder_node.add_leaf(_row_label(sid, s, name_w), data={"sid": sid, **s})
+            node = tree[project]
+            proj_node = root.add(f"{project} ({count(node)})", expand=True)
+            render(proj_node, node, depth=1)
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node
@@ -332,36 +341,46 @@ class SessionExplorerApp(App):
         self.push_screen(RenameScreen(current), after)
 
     def action_move(self) -> None:
+        from . import folder_store as _fs
         node = self._tree.cursor_node
         if not node or not node.data or "sid" not in node.data:
-            self.bell()
-            return
+            self.bell(); return
         sid = node.data["sid"]
         name = node.data.get("name_cached") or ""
         transcript = node.data.get("transcript_path")
-        current_folder, display = split_folder(name)
-        # Folder list = folders[] ∪ {folders seen in sessions}
-        data = _index.load(self._index_path)
-        folders = set(data.get("folders") or [])
-        for s in data.get("sessions", {}).values():
-            f, _ = split_folder(s.get("name_cached"))
-            if f:
-                folders.add(f)
+        project = node.data.get("project_label")
+        if not project:
+            self.bell(); return
+        segments, display = split_path(name)
+        current_folder = "/".join(segments)
 
-        def after(target: str | None) -> None:
+        fs_path = _fs.default_path_for(self._index_path)
+        # Folder list = store ∪ folders implied by indexed session names in this project.
+        paths = set(_fs.list_paths(fs_path, project))
+        data = _index.load(self._index_path)
+        for s in data.get("sessions", {}).values():
+            if s.get("project_label") != project:
+                continue
+            segs, _ = split_path(s.get("name_cached"))
+            for i in range(1, len(segs) + 1):
+                paths.add("/".join(segs[:i]))
+
+        def after(target: "str | None") -> None:
             if target is None or not transcript:
                 return
-            new_name = (display or sid[:8]) if not target else f"{target}-{display or sid[:8]}"
+            leaf = display or sid[:8]
+            new_name = leaf if not target else f"{target}/{leaf}"
             from .rename import append_custom_title
             append_custom_title(transcript, session_id=sid, new_name=new_name)
-
+            if target:
+                _fs.add(fs_path, project, target)
             def _mut(d: dict) -> dict:
                 d["sessions"].setdefault(sid, {})["name_cached"] = new_name
                 return d
             _index.mutate(self._index_path, _mut)
             self._populate()
 
-        self.push_screen(MoveScreen(sorted(folders), current_folder), after)
+        self.push_screen(MoveScreen(project, sorted(paths), current_folder), after)
 
     def action_new_folder(self) -> None:
         def after(name: str) -> None:
