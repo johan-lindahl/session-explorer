@@ -11,9 +11,9 @@ from typing import Any, Dict, List, Tuple
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, OptionList, TextArea, Tree
+from textual.widgets import Footer, Header, Input, Label, OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 from textual.widgets.tree import TreeNode
 
@@ -151,7 +151,8 @@ class NotesScreen(ModalScreen[str]):
 
 class SessionExplorerApp(App):
     CSS = """
-    Tree { padding: 0 1; }
+    Tree { padding: 0 1; width: 1fr; }
+    #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     """
 
     BINDINGS = [
@@ -161,6 +162,7 @@ class SessionExplorerApp(App):
         Binding("n", "new_folder", "New folder"),
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
+        Binding("space", "preview", "Preview", priority=True),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -174,19 +176,23 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview") and isinstance(self.screen, ModalScreen):
             return False
         return True
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         self._tree: Tree[dict] = Tree("sessions")
-        yield self._tree
+        self._preview = Static("", id="preview")
+        self._preview.display = False
+        yield Horizontal(self._tree, self._preview)
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "session-explorer"
         self._populate()
+        # Belt-and-braces: ensure preview is hidden after first compose pass.
+        self._preview.display = False
 
     def _populate(self) -> None:
         self._tree.clear()
@@ -321,6 +327,29 @@ class SessionExplorerApp(App):
             self._populate()
 
         self.push_screen(NotesScreen(current), after)
+
+    def action_preview(self) -> None:
+        self._preview.display = not self._preview.display
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        if not self._preview.display:
+            return
+        node = self._tree.cursor_node
+        s = node.data if node and node.data else {}
+        notes = s.get("notes") or "(no notes)"
+        prompt = s.get("first_prompt") or "(no first prompt recorded)"
+        summary = s.get("summary") or "(no summary)"
+        path = s.get("transcript_path") or "(unknown path)"
+        self._preview.update(
+            f"[b]Notes[/]\n{notes}\n\n"
+            f"[b]First prompt[/]\n{prompt}\n\n"
+            f"[b]Summary[/]\n{summary}\n\n"
+            f"[b]Path[/]\n{path}"
+        )
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        self._refresh_preview()
 
 
 def run() -> int:

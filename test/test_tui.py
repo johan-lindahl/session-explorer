@@ -180,6 +180,20 @@ async def test_notes_persists(index_path):
     assert json.load(open(index_path))["sessions"]["sid-1"]["notes"] == "hello world"
 
 
+async def test_preview_toggles(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._preview.display is False
+        await pilot.press("space")
+        await pilot.pause()
+        assert app._preview.display is True
+        await pilot.press("space")
+        await pilot.pause()
+        assert app._preview.display is False
+
+
 async def test_new_folder_adds_to_index(index_path):
     from _pkg.tui import SessionExplorerApp, NewFolderScreen
     app = SessionExplorerApp(index_path=index_path)
