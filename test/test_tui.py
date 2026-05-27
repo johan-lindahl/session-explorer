@@ -160,6 +160,26 @@ async def test_delete_removes_session(index_path, tmp_path):
     assert not os.path.exists(transcript)
 
 
+async def test_notes_persists(index_path):
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # nav to leaf
+        await pilot.press("right"); await pilot.press("down")
+        await pilot.press("down"); await pilot.press("down")
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        # Bypass TextArea input quirks — dismiss directly with new value
+        app.screen.dismiss("hello world")
+        await pilot.pause()
+
+    import json
+    assert json.load(open(index_path))["sessions"]["sid-1"]["notes"] == "hello world"
+
+
 async def test_new_folder_adds_to_index(index_path):
     from _pkg.tui import SessionExplorerApp, NewFolderScreen
     app = SessionExplorerApp(index_path=index_path)

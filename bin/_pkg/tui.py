@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, OptionList, Tree
+from textual.widgets import Footer, Header, Input, Label, OptionList, TextArea, Tree
 from textual.widgets.option_list import Option
 from textual.widgets.tree import TreeNode
 
@@ -126,6 +126,29 @@ class ConfirmScreen(ModalScreen[bool]):
         )
 
 
+class NotesScreen(ModalScreen[str]):
+    """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Cancel"),
+        Binding("ctrl+s", "save", "Save"),
+    ]
+
+    def __init__(self, current: str) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        self._ta = TextArea(self._current)
+        yield Vertical(
+            Label("Notes (Ctrl+S to save, Esc to cancel):"),
+            self._ta,
+        )
+
+    def action_save(self) -> None:
+        self.dismiss(self._ta.text)
+
+
 class SessionExplorerApp(App):
     CSS = """
     Tree { padding: 0 1; }
@@ -137,6 +160,7 @@ class SessionExplorerApp(App):
         Binding("m", "move", "Move"),
         Binding("n", "new_folder", "New folder"),
         Binding("d", "delete", "Delete"),
+        Binding("e", "notes", "Edit notes"),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -150,7 +174,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes") and isinstance(self.screen, ModalScreen):
             return False
         return True
 
@@ -280,6 +304,23 @@ class SessionExplorerApp(App):
         self.push_screen(
             ConfirmScreen(f"Delete '{name}'? This removes the JSONL too."), after
         )
+
+    def action_notes(self) -> None:
+        node = self._tree.cursor_node
+        if not node or not node.data or "sid" not in node.data:
+            self.bell()
+            return
+        sid = node.data["sid"]
+        current = node.data.get("notes") or ""
+
+        def after(new_notes: str | None) -> None:
+            if new_notes is None:
+                return
+            from .notes import set_notes
+            set_notes(self._index_path, sid, new_notes)
+            self._populate()
+
+        self.push_screen(NotesScreen(current), after)
 
 
 def run() -> int:
