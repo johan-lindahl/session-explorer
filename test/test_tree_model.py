@@ -162,7 +162,7 @@ def test_build_nested_tree_root_session_no_slash():
     })
     fs = _fs_data({"acme-api": []})
     t = build_nested_tree(idx, fs, include_unnamed=False)
-    assert list(t.keys()) == ["acme-api"]
+    assert set(t.keys()) == {"acme-api"}
     proj = t["acme-api"]
     assert [sid for sid, _ in proj["_sessions"]] == ["a"]
     assert proj["_folders"] == {}
@@ -240,3 +240,40 @@ def test_build_nested_tree_unfiled_project_appears_when_store_has_it():
     t = build_nested_tree(idx, fs, include_unnamed=False)
     assert "(unfiled)" in t
     assert "legacy-shelf" in t["(unfiled)"]["_folders"]
+
+
+def test_build_nested_tree_root_and_nested_sessions_coexist():
+    """A project with both a root-level named session and a folder-grouped one
+    must materialize both: the root in `_sessions`, the nested under `_folders`."""
+    idx = _idx({
+        "root-sid": {"project_label": "p", "name_cached": "standalone",
+                     "last_active_at": "2026-05-27T10:00:00Z"},
+        "folder-sid": {"project_label": "p", "name_cached": "plans/q1",
+                       "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    root_sids = [sid for sid, _ in t["p"]["_sessions"]]
+    folder_sids = [sid for sid, _ in t["p"]["_folders"]["plans"]["_sessions"]]
+    assert root_sids == ["root-sid"]
+    assert folder_sids == ["folder-sid"]
+
+
+def test_build_nested_tree_stored_path_overlapping_session_folder_does_not_duplicate():
+    """A session named plans/q1/notes has folder path ["plans","q1"] and display
+    "notes", so it lands in `plans/q1`. When the folder store ALSO carries
+    "plans/q1", the merged tree must keep a single `q1` node carrying the
+    session — setdefault must preserve the existing node, not replace it."""
+    idx = _idx({
+        "a": {"project_label": "p", "name_cached": "plans/q1/notes",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({"p": ["plans/q1"]})  # overlaps the session's folder path
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    plans = t["p"]["_folders"]["plans"]
+    q1 = plans["_folders"]["q1"]
+    # Session lives directly under q1 (its display is "notes"); no extra subfolders.
+    assert [sid for sid, _ in q1["_sessions"]] == ["a"]
+    assert q1["_folders"] == {}
+    # No duplicate q1 sibling under plans.
+    assert list(plans["_folders"].keys()) == ["q1"]
