@@ -1,13 +1,21 @@
 import json
 import os
-import tempfile
 import pytest
 
 
 @pytest.fixture
-def index_path():
-    fd, path = tempfile.mkstemp(suffix=".json")
-    os.close(fd)
+def index_path(tmp_path):
+    """Per-test index in an isolated directory.
+
+    Critical: the folder store file is derived as a sibling of the index via
+    folder_store.default_path_for(), so co-locating the index inside the
+    pytest-provided tmp_path (which is unique per test) ensures the folder
+    store is also test-isolated. Earlier versions used tempfile.mkstemp,
+    which dropped the file into the shared system tmp dir — every test then
+    pointed at the same sibling folder-store path and they polluted each
+    other on any change to that file.
+    """
+    path = str(tmp_path / "se-index.json")
     json.dump({
         "version": 1, "folders": [],
         "sessions": {
@@ -24,7 +32,6 @@ def index_path():
         }
     }, open(path, "w"))
     yield path
-    os.unlink(path)
 
 
 async def test_tui_starts_and_renders_tree(index_path):
