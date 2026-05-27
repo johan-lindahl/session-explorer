@@ -207,6 +207,7 @@ def migrate_to_v2(index_path: str, folder_store_path: str) -> None:
     legacy = data.get("folders") or []
     for folder in legacy:
         _fs.add(folder_store_path, "(unfiled)", folder)
+
     def to_v2(d: dict) -> dict:
         d["version"] = 2
         d.pop("folders", None)

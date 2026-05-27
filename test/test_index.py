@@ -233,8 +233,8 @@ def test_migrate_to_v2_moves_legacy_folders(tmp_path):
     assert new_idx["sessions"] == {}
 
     fs_data = folder_store.load(fs_path)
-    assert fs_data["projects"]["(unfiled)"] == ["audits/q1", "planning"] or \
-           sorted(fs_data["projects"]["(unfiled)"]) == ["audits/q1", "planning"]
+    # Insertion-ordered: migration iterates legacy list and folder_store.add appends.
+    assert fs_data["projects"]["(unfiled)"] == ["audits/q1", "planning"]
 
 
 def test_migrate_to_v2_is_idempotent(tmp_path):
@@ -258,5 +258,4 @@ def test_migrate_to_v2_v1_no_folders_field(tmp_path):
     index.migrate_to_v2(idx_path, fs_path)
     assert index.load(idx_path)["version"] == 2
     # Folder store file not created when nothing to migrate.
-    import os as _os
-    assert not _os.path.exists(fs_path)
+    assert not os.path.exists(fs_path)
