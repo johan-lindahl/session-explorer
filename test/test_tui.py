@@ -132,3 +132,20 @@ async def test_move_changes_folder(index_path, tmp_path):
     lines = transcript.read_text().splitlines()
     last = json.loads(lines[-1])
     assert last == {"type": "custom-title", "customTitle": "release-sprint14", "sessionId": "sid-1"}
+
+
+async def test_new_folder_adds_to_index(index_path):
+    from _pkg.tui import SessionExplorerApp, NewFolderScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, NewFolderScreen)
+        # Dismiss the modal directly with a chosen folder name; the callback
+        # runs add_folder() and repopulates the tree.
+        app.screen.dismiss("audits/empty-shelf")
+        await pilot.pause()
+
+    folders = json.load(open(index_path)).get("folders", [])
+    assert "audits/empty-shelf" in folders

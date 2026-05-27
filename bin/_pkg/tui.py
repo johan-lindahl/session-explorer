@@ -91,6 +91,21 @@ class MoveScreen(ModalScreen[str]):
         self.dismiss(event.value.strip())
 
 
+class NewFolderScreen(ModalScreen[str]):
+    """Prompt for a new folder name. Returns the entered string or '' on cancel."""
+
+    BINDINGS = [Binding("escape", "dismiss('')", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("New folder name (Enter to confirm, Esc to cancel):"),
+            Input(id="newfolder-input"),
+        )
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+
 class SessionExplorerApp(App):
     CSS = """
     Tree { padding: 0 1; }
@@ -100,6 +115,7 @@ class SessionExplorerApp(App):
         Binding("enter", "resume", "Resume", priority=True),
         Binding("r", "rename", "Rename"),
         Binding("m", "move", "Move"),
+        Binding("n", "new_folder", "New folder"),
         Binding("q", "quit", "Quit"),
         Binding("escape", "quit", "Quit", show=False),
     ]
@@ -113,7 +129,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder") and isinstance(self.screen, ModalScreen):
             return False
         return True
 
@@ -214,6 +230,16 @@ class SessionExplorerApp(App):
             self._populate()
 
         self.push_screen(MoveScreen(sorted(folders), current_folder), after)
+
+    def action_new_folder(self) -> None:
+        def after(name: str) -> None:
+            if not name:
+                return
+            from .folders import add_folder
+            add_folder(self._index_path, name)
+            self._populate()
+
+        self.push_screen(NewFolderScreen(), after)
 
 
 def run() -> int:
