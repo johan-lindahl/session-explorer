@@ -1,4 +1,4 @@
-from _pkg.tree_model import split_folder, build_tree
+from _pkg.tree_model import split_folder, build_tree, split_path
 
 
 def test_split_folder_empty():
@@ -95,3 +95,53 @@ def test_build_tree_includes_empty_folders():
     assert "(unfiled)" in tree
     assert "audits/empty-shelf" in tree["(unfiled)"]
     assert tree["(unfiled)"]["audits/empty-shelf"] == []
+
+
+# ---------------------------------------------------------------------------
+# split_path tests
+# ---------------------------------------------------------------------------
+
+def test_split_path_none():
+    assert split_path(None) == ([], "")
+
+
+def test_split_path_empty():
+    assert split_path("") == ([], "")
+
+
+def test_split_path_no_slash():
+    assert split_path("sprint14") == ([], "sprint14")
+
+
+def test_split_path_one_slash():
+    assert split_path("planning/sprint14") == (["planning"], "sprint14")
+
+
+def test_split_path_many_slashes():
+    assert split_path("team/planning/q1/notes") == (["team", "planning", "q1"], "notes")
+
+
+def test_split_path_leading_slash_dropped():
+    assert split_path("/planning/x") == (["planning"], "x")
+
+
+def test_split_path_trailing_slash_dropped():
+    assert split_path("planning/x/") == (["planning"], "x")
+
+
+def test_split_path_double_slash_collapses():
+    assert split_path("planning//x") == (["planning"], "x")
+
+
+def test_split_path_whitespace_only_segments_dropped():
+    assert split_path("planning/  /x") == (["planning"], "x")
+
+
+def test_split_path_only_slashes_returns_empty():
+    assert split_path("///") == ([], "")
+
+
+def test_split_path_preserves_dashes_in_segments():
+    """Dashes are no longer separators — they're literal characters in segments."""
+    assert split_path("bugfix-watch/v2") == (["bugfix-watch"], "v2")
+    assert split_path("bugfix-watch-lockup") == ([], "bugfix-watch-lockup")

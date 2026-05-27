@@ -27,6 +27,23 @@ def split_folder(name: "str | None") -> Tuple[str, str]:
     return (folder, display)
 
 
+def split_path(name: "str | None") -> Tuple[List[str], str]:
+    """Split a session name on `/` into folder segments + display name.
+
+    The last non-empty segment is the display name; everything before it is the
+    folder path. Empty segments (from `foo//bar`, leading/trailing `/`, or
+    whitespace-only segments) are dropped. Returns ([], "") when there's no
+    usable content.
+    """
+    if not name:
+        return ([], "")
+    segments = [seg.strip() for seg in name.split("/")]
+    segments = [seg for seg in segments if seg]
+    if not segments:
+        return ([], "")
+    return (segments[:-1], segments[-1])
+
+
 def build_tree(index_data: dict, include_unnamed: bool = True) -> ProjectsTree:
     tree: ProjectsTree = {}
     for sid, s in index_data.get("sessions", {}).items():
