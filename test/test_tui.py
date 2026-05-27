@@ -134,6 +134,32 @@ async def test_move_changes_folder(index_path, tmp_path):
     assert last == {"type": "custom-title", "customTitle": "release-sprint14", "sessionId": "sid-1"}
 
 
+async def test_delete_removes_session(index_path, tmp_path):
+    import json, os
+    data = json.load(open(index_path))
+    transcript = tmp_path / "td.jsonl"
+    transcript.write_text('{"type":"user"}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(transcript)
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # navigate to leaf
+        await pilot.press("right"); await pilot.press("down")
+        await pilot.press("down"); await pilot.press("down")
+        await pilot.press("d")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        app.screen.dismiss(True)
+        await pilot.pause()
+
+    assert "sid-1" not in json.load(open(index_path))["sessions"]
+    assert not os.path.exists(transcript)
+
+
 async def test_new_folder_adds_to_index(index_path):
     from _pkg.tui import SessionExplorerApp, NewFolderScreen
     app = SessionExplorerApp(index_path=index_path)
