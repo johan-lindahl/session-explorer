@@ -1,4 +1,4 @@
-from _pkg.tree_model import split_folder, build_tree, split_path
+from _pkg.tree_model import split_folder, build_tree, split_path, build_nested_tree
 
 
 def test_split_folder_empty():
@@ -145,3 +145,98 @@ def test_split_path_preserves_dashes_in_segments():
     """Dashes are no longer separators — they're literal characters in segments."""
     assert split_path("bugfix-watch/v2") == (["bugfix-watch"], "v2")
     assert split_path("bugfix-watch-lockup") == ([], "bugfix-watch-lockup")
+
+
+# ---------------------------------------------------------------------------
+# build_nested_tree tests
+# ---------------------------------------------------------------------------
+
+def _fs_data(projects):
+    return {"version": 1, "projects": dict(projects)}
+
+
+def test_build_nested_tree_root_session_no_slash():
+    idx = _idx({
+        "a": {"project_label": "acme-api", "name_cached": "sprint14",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({"acme-api": []})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    assert list(t.keys()) == ["acme-api"]
+    proj = t["acme-api"]
+    assert [sid for sid, _ in proj["_sessions"]] == ["a"]
+    assert proj["_folders"] == {}
+
+
+def test_build_nested_tree_session_with_path_creates_intermediates():
+    idx = _idx({
+        "a": {"project_label": "acme-api",
+              "name_cached": "team/planning/sprint14",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    team = t["acme-api"]["_folders"]["team"]
+    planning = team["_folders"]["planning"]
+    assert team["_sessions"] == []
+    assert planning["_sessions"] != []
+    sid, s = planning["_sessions"][0]
+    assert sid == "a"
+    assert s["name_cached"] == "team/planning/sprint14"
+
+
+def test_build_nested_tree_stored_path_creates_empty_folders():
+    idx = _idx({})
+    fs = _fs_data({"acme-api": ["planning/sprint14"]})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    planning = t["acme-api"]["_folders"]["planning"]
+    sprint = planning["_folders"]["sprint14"]
+    assert planning["_sessions"] == []
+    assert sprint["_sessions"] == []
+    assert sprint["_folders"] == {}
+
+
+def test_build_nested_tree_sessions_sorted_desc_within_folder():
+    idx = _idx({
+        "a": {"project_label": "p", "name_cached": "x/a",
+              "last_active_at": "2026-05-26T10:00:00Z"},
+        "b": {"project_label": "p", "name_cached": "x/b",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    sids = [sid for sid, _ in t["p"]["_folders"]["x"]["_sessions"]]
+    assert sids == ["b", "a"]
+
+
+def test_build_nested_tree_unnamed_hidden_by_default():
+    idx = _idx({
+        "u": {"project_label": "p", "name_cached": None,
+              "last_active_at": "2026-05-27T10:00:00Z"},
+        "n": {"project_label": "p", "name_cached": "kept",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    sids = [sid for sid, _ in t["p"]["_sessions"]]
+    assert sids == ["n"]
+    assert "(unnamed)" not in t["p"]["_folders"]
+
+
+def test_build_nested_tree_unnamed_surfaced_in_pseudo_folder():
+    idx = _idx({
+        "u": {"project_label": "p", "name_cached": None,
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({})
+    t = build_nested_tree(idx, fs, include_unnamed=True)
+    assert "(unnamed)" in t["p"]["_folders"]
+    assert [sid for sid, _ in t["p"]["_folders"]["(unnamed)"]["_sessions"]] == ["u"]
+
+
+def test_build_nested_tree_unfiled_project_appears_when_store_has_it():
+    idx = _idx({})
+    fs = _fs_data({"(unfiled)": ["legacy-shelf"]})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    assert "(unfiled)" in t
+    assert "legacy-shelf" in t["(unfiled)"]["_folders"]

@@ -74,3 +74,57 @@ def build_tree(index_data: dict, include_unnamed: bool = True) -> ProjectsTree:
             tree["(unfiled)"].setdefault(f, [])
 
     return tree
+
+
+def _empty_node() -> dict:
+    return {"_sessions": [], "_folders": {}}
+
+
+def _walk_to(node: dict, segments: List[str]) -> dict:
+    """Walk into the nested tree, creating empty folder nodes as needed."""
+    for seg in segments:
+        node = node["_folders"].setdefault(seg, _empty_node())
+    return node
+
+
+def build_nested_tree(index_data: dict, folder_store_data: dict,
+                      include_unnamed: bool = False) -> Dict[str, dict]:
+    """Nested project → folder → folder ... → sessions, the form the TUI renders.
+
+    Each node is {"_sessions": [(sid, s)], "_folders": {seg: node, ...}}.
+
+    Unnamed sessions: hidden by default. When include_unnamed=True they appear
+    under a synthetic "(unnamed)" folder per project (preserves prior UX).
+    """
+    out: Dict[str, dict] = {}
+
+    # 1. Place each session into its project + folder path.
+    for sid, s in index_data.get("sessions", {}).items():
+        name = s.get("name_cached")
+        if not name and not include_unnamed:
+            continue
+        project = s.get("project_label") or "(unknown)"
+        proj_node = out.setdefault(project, _empty_node())
+        if not name:
+            target = proj_node["_folders"].setdefault("(unnamed)", _empty_node())
+        else:
+            segments, _ = split_path(name)
+            target = _walk_to(proj_node, segments)
+        target["_sessions"].append((sid, s))
+
+    # 2. Lay in stored folder paths (may create empty folder nodes).
+    for project, paths in (folder_store_data.get("projects") or {}).items():
+        proj_node = out.setdefault(project, _empty_node())
+        for path_str in paths or []:
+            segs = [seg for seg in path_str.split("/") if seg.strip()]
+            _walk_to(proj_node, segs)
+
+    # 3. Sort every _sessions list newest-first.
+    def sort_node(node: dict):
+        node["_sessions"].sort(key=lambda x: x[1].get("last_active_at", ""), reverse=True)
+        for child in node["_folders"].values():
+            sort_node(child)
+    for proj in out.values():
+        sort_node(proj)
+
+    return out
