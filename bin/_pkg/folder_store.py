@@ -15,7 +15,7 @@ import fcntl
 import json
 import os
 import tempfile
-from typing import Callable, Dict, Any
+from typing import Callable, Dict, Any, List
 
 _DEFAULT: Dict[str, Any] = {"version": 1, "projects": {}}
 
@@ -79,3 +79,20 @@ def add(path: str, project: str, folder: str) -> None:
             folders.append(folder)
         return data
     mutate(path, mutator)
+
+
+def remove(path: str, project: str, folder: str) -> None:
+    """Remove `folder` from `project`'s path list. No-op if missing."""
+    def mutator(data: dict) -> dict:
+        projects = data.get("projects", {})
+        if project in projects:
+            projects[project] = [f for f in projects[project] if f != folder]
+        return data
+    mutate(path, mutator)
+
+
+def list_paths(path: str, project: str) -> List[str]:
+    """Return a sorted copy of `project`'s stored folder paths (may be empty)."""
+    data = load(path)
+    paths = data.get("projects", {}).get(project, [])
+    return sorted(paths)
