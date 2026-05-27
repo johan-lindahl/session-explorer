@@ -191,3 +191,24 @@ def refresh_all(index_path: str) -> dict:
             cwd=entry.get("project_path", ""),
         )
     return load(index_path)
+
+
+def migrate_to_v2(index_path: str, folder_store_path: str) -> None:
+    """One-shot migration of the index from v1 (with flat `folders[]`) to v2
+    (folders moved out to a separate file under a synthetic (unfiled) project).
+
+    Idempotent. Order: write the folder store first, then the v2 index. A crash
+    between leaves the index at v1; on retry, folder_store.add is idempotent.
+    """
+    from . import folder_store as _fs
+    data = load(index_path)
+    if data.get("version", 1) >= 2:
+        return
+    legacy = data.get("folders") or []
+    for folder in legacy:
+        _fs.add(folder_store_path, "(unfiled)", folder)
+    def to_v2(d: dict) -> dict:
+        d["version"] = 2
+        d.pop("folders", None)
+        return d
+    mutate(index_path, to_v2)

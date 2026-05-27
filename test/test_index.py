@@ -213,3 +213,50 @@ def test_record_session_worktree_label(tmp_path):
     # resume chdir's into the right working tree.
     assert s["project_label"] == "acme-app"
     assert s["project_path"] == cwd
+
+
+def test_migrate_to_v2_moves_legacy_folders(tmp_path):
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    # Pre-existing v1 index with folders[].
+    index.save(idx_path, {
+        "version": 1,
+        "folders": ["audits/q1", "planning"],
+        "sessions": {},
+    })
+    index.migrate_to_v2(idx_path, fs_path)
+
+    new_idx = index.load(idx_path)
+    assert new_idx["version"] == 2
+    assert "folders" not in new_idx
+    assert new_idx["sessions"] == {}
+
+    fs_data = folder_store.load(fs_path)
+    assert fs_data["projects"]["(unfiled)"] == ["audits/q1", "planning"] or \
+           sorted(fs_data["projects"]["(unfiled)"]) == ["audits/q1", "planning"]
+
+
+def test_migrate_to_v2_is_idempotent(tmp_path):
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 1, "folders": ["a"], "sessions": {}})
+    index.migrate_to_v2(idx_path, fs_path)
+    # Second call is a no-op.
+    index.migrate_to_v2(idx_path, fs_path)
+    assert index.load(idx_path)["version"] == 2
+    assert folder_store.load(fs_path)["projects"]["(unfiled)"] == ["a"]
+
+
+def test_migrate_to_v2_v1_no_folders_field(tmp_path):
+    """A v1 index with no folders[] key still bumps to v2 without touching the store."""
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 1, "sessions": {}})
+    index.migrate_to_v2(idx_path, fs_path)
+    assert index.load(idx_path)["version"] == 2
+    # Folder store file not created when nothing to migrate.
+    import os as _os
+    assert not _os.path.exists(fs_path)
