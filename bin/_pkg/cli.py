@@ -106,7 +106,8 @@ def _cmd_launch() -> int:
     here = os.path.dirname(os.path.realpath(__file__))
     # bin/_pkg/cli.py → bin/session-explorer
     bin_path = os.path.normpath(os.path.join(here, "..", "session-explorer"))
-    target = f"{shlex.quote(bin_path)} list; echo; echo Press Enter to close; read"
+    # `exec` so closing the TUI closes the spawned terminal window cleanly.
+    target = f"exec {shlex.quote(bin_path)} tui"
     return _launcher.launch(target)
 
 

@@ -90,4 +90,4 @@ def test_launch_invokes_osascript_on_mac(monkeypatch):
     result = subprocess.run([_BIN, "launch"], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert "session-explorer" in result.stdout
-    assert "list" in result.stdout  # the would-be terminal runs `... list`
+    assert "tui" in result.stdout  # the would-be terminal runs `... tui`
