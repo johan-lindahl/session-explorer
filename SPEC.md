@@ -17,7 +17,6 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 - Not a session editor — the only writes to a JSONL are rename events in the same shape Claude's own `/rename` writes.
 - Not a replacement for Claude Code's native `/resume`. It augments it; the native picker keeps working.
 - No web UI. Terminal only.
-- No in-browser UI. Terminal only (see above).
 - No in-place `/compact` in v1. The explorer surfaces context size but doesn't drive compaction; running `/compact` stays a manual step inside a resumed session. Revisit once Claude Code exposes a non-interactive compaction CLI or stable SDK affordance.
 
 ## Background: Claude Code's session surface
@@ -353,7 +352,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 6. **Folder collisions.** Renaming `plans/sprint14` to `plans/sprint15` moves the session within the folder. Renaming to `sprint14` (no slash) drops it to ungrouped. Deleting a session leaves its folder behind only if the folder also appears in the folder store; otherwise the folder evaporates with the last session.
 7. **Empty-folder accumulation.** `--gc` also prunes entries from the folder store that have remained empty for >90 days.
 8. **Launcher fallback.** No terminal detected → CLI prints the absolute command + copies to clipboard; the slash command's response shows "Run: …".
-9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. Index reader tolerates unknown fields; writer always writes the current version (`version: 2`). The v1→v2 migration (moving `folders[]` to the folder store) is one-shot and idempotent.
+9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. A fresh install creates the index at `version: 1` (no `folders[]` since the field is never written to a new file); the one-shot v1→v2 migration runs at every CLI entry point and bumps `version` to `2` (moving any legacy `folders[]` to the folder store under `(unfiled)`). The migration is idempotent — once `version >= 2`, it short-circuits. Readers tolerate either version.
 10. **Token estimate accuracy.** Per-message `input_tokens` / `output_tokens` in the JSONL are streaming-time estimates and can be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` so users know it's approximate.
 
 ## Milestones
