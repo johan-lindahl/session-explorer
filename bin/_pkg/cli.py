@@ -10,6 +10,7 @@ import sys
 from . import __version__
 from . import index as _index
 from . import launcher as _launcher
+from .format import fmt_age, fmt_tokens
 
 
 def _index_path() -> str:
@@ -30,29 +31,6 @@ def build_parser() -> argparse.ArgumentParser:
     index_p.add_argument("--record", nargs=3, metavar=("SESSION_ID", "TRANSCRIPT_PATH", "CWD"))
     index_p.add_argument("--refresh", action="store_true")
     return p
-
-
-def _fmt_tokens(n: int) -> str:
-    if n >= 10000:
-        return f"~{n // 1000}K"
-    return f"~{n}"
-
-
-def _fmt_age(iso: str | None) -> str:
-    if not iso:
-        return "—"
-    from datetime import datetime, timezone
-    try:
-        ts = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except ValueError:
-        return iso
-    delta = datetime.now(timezone.utc) - ts
-    if delta.days >= 1:
-        return f"{delta.days}d"
-    hours = delta.seconds // 3600
-    if hours >= 1:
-        return f"{hours}h"
-    return f"{delta.seconds // 60}m"
 
 
 def _split_folder(name: str | None) -> tuple[str, str]:
@@ -90,8 +68,8 @@ def _cmd_list() -> int:
             for sid, s in sorted(folders[folder], key=lambda x: x[1].get("last_active_at", ""), reverse=True):
                 _, display = _split_folder(s.get("name_cached"))
                 display = display or sid[:8]
-                age = _fmt_age(s.get("last_active_at"))
-                tokens = _fmt_tokens(s.get("tokens_estimate", 0))
+                age = fmt_age(s.get("last_active_at"))
+                tokens = fmt_tokens(s.get("tokens_estimate", 0))
                 pct = s.get("tokens_window_pct", 0)
                 msgs = s.get("message_count", 0)
                 prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
