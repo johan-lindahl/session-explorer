@@ -307,22 +307,39 @@ class SessionExplorerApp(App):
         # folder is at depth 2; and so on. `_row_label` uses the same number
         # to choose name-field width so stat columns land at a constant
         # absolute screen column.
-        def render(parent, node, child_depth):
+        # `child_depth` is the tree depth (number of guide levels) of any leaf
+        # or folder added at this level. With show_root=False, a session that
+        # sits directly under a project node is at tree depth 1; one under a
+        # folder is at depth 2; and so on. `_row_label` uses the same number
+        # to choose name-field width so stat columns land at a constant
+        # absolute screen column.
+        #
+        # We also attach structured `data` to every project and folder node so
+        # `_project_and_prefix_for_cursor` can read project_label and folder
+        # segments directly instead of reverse-parsing the rendered label.
+        def render(parent, project_label, segments, node, child_depth):
             for sid, s in node["_sessions"]:
                 if self._matches(sid, s):
                     parent.add_leaf(_row_label(sid, s, child_depth), data={"sid": sid, **s})
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
-                folder_node = parent.add(f"{name}/", expand=True)
-                render(folder_node, child, child_depth + 1)
+                child_segs = segments + [name]
+                folder_node = parent.add(
+                    f"{name}/", expand=True,
+                    data={"project": project_label, "segments": child_segs},
+                )
+                render(folder_node, project_label, child_segs, child, child_depth + 1)
 
         for project in sorted(tree):
             node = tree[project]
-            proj_node = root.add(f"{project} ({count(node)})", expand=True)
+            proj_node = root.add(
+                f"{project} ({count(node)})", expand=True,
+                data={"project": project, "segments": []},
+            )
             # Project sits at tree depth 0 (show_root=False); its direct
             # children — both ungrouped sessions and top-level folders — are at
             # tree depth 1.
-            render(proj_node, node, child_depth=1)
+            render(proj_node, project, [], node, child_depth=1)
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node
@@ -424,27 +441,27 @@ class SessionExplorerApp(App):
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project_label, prefix). prefix ends in '/' when the cursor sits
-        on a folder so child creation is one segment away from done."""
+        on a folder so child creation is one segment away from done.
+
+        Reads structured `data` attached to project and folder nodes by
+        `_populate` — we used to reverse-parse rendered labels, which coupled
+        this function to the rendering convention.
+        """
         node = self._tree.cursor_node
         if node is None or node is self._tree.root:
             return (None, "")
-        # Walk ancestors, collecting folder segments, until we hit a project node
-        # (a direct child of root) or a session leaf (which we treat as its parent).
+        # Treat a session leaf as its containing folder/project node.
         if node.data and "sid" in node.data:
-            node = node.parent  # treat session leaf as its containing folder/project
-        path: list[str] = []
-        while node is not None and node.parent is not self._tree.root and node is not self._tree.root:
-            # Folder labels look like "<segment>/". Strip the trailing slash.
-            label = str(node.label)
-            if label.endswith("/"):
-                path.insert(0, label[:-1])
             node = node.parent
-        if node is None or node.parent is not self._tree.root:
+            if node is None or node is self._tree.root:
+                return (None, "")
+        data = node.data if node is not None else None
+        if not data or "project" not in data:
             return (None, "")
-        # Project node label looks like "<project> (count)" — strip the count suffix.
-        proj_label = str(node.label).rsplit(" (", 1)[0]
-        prefix = "/".join(path) + "/" if path else ""
-        return (proj_label, prefix)
+        project = data["project"]
+        segments = data.get("segments") or []
+        prefix = "/".join(segments) + "/" if segments else ""
+        return (project, prefix)
 
     def action_delete(self) -> None:
         node = self._tree.cursor_node

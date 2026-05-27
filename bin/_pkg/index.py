@@ -1,6 +1,11 @@
 """Atomic, flock'd JSON index for session-explorer.
 
-Schema: {"version": 1, "folders": [str, ...], "sessions": {uuid: {...}}}
+Schema (v2): {"version": 2, "sessions": {uuid: {...}}}
+
+Folder structure lives in a sibling file (session-explorer-folders.json,
+managed by `folder_store`), not in this index. A one-shot, idempotent
+`migrate_to_v2(...)` upgrades any pre-existing v1 file (which still has a
+flat `folders[]` field) on first CLI invocation.
 
 Concurrency: every mutate uses flock(LOCK_EX) on the target path AND writes
 to a sibling *.tmp file then atomic-renames over the original. This protects
@@ -18,12 +23,12 @@ from typing import Callable, Dict, Any
 
 from . import jsonl as _jsonl
 
-_DEFAULT: Dict[str, Any] = {"version": 1, "folders": [], "sessions": {}}
+_DEFAULT: Dict[str, Any] = {"version": 2, "sessions": {}}
 
 
 def load(path: str) -> dict:
     if not os.path.exists(path):
-        return _DEFAULT.copy() | {"folders": [], "sessions": {}}
+        return _DEFAULT.copy() | {"sessions": {}}
     with open(path, "r", encoding="utf-8") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         try:
@@ -217,7 +222,13 @@ def migrate_to_v2(index_path: str, folder_store_path: str) -> None:
 
     Idempotent. Order: write the folder store first, then the v2 index. A crash
     between leaves the index at v1; on retry, folder_store.add is idempotent.
+
+    Returns early when the index file doesn't exist — fresh installs shouldn't
+    have an empty index/lock pair materialised by no-op CLI invocations like
+    `session-explorer` with no subcommand.
     """
+    if not os.path.exists(index_path):
+        return
     from . import folder_store as _fs
     data = load(index_path)
     if data.get("version", 1) >= 2:

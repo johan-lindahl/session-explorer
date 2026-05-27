@@ -10,7 +10,7 @@ from _pkg import index
 
 def test_load_missing_returns_default(tmp_path):
     idx = index.load(str(tmp_path / "nope.json"))
-    assert idx == {"version": 1, "folders": [], "sessions": {}}
+    assert idx == {"version": 2, "sessions": {}}
 
 
 def test_save_then_load_roundtrip(tmp_path):
@@ -31,13 +31,17 @@ def test_save_writes_via_temp_rename(tmp_path):
 
 
 def test_concurrent_writes_dont_corrupt(tmp_path):
-    """Two threads call mutate(append) 50 times each; final folders list has 100 items."""
+    """Two threads call mutate() 50 times each; final sessions dict has 100 entries.
+
+    Uses sessions as the mutate target since the v2 schema no longer carries
+    a flat folders[] field.
+    """
     path = str(tmp_path / "index.json")
 
     def worker(prefix: str):
         for i in range(50):
             def mutator(data: dict) -> dict:
-                data["folders"].append(f"{prefix}-{i}")
+                data["sessions"][f"{prefix}-{i}"] = {}
                 return data
             index.mutate(path, mutator)
 
@@ -46,7 +50,7 @@ def test_concurrent_writes_dont_corrupt(tmp_path):
     t1.start(); t2.start(); t1.join(); t2.join()
 
     final = index.load(path)
-    assert len(final["folders"]) == 100
+    assert len(final["sessions"]) == 100
 
 
 import shutil

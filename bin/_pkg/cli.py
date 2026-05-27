@@ -116,12 +116,21 @@ def main(argv: list[str] | None = None) -> int:
     from . import folder_store as _fs
     parser = build_parser()
     args = parser.parse_args(argv)
-    # Run schema migration once per invocation (idempotent, very cheap).
+    # Run schema migration once per invocation (idempotent, no-op when the
+    # index file doesn't exist yet, so fresh repos aren't materialised here).
     idx_path = _index_path()
     try:
         _index.migrate_to_v2(idx_path, _fs.default_path_for(idx_path))
-    except Exception:
-        pass  # never block the CLI on migration; the next invocation retries
+    except Exception as e:
+        # Never block the CLI on migration; the next invocation retries. But
+        # don't swallow the diagnostic — append to the same log the hook uses
+        # so post-mortems can see what happened.
+        try:
+            log = os.path.expanduser("~/.claude/session-explorer.log")
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"warn: migrate_to_v2 failed: {e}\n")
+        except Exception:
+            pass
     if args.cmd is None:
         parser.print_help()
         return 0
