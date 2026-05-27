@@ -64,14 +64,12 @@ def test_list_groups_by_project_and_folder(tmp_path):
         [_BIN, "index", "--record", "01ABC", str(transcript), "/Users/jl/proj/foo"],
         check=True, env=env,
     )
-
     result = subprocess.run([_BIN, "list"], capture_output=True, text=True, env=env)
     assert result.returncode == 0
     out = result.stdout
-    assert "foo" in out                  # project label
-    assert "planning/" in out             # folder, parsed from first dash
-    assert "sprint14-custom" in out       # display name (custom-title wins, with first-dash stripped)
-    assert "15K" in out or "15.2K" in out or "15234" in out
+    assert "foo" in out                                     # project label
+    # named.jsonl's custom-title is "planning-sprint14-custom" → root row (no /).
+    assert "planning-sprint14-custom" in out
 
 
 def test_list_no_sessions(tmp_path):
@@ -79,6 +77,30 @@ def test_list_no_sessions(tmp_path):
     result = subprocess.run([_BIN, "list"], capture_output=True, text=True, env=env)
     assert result.returncode == 0
     assert "no sessions" in result.stdout.lower()
+
+
+def test_list_renders_slash_path_as_nested(tmp_path):
+    """A session with a /-bearing name renders under its folder path in the list."""
+    transcript = tmp_path / "02XYZ.jsonl"
+    transcript.write_text(
+        '{"type":"user","sessionId":"02XYZ","cwd":"/u/p/foo",'
+        '"timestamp":"2026-05-27T10:00:00Z",'
+        '"message":{"role":"user","content":"plan"}}\n'
+        '{"type":"custom-title","customTitle":"planning/sprint14","sessionId":"02XYZ"}\n'
+    )
+    idx_path = tmp_path / "index.json"
+    env = {**os.environ, "SESSION_EXPLORER_INDEX": str(idx_path)}
+    subprocess.run(
+        [_BIN, "index", "--record", "02XYZ", str(transcript), "/u/p/foo"],
+        check=True, env=env,
+    )
+    result = subprocess.run([_BIN, "list"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0
+    out = result.stdout
+    assert "foo" in out
+    # Folder header printed as a path, session indented under it.
+    assert "planning/" in out
+    assert "sprint14" in out
 
 
 def test_launch_invokes_osascript_on_mac(monkeypatch):

@@ -11,7 +11,7 @@ from . import __version__
 from . import index as _index
 from . import launcher as _launcher
 from .format import fmt_age, fmt_tokens
-from .tree_model import build_tree, split_folder
+from .tree_model import build_nested_tree, split_path
 
 
 def _index_path() -> str:
@@ -38,57 +38,52 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_list() -> int:
-    data = _index.load(_index_path())
-    if not data.get("sessions"):
+    from . import folder_store as _fs
+    idx_path = _index_path()
+    data = _index.load(idx_path)
+    fs_data = _fs.load(_fs.default_path_for(idx_path))
+    if not data.get("sessions") and not fs_data.get("projects"):
         print("No sessions recorded yet.")
         return 0
 
-    tree = build_tree(data)
-    # The "(unfiled)" synthetic bucket holds empty user-created folders only —
-    # skip it from the text listing since it has no sessions to render.
-    projects = [p for p in tree if p != "(unfiled)"]
+    tree = build_nested_tree(data, fs_data, include_unnamed=True)
 
-    # Map build_tree's canonical folder sentinels to the legacy display key so
-    # `""` (named-but-no-dash) and `"(unnamed)"` (no name at all) collapse into
-    # one header-less bucket, preserving the prior output byte-for-byte.
-    _HEADERLESS = ("", "(unnamed)")
+    def total(node):
+        return len(node["_sessions"]) + sum(total(c) for c in node["_folders"].values())
 
-    for proj in sorted(projects):
-        folders = tree[proj]
-        # Merge the two header-less sentinels into one logical bucket while
-        # preserving last_active_at desc order across both.
-        headerless: list[tuple[str, dict]] = []
-        for key in _HEADERLESS:
-            headerless.extend(folders.get(key, []))
-        headerless.sort(key=lambda x: x[1].get("last_active_at", ""), reverse=True)
-
-        named_folders = sorted(f for f in folders if f not in _HEADERLESS)
-
-        total = len(headerless) + sum(len(folders[f]) for f in named_folders)
-        print(f"\n{proj} ({total})")
-
-        # Iterate folders in the same sorted order the old code used: the
-        # legacy key for headerless was "(no folder)", which sorts before any
-        # real folder name beginning with a letter (parens < letters in ASCII).
-        ordered: list[tuple[str, list[tuple[str, dict]], str]] = []
-        ordered.append(("(no folder)", headerless, "  "))
-        for f in named_folders:
-            ordered.append((f, folders[f], "    "))
-        ordered.sort(key=lambda x: x[0])
-
-        for folder, entries, indent in ordered:
-            if folder != "(no folder)":
-                print(f"  {folder}/")
-            for sid, s in entries:
-                _, display = split_folder(s.get("name_cached"))
-                display = display or sid[:8]
-                age = fmt_age(s.get("last_active_at"))
-                tokens = fmt_tokens(s.get("tokens_estimate", 0))
-                pct = s.get("tokens_window_pct", 0)
-                msgs = s.get("message_count", 0)
-                prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
-                print(f"{indent}{display:<24} {age:>4}  {tokens:>6} ({pct:>3}%)  {msgs:>4} msgs   {prompt}")
+    for proj in sorted(tree):
+        node = tree[proj]
+        print(f"\n{proj} ({total(node)})")
+        # Root-level sessions first.
+        for sid, s in node["_sessions"]:
+            _print_session_row(sid, s, indent="  ")
+        # Then folders, recursively, with path prefix.
+        _print_subtree(node["_folders"], prefix="")
     return 0
+
+
+def _print_session_row(sid, s, indent: str) -> None:
+    _, display = split_path(s.get("name_cached"))
+    display = display or sid[:8]
+    age = fmt_age(s.get("last_active_at"))
+    tokens = fmt_tokens(s.get("tokens_estimate", 0))
+    pct = s.get("tokens_window_pct", 0)
+    msgs = s.get("message_count", 0)
+    prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
+    print(f"{indent}{display:<24} {age:>4}  {tokens:>6} ({pct:>3}%)  {msgs:>4} msgs   {prompt}")
+
+
+def _print_subtree(folders: dict, prefix: str) -> None:
+    for name in sorted(folders):
+        child = folders[name]
+        path = f"{prefix}{name}"
+        if not child["_sessions"] and not child["_folders"]:
+            print(f"  {path}/  (empty)")
+            continue
+        print(f"  {path}/")
+        for sid, s in child["_sessions"]:
+            _print_session_row(sid, s, indent="    ")
+        _print_subtree(child["_folders"], prefix=path + "/")
 
 
 def _cmd_index(args) -> int:
@@ -118,8 +113,15 @@ def _cmd_launch() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from . import folder_store as _fs
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Run schema migration once per invocation (idempotent, very cheap).
+    idx_path = _index_path()
+    try:
+        _index.migrate_to_v2(idx_path, _fs.default_path_for(idx_path))
+    except Exception:
+        pass  # never block the CLI on migration; the next invocation retries
     if args.cmd is None:
         parser.print_help()
         return 0
@@ -132,7 +134,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "tui":
         from .tui import run
         return run()
-    # Safety net for any unknown subcommand
     print(f"(not implemented) cmd={args.cmd}", file=sys.stderr)
     return 2
 
