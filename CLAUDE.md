@@ -12,7 +12,7 @@ Pre-implementation. The repo currently contains only `SPEC.md` (no commits, no c
 
 - **`/session-explorer:open`** spawns a new terminal window running a Textual TUI. (Plugin commands are namespaced as `<plugin>:<command>`; the prefix is unavoidable.)
 - **The TUI is the entire UX**: browse, rename, move between folders, delete, edit notes, resume. No other slash commands.
-- **Index sidecar** at `~/.claude/session-explorer-index.json` caches per-session metadata + tracks user-created empty folders.
+- **Index sidecar** at `~/.claude/session-explorer-index.json` caches per-session metadata. User-created empty folders and per-project folder paths live in the separate **folder store** at `~/.claude/session-explorer-folders.json`.
 - **`SessionStart` hook** records new sessions, refreshes the cache, and does idempotent first-run setup (neutralising `cleanupPeriodDays`).
 
 ## Load-bearing design decisions
@@ -24,7 +24,8 @@ These are the constraints to preserve — violating any breaks the spec's contra
 - **"Kept" is implicit — a session is kept iff it has a (custom-title) name.** Don't reintroduce a separate `kept` flag.
 - **Unnamed sessions are hidden from the TUI by default.** Press `u` to surface them for renaming or deletion. The index still tracks them (so `--gc` can expire stubs on schedule); only the default view filters them out. Don't conflate "hidden" with "deleted" — these are orthogonal.
 - **Worktree sessions group under the parent repo.** A cwd of `<repo>/.claude/worktrees/<name>` derives `project_label` from `<repo>`, not the worktree leaf — otherwise every worktree becomes its own top-level "project". `project_path` keeps the worktree path so resume chdir's into the correct working tree. See `index._project_label`.
-- **First-dash splits folder from name.** `planning-sprint14` → folder `planning`, display name `sprint14`. Dashes after the first stay in the name. Single-level folders only.
+- **Slash splits folder path from display name.** `team/planning/sprint14` → folder path `team/planning`, display `sprint14`. Multiple `/` create nested folders. Dashes are literal characters with no special meaning. Empty segments are dropped.
+- **Folder structure lives in `~/.claude/session-explorer-folders.json`, scoped per-project.** Sessions named with `/` auto-add their path to the store on indexing. Pre-created empty folders live there too. The session index file no longer carries a `folders[]` field; a one-shot v1→v2 migration moves any legacy entries under a synthetic `(unfiled)` project.
 - **Don't move or rewrite native JSONLs.** Sessions stay where Claude Code wrote them so `/resume` keeps working. The only legitimate write to a JSONL is appending a rename event in the same shape Claude's own `/rename` writes.
 - **Native cleanup is neutralised by setting `cleanupPeriodDays: 36500`.** The plugin's `--gc` does retention work, gated on `name_cached IS NULL`. Back up the prior value to `~/.claude/.session-explorer.backup` so uninstall can restore it.
 - **First-run setup lives in the `SessionStart` hook**, guarded by the backup file's existence, so marketplace installs work without an installer step. The plain `install.sh` does the same step eagerly.

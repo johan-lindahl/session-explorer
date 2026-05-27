@@ -1,8 +1,8 @@
 from _pkg.tree_model import split_path, build_nested_tree
 
 
-def _idx(sessions, folders=()):
-    return {"version": 1, "folders": list(folders), "sessions": sessions}
+def _idx(sessions):
+    return {"version": 1, "sessions": sessions}
 
 
 # ---------------------------------------------------------------------------

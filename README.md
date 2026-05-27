@@ -45,7 +45,7 @@ From inside Claude:
 no way to drop the prefix.)
 
 This opens a new Terminal.app window showing your sessions grouped by project
-and (first-dash) folder. Quit the TUI with `q` to close the window.
+and folder. Quit the TUI with `q` to close the window.
 
 From a regular shell:
 
@@ -73,16 +73,19 @@ session-explorer tui       # run the TUI in the current terminal
 
 ## How sessions are organized
 
-Session names map to folders via the **first dash**:
+Session names map to folders via `/`-separated paths:
 
-| Session name | Folder | Display name |
+| Session name | Folder path | Display name |
 |---|---|---|
-| `planning-sprint14` | `planning` | `sprint14` |
-| `audits-q1-review` | `audits` | `q1-review` |
+| `planning/sprint14` | `planning` | `sprint14` |
+| `audits/q1-review` | `audits` | `q1-review` |
+| `team/planning/q1` | `team/planning` | `q1` |
 | `sprint14` | *(none)* | `sprint14` |
 
-Rename a session with Claude's built-in `/rename` command; the next session
-start (or `session-explorer index --refresh`) reflects the change.
+Dashes are plain characters with no special meaning. Multiple `/` segments
+create nested folders of any depth. Rename a session with Claude's built-in
+`/rename` command; the next session start (or `session-explorer index
+--refresh`) reflects the change.
 
 ## Uninstall
 

@@ -7,7 +7,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 1. **Claude's name is the only metadata that matters.** `/rename <name>` (or `claude -n <name>` at startup) is the single source of truth for both the session's identity and its folder. The plugin never maintains a parallel "tag" field.
 2. **A name means "keep".** Any named session is preserved past Claude Code's native 30-day cleanup. Unnamed sessions remain subject to expiry. One concept, not two.
 3. **One slash command — `/session-explorer:open`** — opens a TUI in a new terminal window. Browsing, organizing, renaming, deleting, resuming: all happen there. (Claude Code namespaces plugin commands as `<plugin>:<command>`; the prefix is unavoidable.)
-4. **Folders come for free, from the name.** `planning-sprint14` lives in folder `planning` as session `sprint14`. The first dash separates folder from name; the rest stays in the name. Single-level by design.
+4. **Folders come for free, from the name.** `planning/sprint14` lives in folder `planning` as session `sprint14`. Slash-separated paths create nested folders of any depth. Dashes are literal characters with no special meaning.
 5. **Install once via a Claude Code marketplace.** Active across every project the user opens Claude Code in. Optional `install.sh` for users not on the marketplace.
 6. **Surface context size at a glance.** Every row in the explorer shows an approximate token count and message count, so bloated sessions are obvious before you resume.
 
@@ -17,7 +17,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 - Not a session editor — the only writes to a JSONL are rename events in the same shape Claude's own `/rename` writes.
 - Not a replacement for Claude Code's native `/resume`. It augments it; the native picker keeps working.
 - No web UI. Terminal only.
-- No multi-level folder hierarchies. One level is enough; deeper structure goes back to "use longer names".
+- No in-browser UI. Terminal only (see above).
 - No in-place `/compact` in v1. The explorer surfaces context size but doesn't drive compaction; running `/compact` stays a manual step inside a resumed session. Revisit once Claude Code exposes a non-interactive compaction CLI or stable SDK affordance.
 
 ## Background: Claude Code's session surface
@@ -41,7 +41,10 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 │  projects/<encoded-cwd>/<uuid>.jsonl   ← unchanged (native)       │
 │                                                                   │
 │  session-explorer-index.json   ← OWNED BY THIS PLUGIN             │
-│     { folders: [...], sessions: { <uuid>: { ... } } }             │
+│     { version: 2, sessions: { <uuid>: { ... } } }                 │
+│                                                                   │
+│  session-explorer-folders.json ← folder store                     │
+│     { version: 1, projects: { <label>: [...paths] } }             │
 │                                                                   │
 │  .session-explorer.backup    ← prior cleanupPeriodDays            │
 │  .session-explorer.current   ← active session_id pointer          │
@@ -57,30 +60,32 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**Key idea — derive, don't store.** The plugin caches metadata for browse-speed but treats the JSONL as authoritative. Folder/name parsing happens at render time from the session's user-assigned name. "Kept" is `name != null`.
+**Key idea — derive, don't store.** The plugin caches metadata for browse-speed but treats the JSONL as authoritative. Folder/name parsing happens at render time from the session's user-assigned name (slash-separated). "Kept" is `name != null`.
 
 **What counts as a name.** Only `/rename` and `claude -n <name>` count — both write a `custom-title` event to the JSONL. The `ai-title` events that Claude emits automatically as a session evolves (refining its own descriptive summary) **do NOT** make a session "named" in this plugin's sense. The session-explorer treats those auto-generated titles as if they didn't exist, so the index's `name_cached` is populated only by explicit user intent.
 
 ## Naming and folders
 
-The session's Claude-assigned name encodes both folder and name:
+The session's Claude-assigned name encodes folder path + display name via `/`:
 
 ```
-<folder>-<rest-of-name>   → goes into folder; displayed as <rest-of-name>
-<just-a-name>             → ungrouped within its project
-(no name)                 → hidden by default; toggle with [u] to surface for renaming or deletion
+<segment>/<segment>/…/<display>   → all but the last segment → folder path; last → display name
+<just-a-name>  (no /)             → at project root; display = name
+(no name)                         → hidden by default; toggle with [u] to surface for renaming or deletion
 ```
 
-Only the **first** dash is the separator. Dashes after the first stay in the name.
+Empty segments (from `foo//bar`, leading/trailing `/`, or whitespace-only
+segments) are dropped during parsing. Dashes have no special meaning —
+`bugfix-watch-lockup` displays as one name at the project root.
 
-| Session name | Folder | Display name |
+| Session name | Folder path | Display name |
 |---|---|---|
-| `planning-sprint14` | `planning` | `sprint14` |
-| `audits-q1-review` | `audits` | `q1-review` |
-| `release-2026-05` | `release` | `2026-05` |
+| `planning/sprint14` | `planning` | `sprint14` |
+| `audits/q1-review` | `audits` | `q1-review` |
+| `team/planning/q1` | `team/planning` | `q1` |
 | `sprint14` | *(none)* | `sprint14` |
 
-**Empty folders** created in the TUI before any session is moved in are stored in the index's `folders` array. They render alongside populated folders, persisting between sessions.
+**Empty folders** created in the TUI before any session is moved in are stored in the folder store (see below). They render alongside populated folders, persisting between sessions.
 
 ## The TUI
 
@@ -95,12 +100,13 @@ session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (u)      
     audits/
       q1-review           feature/…    5d    ~127K (64%)   152 msgs   grant audit
 ▼ acme-api (8)
-    refactors/
-      checkout-cleanup    feat/x       1d    ~12K   (6%)    18 msgs   helper extraction
+    team/
+      planning/
+        q1                feat/x       1d    ~12K   (6%)    18 msgs   helper extraction
 ▶ session-explorer (4)
 ```
 
-Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: folders parsed from session names. **Unnamed sessions are hidden by default** — only "kept" sessions (those with a Claude-assigned name) appear in the default view, mirroring the spec's "kept ⇔ named" rule and cutting the visual noise from stub records (sessions started but never used). Press `u` to surface unnamed sessions when you need to rename or delete them; they then appear under an `(unnamed)` sub-group per project. The header advertises the hidden count.
+Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Unnamed sessions are hidden by default** — only "kept" sessions (those with a Claude-assigned name) appear in the default view, mirroring the spec's "kept ⇔ named" rule and cutting the visual noise from stub records (sessions started but never used). Press `u` to surface unnamed sessions when you need to rename or delete them; they then appear under an `(unnamed)` sub-group per project. The header advertises the hidden count.
 
 ### Keybindings
 
@@ -111,15 +117,15 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `Enter` | Resume the selected session — see *Resume flow* |
 | `Space` | Preview pane (show notes, first prompt, summary, full path) |
 | `r` | Rename (= retag = move to a different folder). Prompts for the new name. |
-| `n` | New folder (prompts for folder path). Created empty; persisted via `folders[]`. |
-| `m` | Move the selected session to a folder (lists existing folders; can type new). |
+| `n` | New folder (prompts for path under the current project; cursor on a folder pre-fills the prefix). Created empty; persisted in the folder store. |
+| `m` | Move the selected session within its project (lists existing paths in the project; type a new path to create it). |
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
 | `u` | Toggle visibility of unnamed sessions (hidden by default). |
 | `/` | Live filter across name, notes, first prompt, summary. |
 | `q` `Esc` | Quit. |
 
-**Folder deletion** is intentionally not bound. Empty folders disappear when removed from `folders[]` (achievable by moving a session out and back); populated folders cease to exist when their last session is moved or deleted. v1 does not support "delete folder and everything in it" — too easy to lose work.
+**Folder deletion** is intentionally not bound. Empty folders disappear when removed from the folder store (achievable by moving a session out and back); populated folders cease to exist when their last session is moved or deleted. v1 does not support "delete folder and everything in it" — too easy to lose work.
 
 ### Stats columns
 
@@ -175,14 +181,10 @@ In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogf
 
 ```jsonc
 {
-  "version": 1,
-  "folders": [
-    "audits/empty-shelf",
-    "personal/learning"
-  ],
+  "version": 2,
   "sessions": {
     "01HXYZ…uuid": {
-      "name_cached": "planning-sprint14",      // last-seen Claude name; JSONL is authoritative
+      "name_cached": "planning/sprint14",       // last-seen Claude name; JSONL is authoritative
       "notes": "production audit of billing modules\nfollow-up Q1",
       "project_path": "/Users/you/code/acme-api",  // cwd; resume chdir's here
       "project_label": "acme-api",                  // grouping key; worktrees collapse to the parent repo
@@ -200,7 +202,28 @@ In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogf
 }
 ```
 
-`name_cached`, `last_active_at`, `message_count` are pure perf caches — refreshed by the hook on session start and by `session-explorer index --refresh` on demand. **No `tag` field. No `kept` field.** "Kept" is `name_cached != null`.
+`name_cached`, `last_active_at`, `message_count` are pure perf caches — refreshed by the hook on session start and by `session-explorer index --refresh` on demand. **No `tag` field. No `kept` field. No `folders` field.** "Kept" is `name_cached != null`. Folder data lives in the separate folder store below.
+
+### Folder store — `~/.claude/session-explorer-folders.json`
+
+Per-project flat list of folder paths. Path strings use `/` as separator.
+Intermediate folders are implicit (storing `planning/sprint14` implies
+`planning` exists in the rendered tree).
+
+```jsonc
+{
+  "version": 1,
+  "projects": {
+    "acme-api": ["planning", "planning/sprint14", "bugfix"],
+    "acme-app": ["watch", "watch/v2"],
+    "(unfiled)": ["legacy-shelf"]                 // populated by v1→v2 migration only
+  }
+}
+```
+
+Atomic writes via the same flock + temp-file-rename pattern as the index.
+Migration from v1 (with `index.folders[]`) is one-shot, idempotent, and runs
+at every CLI entry point.
 
 **`session-explorer index --backfill`** populates the index from every JSONL under `~/.claude/projects/` that isn't already tracked. Pre-install sessions don't fire the `SessionStart` hook, so without backfill they'd be invisible. Backfill recovers `cwd` per session from the JSONL's envelope lines (via `jsonl.session_cwd()`) since the hook payload isn't available retrospectively. Existing entries are left untouched — backfill is additive; use `--refresh` to recompute caches for already-tracked sessions. Safe to re-run.
 
@@ -327,10 +350,10 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 3. **Two machines, one `~/.claude/`** (via dotfile sync). The index is keyed by session UUID; naïve last-writer-wins on the JSON file loses at most a notes edit. Not solved in v1.
 4. **`/rename` inside Claude Code.** The next `SessionStart` hook fire refreshes `name_cached`. Mid-session renames are visible after closing/reopening the TUI or running `session-explorer index --refresh`.
 5. **Concurrent index writes** (two `claude` sessions starting at once). Every index write uses `flock` + temp-file-rename.
-6. **Folder collisions.** Renaming `foo-bar` to `baz-bar` moves the session between folders. Renaming to `bar` (no dash) drops it to ungrouped. Deleting a session leaves its folder behind only if the folder also appears in `folders[]`; otherwise the folder evaporates with the last session.
-7. **Empty-folder accumulation.** `--gc` also prunes entries from `folders[]` that have remained empty for >90 days.
+6. **Folder collisions.** Renaming `plans/sprint14` to `plans/sprint15` moves the session within the folder. Renaming to `sprint14` (no slash) drops it to ungrouped. Deleting a session leaves its folder behind only if the folder also appears in the folder store; otherwise the folder evaporates with the last session.
+7. **Empty-folder accumulation.** `--gc` also prunes entries from the folder store that have remained empty for >90 days.
 8. **Launcher fallback.** No terminal detected → CLI prints the absolute command + copies to clipboard; the slash command's response shows "Run: …".
-9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. Index reader tolerates unknown fields; writer always writes `version: 1`.
+9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. Index reader tolerates unknown fields; writer always writes the current version (`version: 2`). The v1→v2 migration (moving `folders[]` to the folder store) is one-shot and idempotent.
 10. **Token estimate accuracy.** Per-message `input_tokens` / `output_tokens` in the JSONL are streaming-time estimates and can be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` so users know it's approximate.
 
 ## Milestones
