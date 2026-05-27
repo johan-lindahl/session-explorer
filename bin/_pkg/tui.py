@@ -26,15 +26,40 @@ def _index_path() -> str:
     )
 
 
-def _row_label(sid: str, s: dict) -> str:
+# Layout constants. The stat columns must begin at the same absolute screen
+# column for every leaf regardless of tree depth, so the Static header (which
+# has no tree prefix) can label them. NAME_W is the base name-field width for a
+# folder-grouped leaf; an ungrouped leaf sits one level shallower, so its name
+# field is widened by GUIDE_DEPTH to push the stats back to the same column.
+NAME_W = 24
+GUIDE_DEPTH = 4  # cells Textual indents per tree level (Tree.guide_depth)
+
+
+def _stat_suffix(age: str, tok: str, pct: str, msgs: str, msgs_unit: str, prompt: str) -> str:
+    """Render the stat block after the name field. Used for both data rows and
+    the header line so the columns line up by construction."""
+    return f" {age:>4}  {tok:>6} {pct:>5}  {msgs:>4} {msgs_unit}   {prompt}"
+
+
+def _row_label(sid: str, s: dict, name_w: int) -> str:
     _, display = split_folder(s.get("name_cached"))
     display = display or sid[:8]
+    # Truncate so a long name can't overflow the field and shove the columns right.
+    if len(display) > name_w:
+        display = display[: name_w - 1] + "…"
     age = fmt_age(s.get("last_active_at"))
     tokens = fmt_tokens(s.get("tokens_estimate", 0))
     pct = fmt_pct(s.get("tokens_window_pct", 0))
-    msgs = s.get("message_count", 0)
+    msgs = str(s.get("message_count", 0))
     prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
-    return f"{display:<24} {age:>4}  {tokens:>6} {pct:>5}  {msgs:>4} msgs   {prompt}"
+    return f"{display:<{name_w}}" + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
+
+
+def _column_header() -> str:
+    """Header line whose labels sit above the stat columns. The name region is
+    padded to a grouped leaf's absolute stat offset (2 levels deep + NAME_W)."""
+    name_region = NAME_W + 2 * GUIDE_DEPTH
+    return f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
 class RenameScreen(ModalScreen[str]):
@@ -149,6 +174,8 @@ class NotesScreen(ModalScreen[str]):
 
 class SessionExplorerApp(App):
     CSS = """
+    #treepane { width: 1fr; }
+    #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     """
@@ -201,10 +228,16 @@ class SessionExplorerApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
+        self._colheader = Static(_column_header(), id="colheader")
         self._tree: Tree[dict] = Tree("sessions")
+        self._tree.show_root = False  # root is redundant with the Header title
+        self._tree.guide_depth = GUIDE_DEPTH
         self._preview = Static("", id="preview")
         self._preview.display = False
-        yield Horizontal(self._tree, self._preview)
+        yield Horizontal(
+            Vertical(self._colheader, self._tree, id="treepane"),
+            self._preview,
+        )
         self._filter = Input(placeholder="filter…", id="filter")
         self._filter.display = False
         self._filter.disabled = True  # also prevents focus while hidden
@@ -252,16 +285,18 @@ class SessionExplorerApp(App):
             self.sub_title = f"{total} sessions across {len(tree)} projects"
         for project in sorted(tree):
             folders = tree[project]
-            proj_node = root.add(f"▼ {project} ({sum(len(v) for v in folders.values())})", expand=True)
+            proj_node = root.add(f"{project} ({sum(len(v) for v in folders.values())})", expand=True)
             for folder in sorted(folders):
                 sessions = folders[folder]
                 if folder and folder != "(unnamed)":
                     folder_node = proj_node.add(f"{folder}/", expand=True)
+                    name_w = NAME_W  # grouped leaf: 2 levels deep
                 else:
                     folder_node = proj_node
+                    name_w = NAME_W + GUIDE_DEPTH  # ungrouped leaf: 1 level shallower
                 for sid, s in sessions:
                     if self._matches(sid, s):
-                        folder_node.add_leaf(_row_label(sid, s), data={"sid": sid, **s})
+                        folder_node.add_leaf(_row_label(sid, s, name_w), data={"sid": sid, **s})
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node

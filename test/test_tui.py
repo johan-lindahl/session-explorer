@@ -291,6 +291,56 @@ async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path
     assert last["customTitle"] == "unnamed-"
 
 
+def test_row_label_columns_align_across_depth():
+    """A folder-grouped leaf (2 levels deep, NAME_W field) and an ungrouped leaf
+    (1 level shallower, NAME_W+GUIDE_DEPTH field) must land their stat block at
+    the same absolute screen column. In the bare row string that means the stat
+    suffix begins at the respective name-field width and is byte-identical."""
+    from _pkg.tui import _row_label, _stat_suffix, NAME_W, GUIDE_DEPTH
+    s = {"name_cached": "x", "last_active_at": None,
+         "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 7,
+         "first_prompt": "hello"}
+    grouped = _row_label("sid", s, NAME_W)
+    ungrouped = _row_label("sid", s, NAME_W + GUIDE_DEPTH)
+    # The stat suffix is the same and sits right after each (differently sized)
+    # name field; the size delta equals one tree level (GUIDE_DEPTH), which is
+    # exactly the indent difference the tree adds. So columns line up.
+    assert grouped[NAME_W:] == ungrouped[NAME_W + GUIDE_DEPTH:]
+    assert grouped[NAME_W:] == _stat_suffix("—", "~0", "(0%)", "7", "msgs", "hello")
+
+
+def test_column_header_offset_matches_grouped_leaf():
+    from _pkg.tui import _column_header, _stat_suffix, NAME_W, GUIDE_DEPTH
+    header = _column_header()
+    name_region = NAME_W + 2 * GUIDE_DEPTH
+    # Left region is the NAME label; the stat labels begin at the same absolute
+    # column a grouped leaf's stats do (prefix 2*GUIDE_DEPTH + NAME_W).
+    assert header[:name_region].rstrip() == "NAME"
+    assert header[name_region:] == _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
+
+
+def test_long_name_truncates_to_field_width():
+    from _pkg.tui import _row_label, NAME_W
+    s = {"name_cached": "a" * 100, "last_active_at": None,
+         "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+         "first_prompt": ""}
+    row = _row_label("sid", s, NAME_W)
+    # Name field never exceeds NAME_W, so columns can't be shoved right.
+    assert row[:NAME_W].endswith("…")
+    assert row[NAME_W] == " "  # the stat suffix's leading space, exactly at NAME_W
+
+
+async def test_column_header_rendered(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._tree.show_root is False
+        header_text = str(app._colheader.render())
+        for col in ("NAME", "AGE", "~TOK", "CTX", "MSGS", "FIRST PROMPT"):
+            assert col in header_text
+
+
 async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
     import json
     data = json.load(open(index_path))
