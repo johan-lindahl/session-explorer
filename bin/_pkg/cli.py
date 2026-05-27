@@ -11,6 +11,7 @@ from . import __version__
 from . import index as _index
 from . import launcher as _launcher
 from .format import fmt_age, fmt_tokens
+from .tree_model import split_folder
 
 
 def _index_path() -> str:
@@ -33,16 +34,6 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _split_folder(name: str | None) -> tuple[str, str]:
-    """First-dash split. ('', name) when no dash; ('', '') when no name."""
-    if not name:
-        return ("", "")
-    if "-" not in name:
-        return ("", name)
-    folder, _, display = name.partition("-")
-    return (folder, display)
-
-
 def _cmd_list() -> int:
     data = _index.load(_index_path())
     sessions = data.get("sessions", {})
@@ -54,7 +45,7 @@ def _cmd_list() -> int:
     by_project: dict[str, dict[str, list[tuple[str, dict]]]] = {}
     for sid, s in sessions.items():
         proj = s.get("project_label", "(unknown)")
-        folder, _ = _split_folder(s.get("name_cached"))
+        folder, _ = split_folder(s.get("name_cached"))
         by_project.setdefault(proj, {}).setdefault(folder or "(no folder)", []).append((sid, s))
 
     for proj in sorted(by_project):
@@ -66,7 +57,7 @@ def _cmd_list() -> int:
                 print(f"  {folder}/")
             indent = "    " if folder != "(no folder)" else "  "
             for sid, s in sorted(folders[folder], key=lambda x: x[1].get("last_active_at", ""), reverse=True):
-                _, display = _split_folder(s.get("name_cached"))
+                _, display = split_folder(s.get("name_cached"))
                 display = display or sid[:8]
                 age = fmt_age(s.get("last_active_at"))
                 tokens = fmt_tokens(s.get("tokens_estimate", 0))
