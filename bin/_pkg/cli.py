@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("list", help="List all known sessions (text output).")
     sub.add_parser("launch", help="Launch the explorer in a new terminal window.")
+    sub.add_parser("tui", help="Run the Textual TUI in-place (used by `launch`).")
 
     index_p = sub.add_parser("index", help="Index management.")
     index_p.add_argument("--record", nargs=3, metavar=("SESSION_ID", "TRANSCRIPT_PATH", "CWD"))
@@ -121,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_list()
     if args.cmd == "launch":
         return _cmd_launch()
+    if args.cmd == "tui":
+        from .tui import run
+        return run()
     # Safety net for any unknown subcommand
     print(f"(not implemented) cmd={args.cmd}", file=sys.stderr)
     return 2
