@@ -1,8 +1,12 @@
 """OS-detecting terminal launcher.
 
-M1 ships macOS only via osascript → Terminal.app. Linux launchers land in M2,
-Windows in M5. The fallback path prints the absolute command to stdout
-(consumed by the slash command's markdown response).
+macOS uses osascript → Terminal.app; Linux probes known terminal emulators.
+Windows is supported via WSL: inside WSL `platform.system()` reports "Linux",
+so the Linux path runs first; when no Linux GUI terminal is present (the common
+WSL case), launch() opens a Windows Terminal window that re-enters the same
+distro and runs the TUI. The fallback path prints the absolute command to
+stdout (consumed by the slash command's markdown response) so the user can run
+it by hand if no launcher is found.
 """
 
 from __future__ import annotations
@@ -63,6 +67,37 @@ def build_linux_command(target_command: str, which=shutil.which) -> "list[str] |
     return None
 
 
+def _is_wsl(proc_version_path: str = "/proc/version") -> bool:
+    """True when running inside the Windows Subsystem for Linux.
+
+    WSL sets WSL_DISTRO_NAME, and the kernel version string carries "microsoft"
+    (both WSL1 and WSL2). Either signal is sufficient.
+    """
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        with open(proc_version_path, "r", encoding="utf-8", errors="ignore") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+def build_wsl_command(target_command: str, which=shutil.which) -> "list[str] | None":
+    """Open a new Windows Terminal window that re-enters this WSL distro and
+    runs `target_command` under bash. Returns None when `wt.exe` isn't on PATH
+    (Windows executables are reachable from WSL via interop), so the caller can
+    fall back to printing the command.
+
+    `wt.exe` accepts a command line to run; we point it at `wsl.exe -d <distro>
+    -- bash -lc <cmd>` so the new window lands back in the same distro.
+    """
+    if not which("wt.exe"):
+        return None
+    distro = os.environ.get("WSL_DISTRO_NAME", "")
+    distro_flag = ["-d", distro] if distro else []
+    return ["wt.exe", "wsl.exe", *distro_flag, "--", "bash", "-lc", target_command]
+
+
 def launch(target_command: str) -> int:
     """Spawn a new terminal window running `target_command`. Returns 0 on success.
 
@@ -84,6 +119,14 @@ def launch(target_command: str) -> int:
         if cmd is not None:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return 0
+        # WSL with no Linux GUI terminal: open a Windows Terminal window that
+        # re-enters this distro. Best-effort — falls through to the printed
+        # command below when wt.exe isn't available.
+        if _is_wsl():
+            wsl_cmd = build_wsl_command(target_command)
+            if wsl_cmd is not None:
+                subprocess.Popen(wsl_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return 0
 
     print(f"Unsupported platform '{system}'. Run this in any terminal:\n  {target_command}")
     return 2

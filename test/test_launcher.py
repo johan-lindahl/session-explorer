@@ -52,3 +52,85 @@ def test_linux_falls_through_emulator_list(monkeypatch):
 def test_linux_no_emulator_returns_None(monkeypatch):
     monkeypatch.setattr("platform.system", lambda: "Linux")
     assert launcher.build_linux_command("echo hi", which=lambda _: None) is None
+
+
+# --- WSL support ---
+
+def test_is_wsl_true_via_env(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    assert launcher._is_wsl() is True
+
+
+def test_is_wsl_true_via_proc_version(monkeypatch, tmp_path):
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    proc = tmp_path / "version"
+    proc.write_text("Linux version 5.15.0-microsoft-standard-WSL2 (...)")
+    assert launcher._is_wsl(proc_version_path=str(proc)) is True
+
+
+def test_is_wsl_false_on_plain_linux(monkeypatch, tmp_path):
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    proc = tmp_path / "version"
+    proc.write_text("Linux version 6.1.0-generic (buildd@host)")
+    assert launcher._is_wsl(proc_version_path=str(proc)) is False
+
+
+def test_is_wsl_false_when_proc_missing(monkeypatch):
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    assert launcher._is_wsl(proc_version_path="/no/such/file") is False
+
+
+def test_build_wsl_command_uses_wt_and_distro(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    cmd = launcher.build_wsl_command(
+        "exec '/abs/session-explorer' tui",
+        which=lambda x: "/mnt/c/.../wt.exe" if x == "wt.exe" else None,
+    )
+    assert cmd is not None
+    assert cmd[0] == "wt.exe"
+    # Re-enters the same distro via wsl.exe and runs the command under bash -lc.
+    assert "wsl.exe" in cmd
+    assert "-d" in cmd and "Ubuntu" in cmd
+    assert cmd[-3:] == ["bash", "-lc", "exec '/abs/session-explorer' tui"]
+
+
+def test_build_wsl_command_omits_distro_flag_when_unset(monkeypatch):
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    cmd = launcher.build_wsl_command(
+        "echo hi", which=lambda x: "/wt.exe" if x == "wt.exe" else None
+    )
+    assert cmd is not None
+    assert "-d" not in cmd
+
+
+def test_build_wsl_command_none_without_wt(monkeypatch):
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    assert launcher.build_wsl_command("echo hi", which=lambda _: None) is None
+
+
+def test_launch_uses_wsl_fallback_when_no_linux_terminal(monkeypatch):
+    """Inside WSL with no Linux GUI terminal, launch() spawns via wt.exe."""
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.delenv("SESSION_EXPLORER_DRY_RUN", raising=False)
+    monkeypatch.setattr(launcher, "build_linux_command", lambda *a, **k: None)
+    monkeypatch.setattr(launcher, "_is_wsl", lambda *a, **k: True)
+    monkeypatch.setattr(launcher, "build_wsl_command",
+                        lambda *a, **k: ["wt.exe", "wsl.exe", "--", "bash", "-lc", "x"])
+    with mock.patch("subprocess.Popen") as popen:
+        rc = launcher.launch("/abs/path/session-explorer")
+        assert rc == 0
+        assert popen.called
+        assert popen.call_args[0][0][0] == "wt.exe"
+
+
+def test_launch_falls_back_to_print_when_wsl_has_no_wt(monkeypatch, capsys):
+    """WSL but no wt.exe -> the printed-command fallback (still usable)."""
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.delenv("SESSION_EXPLORER_DRY_RUN", raising=False)
+    monkeypatch.setattr(launcher, "build_linux_command", lambda *a, **k: None)
+    monkeypatch.setattr(launcher, "_is_wsl", lambda *a, **k: True)
+    monkeypatch.setattr(launcher, "build_wsl_command", lambda *a, **k: None)
+    rc = launcher.launch("/abs/path/session-explorer")
+    captured = capsys.readouterr()
+    assert rc != 0
+    assert "/abs/path/session-explorer" in captured.out
