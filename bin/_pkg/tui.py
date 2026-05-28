@@ -193,6 +193,7 @@ def _help_text() -> str:
         "[dim]Esc, q, h, or Space closes this help.[/]",
         "",
         f"[b]session-explorer v{__version__}[/]  ·  Made by Johan Lindahl  <johan.lindahl@snojken.com>",
+        '[link="https://github.com/johan-lindahl/session-explorer"]https://github.com/johan-lindahl/session-explorer[/link]',
     ])
 
 

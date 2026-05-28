@@ -584,6 +584,8 @@ def test_help_text_explains_naming_visibility_and_credit():
     # Credit line.
     assert "Johan Lindahl" in text
     assert "johan.lindahl@snojken.com" in text
+    # Repo link in credits (visible URL, also an OSC-8 hyperlink where supported).
+    assert "github.com/johan-lindahl/session-explorer" in text
     # Version is shown so users can see which build they're running.
     from _pkg import __version__
     assert __version__ in text

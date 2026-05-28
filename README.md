@@ -202,3 +202,8 @@ bats test/install.bats test/uninstall.bats test/hook.bats    # shell scripts + h
 
 pytest needs `pytest` + `pytest-asyncio` (`pip install -r test/requirements-dev.txt`);
 Textual is vendored, so nothing else is required. `bats` is [bats-core](https://github.com/bats-core/bats-core).
+
+## License
+
+[MIT](./LICENSE) — © 2026 Johan Lindahl. Permissive: copy, modify, and
+redistribute freely; just keep the copyright notice.
