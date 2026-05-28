@@ -116,7 +116,7 @@ def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
     Pure so it can be unit-tested. Branch order is deliberate: an active filter
     explains itself first (the user is mid-search), then hidden-unnamed, then
     the empty-index prompts — split by whether a rescan has already run, so a
-    fruitless scan doesn't keep telling the user to "press R"."""
+    fruitless scan doesn't keep telling the user to "press F5"."""
     if visible > 0:
         return None
     if filter_active:
@@ -128,7 +128,7 @@ def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
         if scanned:
             return "No sessions found under ~/.claude/projects/."
         return ("No sessions indexed yet.\n"
-                "Press R to scan ~/.claude/projects/ for your sessions.")
+                "Press F5 to scan ~/.claude/projects/ for your sessions.")
     return None
 
 
@@ -349,7 +349,7 @@ class SessionExplorerApp(App):
         self._filter_needle: str = ""
         self._show_unnamed: bool = False
         # Flips after the first rescan so the empty-state can switch from
-        # "press R to scan" to "no sessions found".
+        # "press F5 to scan" to "no sessions found".
         self._scanned: bool = False
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:

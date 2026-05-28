@@ -596,7 +596,7 @@ def test_empty_state_text_prompts_rescan_on_empty_index():
     from _pkg.tui import _empty_state_text
     msg = _empty_state_text(total_indexed=0, visible=0, unnamed_hidden=0,
                             filter_active=False, scanned=False)
-    assert "Press R" in msg
+    assert "Press F5" in msg
     assert "~/.claude/projects" in msg
 
 
