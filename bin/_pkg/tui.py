@@ -833,6 +833,29 @@ class SessionExplorerApp(App):
         self._refresh_preview()
 
 
+_WORKTREE_MARKER = "/.claude/worktrees/"
+
+
+def _resolve_resume_cwd(project_path: "str | None") -> "str | None":
+    """Directory to chdir into before `claude --resume`.
+
+    Prefer the session's recorded project_path. If it no longer exists — most
+    often a git worktree (`…/.claude/worktrees/<name>`) that's since been
+    deleted — fall back to the parent repo root (the part before the worktree
+    marker), mirroring how index._project_label collapses worktrees onto their
+    repo. Returns an existing directory, or None when there's nothing sensible
+    to chdir into (caller then leaves cwd alone)."""
+    if not project_path:
+        return None
+    if os.path.isdir(project_path):
+        return project_path
+    if _WORKTREE_MARKER in project_path:
+        root = project_path.split(_WORKTREE_MARKER, 1)[0]
+        if os.path.isdir(root):
+            return root
+    return None
+
+
 def _resume_argv(target: str) -> list[str]:
     """argv for resuming a session.
 
@@ -855,8 +878,8 @@ def run() -> int:
         # opens in the right workspace — without this, Claude inherits the
         # spawned terminal's cwd (usually $HOME) and shows a fresh "trust
         # folder" prompt instead of restoring the session.
-        cwd = getattr(app, "_resume_cwd", None)
-        if cwd and os.path.isdir(cwd):
+        cwd = _resolve_resume_cwd(getattr(app, "_resume_cwd", None))
+        if cwd:
             os.chdir(cwd)
         os.execvp("claude", _resume_argv(target))
     return 0

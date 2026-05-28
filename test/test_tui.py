@@ -898,3 +898,36 @@ def test_preview_text_shows_full_project_path():
          "project_path": "/Users/jl/clients/acme/magento2"}
     text = _preview_text(s)
     assert "/Users/jl/clients/acme/magento2" in text
+
+
+# --- resume cwd resolution: fall back to the parent repo when a worktree path
+#     no longer exists (deleted git worktree). ---
+
+def test_resolve_resume_cwd_returns_existing_path(tmp_path):
+    from _pkg.tui import _resolve_resume_cwd
+    assert _resolve_resume_cwd(str(tmp_path)) == str(tmp_path)
+
+
+def test_resolve_resume_cwd_dead_worktree_falls_back_to_repo_root(tmp_path):
+    from _pkg.tui import _resolve_resume_cwd
+    repo = tmp_path / "magento-os"
+    repo.mkdir()
+    dead_wt = str(repo / ".claude" / "worktrees" / "brainstorm-x")  # never created
+    assert _resolve_resume_cwd(dead_wt) == str(repo)
+
+
+def test_resolve_resume_cwd_dead_worktree_and_missing_repo_is_none(tmp_path):
+    from _pkg.tui import _resolve_resume_cwd
+    dead = str(tmp_path / "gone" / ".claude" / "worktrees" / "wt")
+    assert _resolve_resume_cwd(dead) is None
+
+
+def test_resolve_resume_cwd_missing_nonworktree_is_none(tmp_path):
+    from _pkg.tui import _resolve_resume_cwd
+    assert _resolve_resume_cwd(str(tmp_path / "nope")) is None
+
+
+def test_resolve_resume_cwd_none_or_empty():
+    from _pkg.tui import _resolve_resume_cwd
+    assert _resolve_resume_cwd(None) is None
+    assert _resolve_resume_cwd("") is None
