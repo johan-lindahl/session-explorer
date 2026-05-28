@@ -151,3 +151,66 @@ def test_hook_finds_cli_via_local_bin_when_plugin_dir_missing(tmp_path):
     assert index_path.exists(), f"Index file not created via ~/.local/bin path. stderr: {proc.stderr}"
     data = json.loads(index_path.read_text())
     assert "01LB" in data["sessions"]
+
+
+# --- Retention GC auto-trigger (throttled once/24h, detached) ---
+
+import time
+
+
+def _wait_until(predicate, timeout=5.0, interval=0.05):
+    """Poll until predicate() is true (gc is launched detached by the hook)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
+def _log_has_removed(home):
+    log = home / ".claude" / "session-explorer.log"
+    return log.exists() and "Removed" in log.read_text()
+
+
+def test_gc_fires_on_first_run_and_writes_stamp(tmp_path):
+    """No stamp yet -> hook stamps and launches `index --gc` (detached)."""
+    proc = _run_hook(tmp_path, stdin='{"session_id":"g1","transcript_path":"/tmp/g.jsonl","cwd":"/tmp"}')
+    assert proc.returncode == 0, proc.stderr
+    stamp = tmp_path / ".claude" / ".session-explorer.gc"
+    assert stamp.exists()
+    # gc runs in the background; its output lands in the log.
+    assert _wait_until(lambda: _log_has_removed(tmp_path)), "gc never ran"
+
+
+def test_gc_throttled_within_24h(tmp_path):
+    """A stamp younger than 24h suppresses gc and is left untouched."""
+    claude = tmp_path / ".claude"
+    claude.mkdir(parents=True, exist_ok=True)
+    stamp = claude / ".session-explorer.gc"
+    stamp.write_text("")
+    recent = time.time() - 3600  # 1h ago
+    os.utime(stamp, (recent, recent))
+
+    proc = _run_hook(tmp_path, stdin='{"session_id":"g2","transcript_path":"/tmp/g.jsonl","cwd":"/tmp"}')
+    assert proc.returncode == 0, proc.stderr
+    # Stamp not refreshed.
+    assert abs(stamp.stat().st_mtime - recent) < 2
+    # gc did not run.
+    time.sleep(0.4)
+    assert not _log_has_removed(tmp_path)
+
+
+def test_gc_fires_again_after_24h(tmp_path):
+    """A stamp older than 24h lets gc fire again and refreshes the stamp."""
+    claude = tmp_path / ".claude"
+    claude.mkdir(parents=True, exist_ok=True)
+    stamp = claude / ".session-explorer.gc"
+    stamp.write_text("")
+    long_ago = time.time() - 25 * 3600
+    os.utime(stamp, (long_ago, long_ago))
+
+    proc = _run_hook(tmp_path, stdin='{"session_id":"g3","transcript_path":"/tmp/g.jsonl","cwd":"/tmp"}')
+    assert proc.returncode == 0, proc.stderr
+    assert stamp.stat().st_mtime > long_ago + 60  # refreshed
+    assert _wait_until(lambda: _log_has_removed(tmp_path)), "gc never ran after 24h"
