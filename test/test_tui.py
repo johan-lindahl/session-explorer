@@ -742,3 +742,19 @@ async def test_help_auto_opens_on_first_launch_and_writes_marker(tmp_path):
     async with app2.run_test() as pilot:
         await pilot.pause()
         assert not isinstance(app2.screen, HelpScreen)
+
+
+# --- resume argv hardening: `--` terminator prevents a session id that starts
+#     with '-' from being parsed as a `claude` flag (argument injection). ---
+
+def test_resume_argv_inserts_double_dash_terminator():
+    from _pkg.tui import _resume_argv
+    assert _resume_argv("01ABC") == ["claude", "--resume", "--", "01ABC"]
+
+
+def test_resume_argv_neutralizes_dash_leading_id():
+    from _pkg.tui import _resume_argv
+    # A crafted id like "-foo" must land after `--`, never be read as an option.
+    argv = _resume_argv("-foo")
+    assert argv == ["claude", "--resume", "--", "-foo"]
+    assert argv.index("--") < argv.index("-foo")
