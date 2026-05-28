@@ -25,14 +25,14 @@ run_hook() {  # run_hook  (reads $PAYLOAD on stdin)
   [ "$status" -eq 0 ]
 }
 
-@test "hook first-run sets cleanupPeriodDays and writes the backup" {
+@test "hook never modifies settings.json (retention is opt-in)" {
   mkdir -p "$HOME/.claude"
   echo '{"cleanupPeriodDays": 21}' > "$HOME/.claude/settings.json"
   run run_hook
   [ "$status" -eq 0 ]
-  [ "$(cat "$HOME/.claude/.session-explorer.backup")" = "21" ]
+  [ ! -f "$HOME/.claude/.session-explorer.backup" ]
   run python3 -c "import json; print(json.load(open('$HOME/.claude/settings.json'))['cleanupPeriodDays'])"
-  [ "$output" = "36500" ]
+  [ "$output" = "21" ]   # untouched
 }
 
 @test "hook writes the active-session pointer" {
@@ -41,7 +41,15 @@ run_hook() {  # run_hook  (reads $PAYLOAD on stdin)
   [ "$(cat "$HOME/.claude/.session-explorer.current")" = "01HOOK" ]
 }
 
+@test "hook does not gc until retention is enabled" {
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ ! -f "$HOME/.claude/.session-explorer.gc" ]
+}
+
 @test "hook fires gc on first run and stamps the throttle file" {
+  mkdir -p "$HOME/.claude"
+  echo "30" > "$HOME/.claude/.session-explorer.backup"   # retention opted in
   run run_hook
   [ "$status" -eq 0 ]
   [ -f "$HOME/.claude/.session-explorer.gc" ]
@@ -55,6 +63,7 @@ run_hook() {  # run_hook  (reads $PAYLOAD on stdin)
 
 @test "hook throttles gc within 24h (recent stamp left untouched)" {
   mkdir -p "$HOME/.claude"
+  echo "30" > "$HOME/.claude/.session-explorer.backup"   # retention opted in
   stamp="$HOME/.claude/.session-explorer.gc"
   : > "$stamp"
   # Backdate 1 hour and read mtime via python3 (guaranteed present) so the test

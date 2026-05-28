@@ -19,37 +19,10 @@ log() { echo "[$(date -u +%FT%TZ)] $*" >> "${LOG}" 2>/dev/null || true; }
 # Read stdin (best-effort)
 PAYLOAD="$(cat 2>/dev/null || true)"
 
-# --- First-run setup: neutralise native cleanup ---
-if [ ! -f "${BACKUP}" ]; then
-  if [ -f "${SETTINGS}" ]; then
-    # Extract current cleanupPeriodDays (default 30 if unset).
-    PRIOR="$(python3 -c "
-import json
-try:
-    with open('${SETTINGS}') as f:
-        d = json.load(f)
-    print(d.get('cleanupPeriodDays', 30))
-except Exception:
-    print(30)
-" 2>/dev/null || echo 30)"
-    echo "${PRIOR}" > "${BACKUP}"
-
-    # Set cleanupPeriodDays = 36500 in settings.json
-    python3 -c "
-import json
-with open('${SETTINGS}') as f:
-    d = json.load(f)
-d['cleanupPeriodDays'] = 36500
-with open('${SETTINGS}', 'w') as f:
-    json.dump(d, f, indent=2)
-" 2>>"${LOG}" || log "warn: failed to update cleanupPeriodDays"
-    log "first-run: backed up cleanupPeriodDays=${PRIOR}, set to 36500"
-  else
-    echo 30 > "${BACKUP}"
-    echo '{"cleanupPeriodDays": 36500}' > "${SETTINGS}"
-    log "first-run: created settings.json with cleanupPeriodDays=36500"
-  fi
-fi
+# NOTE: the hook never modifies settings.json. Neutralising cleanupPeriodDays is
+# opt-in and handled by the TUI's first-launch prompt (see tui.on_mount /
+# _pkg/retention.py), which writes ${BACKUP} when the user agrees. Retention GC
+# below only runs once that opt-in has happened.
 
 # --- Resolve the CLI ---
 # Marketplace install: CLAUDE_PLUGIN_ROOT is set by Claude Code; CLI lives at $CLAUDE_PLUGIN_ROOT/bin/session-explorer.
@@ -90,12 +63,13 @@ if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
     "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" 2>>"${LOG}" || log "warn: index --record failed for ${SID}"
   fi
 
-  # --- Retention GC: at most once per 24h, fully detached so startup never waits ---
-  # cleanupPeriodDays is neutralised above, so the plugin must expire old unnamed
-  # sessions itself. Throttle via a stamp file; stamp BEFORE launching so a slow
-  # or failed gc can't re-fire on the next session start.
+  # --- Retention GC: only when the user opted in (backup present), at most once
+  #     per 24h, fully detached so startup never waits. ---
+  # ${BACKUP} exists iff retention was enabled via the TUI prompt; until then
+  # native cleanup is in charge and the plugin must not delete anything. Throttle
+  # via a stamp file; stamp BEFORE launching so a slow/failed gc can't re-fire.
   GC_STAMP="${CLAUDE_DIR}/.session-explorer.gc"
-  if [ ! -f "${GC_STAMP}" ] || [ -n "$(find "${GC_STAMP}" -mmin +1440 2>/dev/null)" ]; then
+  if [ -f "${BACKUP}" ] && { [ ! -f "${GC_STAMP}" ] || [ -n "$(find "${GC_STAMP}" -mmin +1440 2>/dev/null)" ]; }; then
     : > "${GC_STAMP}" 2>/dev/null || true
     # Redirect the gc child's fds away from the hook's stdout/stderr so the
     # caller doesn't block waiting on an inherited pipe; background the subshell.

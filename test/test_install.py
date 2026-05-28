@@ -27,9 +27,11 @@ def test_install_creates_symlink_and_settings(tmp_path):
     assert link.is_symlink()
     assert link.resolve() == (_REPO_ROOT / "bin" / "session-explorer").resolve()
 
-    # settings.json was written with cleanupPeriodDays=36500
+    # Install registers the hook but does NOT touch cleanupPeriodDays (retention
+    # is opt-in via the TUI's first-launch prompt) and writes no backup.
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-    assert settings["cleanupPeriodDays"] == 36500
+    assert "cleanupPeriodDays" not in settings
+    assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
 
     # SessionStart hook entry registered with the absolute repo path
     hooks = settings["hooks"]["SessionStart"]
@@ -37,23 +39,16 @@ def test_install_creates_symlink_and_settings(tmp_path):
     assert hooks[0]["matchers"] == []
     assert hooks[0]["command"].endswith("hooks/session-start.sh")
 
-    # Backup file holds the prior (default 30) value
-    backup = tmp_path / ".claude" / ".session-explorer.backup"
-    assert backup.exists()
-    assert backup.read_text().strip() == "30"
-
 
 def test_install_idempotent(tmp_path):
-    """Running install.sh twice should leave a single hook entry and not change the backup."""
+    """Running install.sh twice should leave a single hook entry."""
     _run_install(tmp_path)
     proc2 = _run_install(tmp_path)
     assert proc2.returncode == 0
 
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert len(settings["hooks"]["SessionStart"]) == 1
-    # Backup still holds the FIRST run's prior value (30)
-    backup = tmp_path / ".claude" / ".session-explorer.backup"
-    assert backup.read_text().strip() == "30"
+    assert "cleanupPeriodDays" not in settings
 
 
 def test_install_preserves_existing_unrelated_settings(tmp_path):
@@ -71,14 +66,13 @@ def test_install_preserves_existing_unrelated_settings(tmp_path):
 
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert settings["theme"] == "dark"
-    assert settings["cleanupPeriodDays"] == 36500
+    assert settings["cleanupPeriodDays"] == 60  # untouched — retention is opt-in
     # Other hooks are preserved
     assert "SessionEnd" in settings["hooks"]
     # session-explorer hook is added to SessionStart
     assert len(settings["hooks"]["SessionStart"]) == 1
-    # Backup captured 60 (the prior cleanupPeriodDays)
-    backup = tmp_path / ".claude" / ".session-explorer.backup"
-    assert backup.read_text().strip() == "60"
+    # No backup written by install (only the opt-in prompt writes one)
+    assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
 
 
 def test_install_removes_old_session_explorer_hook_on_rerun(tmp_path):

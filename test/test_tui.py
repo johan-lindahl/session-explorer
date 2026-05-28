@@ -31,10 +31,11 @@ def index_path(tmp_path):
             }
         }
     }, open(path, "w"))
-    # Mark help as already seen so the first-launch auto-open doesn't pop the
-    # HelpScreen over the tree these tests drive. First-launch behaviour has its
-    # own dedicated test that uses a marker-free index path.
+    # Mark help as already seen AND retention as decided so neither first-launch
+    # modal (help / retention prompt) pops over the tree these tests drive. Both
+    # have their own dedicated tests using marker-free index paths.
     (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
     yield path
 
 
@@ -641,6 +642,7 @@ async def test_empty_state_shown_when_only_unnamed(tmp_path):
                "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0},
     }}, open(idx, "w"))
     (fresh / ".session-explorer.help-seen").write_text("")
+    (fresh / ".session-explorer.retention-declined").write_text("")
 
     from _pkg.tui import SessionExplorerApp
     app = SessionExplorerApp(index_path=idx)
@@ -661,6 +663,7 @@ async def test_rescan_imports_sessions_from_projects_root(tmp_path):
     idx = str(fresh / "se-index.json")
     json.dump({"version": 2, "sessions": {}}, open(idx, "w"))
     (fresh / ".session-explorer.help-seen").write_text("")
+    (fresh / ".session-explorer.retention-declined").write_text("")
 
     projects = tmp_path / "projects"
     proj = projects / "-Users-jl-proj-foo"
@@ -728,11 +731,13 @@ async def test_help_quit_key_dismisses_not_quits(index_path):
 async def test_help_auto_opens_on_first_launch_and_writes_marker(tmp_path):
     import json
     from _pkg.tui import SessionExplorerApp, HelpScreen
-    # A fresh index with NO help-seen marker beside it.
+    # A fresh index with NO help-seen marker beside it. Retention is pre-decided
+    # so only the help modal is exercised here (retention prompt has its own test).
     fresh = tmp_path / "fresh"
     fresh.mkdir()
     idx = str(fresh / "se-index.json")
     json.dump({"version": 2, "sessions": {}}, open(idx, "w"))
+    (fresh / ".session-explorer.retention-declined").write_text("")
     marker = fresh / ".session-explorer.help-seen"
     assert not marker.exists()
 
@@ -747,6 +752,60 @@ async def test_help_auto_opens_on_first_launch_and_writes_marker(tmp_path):
     async with app2.run_test() as pilot:
         await pilot.pause()
         assert not isinstance(app2.screen, HelpScreen)
+
+
+# --- opt-in retention prompt on first launch ---
+
+def _fresh_index(tmp_path, settings=None):
+    import json
+    d = tmp_path / "fresh"
+    d.mkdir()
+    idx = str(d / "se-index.json")
+    json.dump({"version": 2, "sessions": {}}, open(idx, "w"))
+    (d / ".session-explorer.help-seen").write_text("")  # isolate retention modal
+    if settings is not None:
+        (d / "settings.json").write_text(json.dumps(settings))
+    return d, idx
+
+
+async def test_retention_prompt_enable_on_first_launch(tmp_path):
+    import json
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    d, idx = _fresh_index(tmp_path, settings={"cleanupPeriodDays": 10})
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)   # retention prompt
+        app.screen.dismiss(True); await pilot.pause()
+    assert (d / ".session-explorer.backup").read_text().strip() == "10"
+    assert json.loads((d / "settings.json").read_text())["cleanupPeriodDays"] == 36500
+
+
+async def test_retention_prompt_decline_leaves_settings(tmp_path):
+    import json
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    d, idx = _fresh_index(tmp_path, settings={"cleanupPeriodDays": 10})
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        app.screen.dismiss(False); await pilot.pause()
+    assert (d / ".session-explorer.retention-declined").exists()
+    assert not (d / ".session-explorer.backup").exists()
+    assert json.loads((d / "settings.json").read_text())["cleanupPeriodDays"] == 10  # untouched
+
+
+async def test_retention_not_prompted_once_decided(tmp_path):
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    d, idx = _fresh_index(tmp_path)
+    (d / ".session-explorer.retention-declined").write_text("")
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)  # no prompt
 
 
 # --- resume argv: bind the id to --resume via `=`. `--resume` takes an OPTIONAL
@@ -959,6 +1018,7 @@ def _wt_index(tmp_path, dead_wt):
         "last_active_at": "2026-05-27T10:00:00Z", "tokens_estimate": 1,
         "tokens_window_pct": 0, "message_count": 1, "first_prompt": "x"}}}, open(idx, "w"))
     (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
     return idx
 
 

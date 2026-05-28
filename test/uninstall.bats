@@ -21,6 +21,13 @@ settings_get() {
   mkdir -p "$HOME/.claude"
   echo '{"cleanupPeriodDays": 14}' > "$HOME/.claude/settings.json"
   bash "$REPO/install.sh"
+  # Simulate the user opting into retention (the TUI prompt's effect).
+  python3 - "$HOME/.claude/settings.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p)); d["cleanupPeriodDays"] = 36500; json.dump(d, open(p, "w"))
+PY
+  echo "14" > "$HOME/.claude/.session-explorer.backup"
   [ "$(settings_get cleanupPeriodDays)" = "36500" ]
 
   run bash "$REPO/uninstall.sh"
