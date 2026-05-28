@@ -908,12 +908,28 @@ def test_resolve_resume_cwd_returns_existing_path(tmp_path):
     assert _resolve_resume_cwd(str(tmp_path)) == str(tmp_path)
 
 
-def test_resolve_resume_cwd_dead_worktree_falls_back_to_repo_root(tmp_path):
+def test_resolve_resume_cwd_recreates_dead_worktree(tmp_path):
+    import os as _os
     from _pkg.tui import _resolve_resume_cwd
     repo = tmp_path / "magento-os"
     repo.mkdir()
     dead_wt = str(repo / ".claude" / "worktrees" / "brainstorm-x")  # never created
-    assert _resolve_resume_cwd(dead_wt) == str(repo)
+    # claude --resume is cwd-scoped, so to find the worktree-filed transcript we
+    # recreate the (empty) worktree dir and resume there.
+    assert _resolve_resume_cwd(dead_wt) == dead_wt
+    assert _os.path.isdir(dead_wt)
+
+
+def test_dead_worktree_repo_detection(tmp_path):
+    from _pkg.tui import _dead_worktree_repo
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dead = str(repo / ".claude" / "worktrees" / "wt")
+    assert _dead_worktree_repo(dead) == str(repo)          # recreatable
+    assert _dead_worktree_repo(str(repo)) is None          # path exists
+    assert _dead_worktree_repo(str(tmp_path / "gone" / ".claude" / "worktrees" / "wt")) is None  # repo gone
+    assert _dead_worktree_repo(str(tmp_path / "nope")) is None  # no worktree marker
+    assert _dead_worktree_repo(None) is None
 
 
 def test_resolve_resume_cwd_dead_worktree_and_missing_repo_is_none(tmp_path):
@@ -931,3 +947,58 @@ def test_resolve_resume_cwd_none_or_empty():
     from _pkg.tui import _resolve_resume_cwd
     assert _resolve_resume_cwd(None) is None
     assert _resolve_resume_cwd("") is None
+
+
+def _wt_index(tmp_path, dead_wt):
+    import json
+    idx = str(tmp_path / "i.json")
+    json.dump({"version": 2, "sessions": {"wt1": {
+        "project_label": "repo", "project_path": dead_wt, "name_cached": "wt-session",
+        "last_active_at": "2026-05-27T10:00:00Z", "tokens_estimate": 1,
+        "tokens_window_pct": 0, "message_count": 1, "first_prompt": "x"}}}, open(idx, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    return idx
+
+
+def _find(node, lbl):
+    for c in node.children:
+        if lbl in str(c.label):
+            return c
+        g = _find(c, lbl)
+        if g:
+            return g
+    return None
+
+
+async def test_resume_dead_worktree_asks_to_confirm(tmp_path):
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    dead_wt = str(repo / ".claude" / "worktrees" / "feat-x")
+    app = SessionExplorerApp(index_path=_wt_index(tmp_path, dead_wt))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        leaf = _find(app._tree.root, "wt-session")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        await pilot.press("enter"); await pilot.pause()
+        # Confirmation appears; resume target NOT set yet.
+        assert isinstance(app.screen, ModalScreen)
+        assert getattr(app, "_resume_target", None) is None
+        app.screen.dismiss(True); await pilot.pause()
+    assert app._resume_target == "wt1"
+
+
+async def test_resume_dead_worktree_cancel_does_not_resume(tmp_path):
+    from _pkg.tui import SessionExplorerApp
+    repo = tmp_path / "repo"; repo.mkdir()
+    dead_wt = str(repo / ".claude" / "worktrees" / "feat-x")
+    app = SessionExplorerApp(index_path=_wt_index(tmp_path, dead_wt))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        leaf = _find(app._tree.root, "wt-session")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        await pilot.press("enter"); await pilot.pause()
+        app.screen.dismiss(False); await pilot.pause()
+        assert getattr(app, "_resume_target", None) is None  # cancelled

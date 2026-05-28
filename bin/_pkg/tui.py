@@ -566,9 +566,30 @@ class SessionExplorerApp(App):
         if not node or not node.data or "sid" not in node.data:
             self.bell()
             return
-        self._resume_target = node.data["sid"]
-        self._resume_cwd = node.data.get("project_path")
-        self.exit()
+        sid = node.data["sid"]
+        project_path = node.data.get("project_path")
+
+        def proceed() -> None:
+            self._resume_target = sid
+            self._resume_cwd = project_path
+            self.exit()
+
+        # If the session's git worktree was deleted, resuming has to recreate
+        # that directory (claude --resume is cwd-scoped). Warn before doing so.
+        if _dead_worktree_repo(project_path):
+            def after(ok: bool) -> None:
+                if ok:
+                    proceed()
+            self.push_screen(
+                ConfirmScreen(
+                    "This session is from a deleted git worktree.\n"
+                    "Resume anyway? This re-creates an empty directory:\n"
+                    f"{project_path}"
+                ),
+                after,
+            )
+        else:
+            proceed()
 
     def action_rename(self) -> None:
         node = self._tree.cursor_node
@@ -836,23 +857,37 @@ class SessionExplorerApp(App):
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
 
+def _dead_worktree_repo(project_path: "str | None") -> "str | None":
+    """If `project_path` is a deleted git-worktree path whose parent repo still
+    exists, return that repo root; else None. Pure — lets the TUI decide whether
+    to warn before recreating the worktree dir on resume."""
+    if not project_path or os.path.isdir(project_path):
+        return None
+    if _WORKTREE_MARKER not in project_path:
+        return None
+    root = project_path.split(_WORKTREE_MARKER, 1)[0]
+    return root if os.path.isdir(root) else None
+
+
 def _resolve_resume_cwd(project_path: "str | None") -> "str | None":
     """Directory to chdir into before `claude --resume`.
 
-    Prefer the session's recorded project_path. If it no longer exists — most
-    often a git worktree (`…/.claude/worktrees/<name>`) that's since been
-    deleted — fall back to the parent repo root (the part before the worktree
-    marker), mirroring how index._project_label collapses worktrees onto their
-    repo. Returns an existing directory, or None when there's nothing sensible
-    to chdir into (caller then leaves cwd alone)."""
+    `claude --resume` is scoped to the exact cwd that recorded the session, so
+    to resume a session whose git worktree was deleted we recreate that (empty)
+    worktree dir — the only way claude can locate the transcript filed under the
+    worktree's project key. The TUI confirms this side effect first (see
+    action_resume / _dead_worktree_repo). Returns a usable directory, or None
+    when there's nothing to chdir into (caller leaves cwd alone)."""
     if not project_path:
         return None
     if os.path.isdir(project_path):
         return project_path
-    if _WORKTREE_MARKER in project_path:
-        root = project_path.split(_WORKTREE_MARKER, 1)[0]
-        if os.path.isdir(root):
-            return root
+    if _dead_worktree_repo(project_path):
+        try:
+            os.makedirs(project_path, exist_ok=True)
+            return project_path
+        except OSError:
+            return None
     return None
 
 
