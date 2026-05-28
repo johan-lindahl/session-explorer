@@ -768,6 +768,14 @@ class SessionExplorerApp(App):
         self._refresh_preview()
 
 
+def _resume_argv(target: str) -> list[str]:
+    """argv for resuming a session. The `--` terminator ensures `target` is
+    always treated as the option value, never re-parsed as a flag — so a
+    session id that happens to start with '-' (e.g. an oddly-named transcript
+    imported by backfill) can't inject arguments into `claude`."""
+    return ["claude", "--resume", "--", target]
+
+
 def run() -> int:
     app = SessionExplorerApp()
     app.run()
@@ -780,5 +788,5 @@ def run() -> int:
         cwd = getattr(app, "_resume_cwd", None)
         if cwd and os.path.isdir(cwd):
             os.chdir(cwd)
-        os.execvp("claude", ["claude", "--resume", target])
+        os.execvp("claude", _resume_argv(target))
     return 0
