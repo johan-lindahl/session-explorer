@@ -747,20 +747,21 @@ async def test_help_auto_opens_on_first_launch_and_writes_marker(tmp_path):
         assert not isinstance(app2.screen, HelpScreen)
 
 
-# --- resume argv hardening: `--` terminator prevents a session id that starts
-#     with '-' from being parsed as a `claude` flag (argument injection). ---
+# --- resume argv: bind the id to --resume via `=`. `--resume` takes an OPTIONAL
+#     value ([value] in claude --help), so `--resume <id>`'s value can be lost
+#     and `--resume -- <id>` opens the interactive picker. `--resume=<id>` binds
+#     the id as the option's value AND is injection-safe (a leading-'-' id stays
+#     part of the single token, never parsed as a separate flag). ---
 
-def test_resume_argv_inserts_double_dash_terminator():
+def test_resume_argv_binds_id_as_resume_value():
     from _pkg.tui import _resume_argv
-    assert _resume_argv("01ABC") == ["claude", "--resume", "--", "01ABC"]
+    assert _resume_argv("01ABC") == ["claude", "--resume=01ABC"]
 
 
-def test_resume_argv_neutralizes_dash_leading_id():
+def test_resume_argv_dash_leading_id_stays_a_value():
     from _pkg.tui import _resume_argv
-    # A crafted id like "-foo" must land after `--`, never be read as an option.
-    argv = _resume_argv("-foo")
-    assert argv == ["claude", "--resume", "--", "-foo"]
-    assert argv.index("--") < argv.index("-foo")
+    # "-foo" must stay bound to --resume, not become a separate flag.
+    assert _resume_argv("-foo") == ["claude", "--resume=-foo"]
 
 
 def test_preview_text_shows_model():

@@ -771,11 +771,16 @@ class SessionExplorerApp(App):
 
 
 def _resume_argv(target: str) -> list[str]:
-    """argv for resuming a session. The `--` terminator ensures `target` is
-    always treated as the option value, never re-parsed as a flag — so a
-    session id that happens to start with '-' (e.g. an oddly-named transcript
-    imported by backfill) can't inject arguments into `claude`."""
-    return ["claude", "--resume", "--", target]
+    """argv for resuming a session.
+
+    `claude --resume` takes an OPTIONAL value (`-r, --resume [value]`), so the
+    space form `--resume <id>` can lose the value and the earlier `--resume --
+    <id>` hardening made `--resume` valueless entirely — opening the interactive
+    session picker instead of resuming. Bind the id with `=` so it's
+    unambiguously the option's value. This is also injection-safe: a session id
+    that starts with '-' stays inside the single `--resume=<id>` token and can
+    never be parsed as a separate `claude` flag."""
+    return ["claude", f"--resume={target}"]
 
 
 def run() -> int:

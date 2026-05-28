@@ -3,7 +3,7 @@
 import os
 import sys
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 _VENDOR = os.path.join(os.path.dirname(__file__), "_vendor")
 if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
