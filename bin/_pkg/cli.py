@@ -34,6 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
     index_p.add_argument("--refresh", action="store_true")
     index_p.add_argument("--backfill", action="store_true",
                          help="Scan ~/.claude/projects/ and index any session not yet tracked.")
+
+    uninstall_p = sub.add_parser(
+        "uninstall",
+        help="Restore cleanupPeriodDays and remove session-explorer's files.")
+    uninstall_p.add_argument(
+        "--purge", action="store_true",
+        help="Also delete the session index and folder store (names re-derive "
+             "from JSONLs on reindex; notes and empty folders are lost).")
     return p
 
 
@@ -103,6 +111,21 @@ def _cmd_index(args) -> int:
     return 2
 
 
+def _cmd_uninstall(args) -> int:
+    from . import uninstall as _uninstall
+    claude_dir = os.path.expanduser("~/.claude")
+    actions = _uninstall.teardown(claude_dir=claude_dir, purge_data=args.purge)
+    if actions:
+        print("session-explorer uninstall:")
+        for a in actions:
+            print(f"  - {a}")
+    else:
+        print("session-explorer uninstall: nothing to undo (not installed?).")
+    print("\nTo remove the plugin itself, run in Claude Code:")
+    print("  /plugin uninstall session-explorer")
+    return 0
+
+
 def _cmd_launch() -> int:
     here = os.path.dirname(os.path.realpath(__file__))
     # bin/_pkg/cli.py → bin/session-explorer
@@ -136,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "index":
         return _cmd_index(args)
+    if args.cmd == "uninstall":
+        return _cmd_uninstall(args)
     if args.cmd == "list":
         return _cmd_list()
     if args.cmd == "launch":

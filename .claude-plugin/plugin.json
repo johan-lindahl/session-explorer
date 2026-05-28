@@ -1,6 +1,6 @@
 {
   "name": "session-explorer",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "File-explorer-style session management for Claude Code",
   "hooks": {
     "SessionStart": [

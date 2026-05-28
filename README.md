@@ -87,6 +87,8 @@ session-explorer tui       # run the TUI in the current terminal
 | `m` | Move the selected session to a folder |
 | `d` | Delete the selected session (confirms; removes the JSONL too) |
 | `e` | Edit notes (Ctrl+S to save) |
+| `u` | Toggle visibility of unnamed sessions (hidden by default) |
+| `F5` | Rescan `~/.claude/projects/` — import sessions not yet tracked (shows a progress bar) |
 | `/` | Live filter across name, notes, first prompt, summary |
 | `h` | Show help (auto-opens once on first launch) |
 | `Esc` | Close the preview pane / help (or clear an active filter) |
@@ -110,24 +112,34 @@ create nested folders of any depth. Rename a session with Claude's built-in
 
 ## Uninstall
 
-Restore your original `cleanupPeriodDays`:
+Uninstalling restores your original `cleanupPeriodDays` (saved at install time)
+and removes session-explorer's files. **Run the teardown first, then remove the
+plugin** — `/plugin uninstall` deletes the binary, so the order matters.
+
+Your session index and folder data (names, notes, folders) are **kept by
+default** so a reinstall restores them. Add `--purge` to delete those too.
+
+### Marketplace install
+
+Run the teardown (this resolver locates the installed binary, which isn't on your
+shell `PATH`), then remove the plugin inside Claude Code:
 
 ```bash
-echo "Restoring cleanupPeriodDays from $(cat ~/.claude/.session-explorer.backup)"
-python3 -c "
-import json, os
-p = os.path.expanduser('~/.claude/settings.json')
-d = json.load(open(p))
-d['cleanupPeriodDays'] = int(open(os.path.expanduser('~/.claude/.session-explorer.backup')).read().strip())
-json.dump(d, open(p, 'w'), indent=2)
-"
-rm ~/.claude/.session-explorer.backup
+bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "import json,sys,os; d=json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}; e=d.get(\"plugins\",{}).get(\"session-explorer@session-explorer\",[]); print((e[0].get(\"installPath\",\"\")+\"/bin/session-explorer\") if e else \"\")" "$F"); [ -x "$CLI" ] || CLI=$(command -v session-explorer); "$CLI" uninstall'
 ```
 
-Then `/plugin uninstall session-explorer` (marketplace) or remove the symlink
-and hook entry manually (plain install).
+```
+/plugin uninstall session-explorer
+```
+
+### Plain install
+
+```bash
+./uninstall.sh            # add --purge to also delete the index + folders
+```
 
 ## Status
 
-M2 — Textual TUI complete. Active development; `--gc`, uninstall command, and
-Windows launcher land in M3+.
+M2 — Textual TUI complete. M3 in progress: rescan (`F5`) and the
+`session-explorer uninstall` command have shipped; `--gc` retention and the
+Windows launcher are still pending.
