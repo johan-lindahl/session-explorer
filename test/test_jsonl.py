@@ -79,3 +79,24 @@ def test_last_active_named():
     """Returns the timestamp of the latest line in the file."""
     # named.jsonl ends with a custom-title at 10:03:00 (after the user msg at 10:02:00)
     assert jsonl.last_active_at(os.path.join(_FIX, "named.jsonl")) == "2026-05-20T10:03:00Z"
+
+
+def test_latest_model_named_fixture():
+    """Reads message.model from the assistant line in named.jsonl."""
+    assert jsonl.latest_model(os.path.join(_FIX, "named.jsonl")) == "claude-sonnet-4-6"
+
+
+def test_latest_model_skips_synthetic(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(
+        '{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{}}}\n'
+        '{"type":"assistant","message":{"model":"<synthetic>","usage":{}}}\n'
+    )
+    # The last *real* model wins; the trailing <synthetic> line is ignored.
+    assert jsonl.latest_model(str(p)) == "claude-opus-4-8"
+
+
+def test_latest_model_none_when_absent(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    assert jsonl.latest_model(str(p)) is None

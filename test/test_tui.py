@@ -758,3 +758,19 @@ def test_resume_argv_neutralizes_dash_leading_id():
     argv = _resume_argv("-foo")
     assert argv == ["claude", "--resume", "--", "-foo"]
     assert argv.index("--") < argv.index("-foo")
+
+
+def test_preview_text_shows_model():
+    from _pkg.tui import _preview_text
+    s = {"sid": "x", "name_cached": "n", "tokens_estimate": 620000,
+         "tokens_window_pct": 62, "model": "claude-opus-4-8"}
+    text = _preview_text(s)
+    assert "claude-opus-4-8" in text
+    assert "Model" in text
+
+
+def test_preview_text_model_unknown_when_absent():
+    from _pkg.tui import _preview_text
+    s = {"sid": "x", "name_cached": "n"}
+    text = _preview_text(s)
+    assert "(unknown)" in text
