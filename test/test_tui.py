@@ -584,6 +584,9 @@ def test_help_text_explains_naming_visibility_and_credit():
     # Credit line.
     assert "Johan Lindahl" in text
     assert "johan.lindahl@snojken.com" in text
+    # Version is shown so users can see which build they're running.
+    from _pkg import __version__
+    assert __version__ in text
 
 
 def test_empty_state_text_none_when_rows_visible():

@@ -16,6 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
+from . import __version__
 from . import index as _index
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path
@@ -173,7 +174,7 @@ def _help_text() -> str:
         "",
         "[dim]Esc, q, h, or Space closes this help.[/]",
         "",
-        "[b]Made by Johan Lindahl[/]  <johan.lindahl@snojken.com>",
+        f"[b]session-explorer v{__version__}[/]  ·  Made by Johan Lindahl  <johan.lindahl@snojken.com>",
     ])
 
 
