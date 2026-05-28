@@ -856,3 +856,34 @@ async def test_delete_nonempty_folder_refuses(index_path):
         assert not isinstance(app.screen, ModalScreen)
 
     assert "sid-1" in json.load(open(index_path))["sessions"]
+
+
+async def test_left_right_collapse_and_expand_folder(index_path):
+    """left collapses / right expands the folder under the cursor.
+
+    Regression guard: the app overrides enter and space (the Tree's own toggle
+    keys), and this Textual Tree has no left/right binding, so without explicit
+    app bindings keyboard expand/collapse does nothing (mouse-only).
+    """
+    from _pkg.tui import SessionExplorerApp
+
+    def find(node, lbl):
+        for c in node.children:
+            if lbl in str(c.label):
+                return c
+            g = find(c, lbl)
+            if g:
+                return g
+        return None
+
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        fol = find(app._tree.root, "planning/")
+        assert fol is not None and fol.is_expanded  # folders render expanded
+        app._tree.select_node(fol); app._tree.cursor_line = fol.line
+        await pilot.pause()
+        await pilot.press("left"); await pilot.pause()
+        assert find(app._tree.root, "planning/").is_expanded is False
+        await pilot.press("right"); await pilot.pause()
+        assert find(app._tree.root, "planning/").is_expanded is True
