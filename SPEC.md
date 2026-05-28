@@ -47,6 +47,7 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 │                                                                   │
 │  .session-explorer.backup    ← prior cleanupPeriodDays            │
 │  .session-explorer.current   ← active session_id pointer          │
+│  .session-explorer.help-seen ← set after first-launch help shown  │
 │                                                                   │
 │  plugins/.../session-explorer/                                    │
 │     ├── .claude-plugin/plugin.json                                │
@@ -114,7 +115,7 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `↑` `↓` | Move between rows |
 | `←` `→` | Collapse / expand the current folder or project |
 | `Enter` | Resume the selected session — see *Resume flow* |
-| `Space` | Preview pane (show notes, first prompt, summary, full path) |
+| `Space` | Toggle the preview pane. Headline is the session's full (un-truncated) name; body shows project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. `Esc` also closes it. |
 | `r` | Rename (= retag = move to a different folder). Prompts for the new name. |
 | `n` | New folder (prompts for path under the current project; cursor on a folder pre-fills the prefix). Created empty; persisted in the folder store. |
 | `m` | Move the selected session within its project (lists existing paths in the project; type a new path to create it). |
@@ -122,7 +123,9 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
 | `u` | Toggle visibility of unnamed sessions (hidden by default). |
 | `/` | Live filter across name, notes, first prompt, summary. |
-| `q` `Esc` | Quit. |
+| `h` | Show the help overlay (slash-folder naming, the named-only default + `u`, full key list, author credit). Auto-opens once on first launch, then only on demand. |
+| `Esc` | Close the preview pane, the help overlay, or clear an active filter. Does **not** quit. |
+| `q` | Quit. |
 
 **Folder deletion** is intentionally not bound. Empty folders disappear when removed from the folder store (achievable by moving a session out and back); populated folders cease to exist when their last session is moved or deleted. v1 does not support "delete folder and everything in it" — too easy to lose work.
 
@@ -372,5 +375,5 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 - **Exact `message.usage` field path.** v1 reads `cache_read_input_tokens` from the latest assistant message; the precise JSON path is confirmed during M1 by inspecting a real transcript.
 - **Model-aware context window.** v1 hardcodes a 200K denominator. Per-message model id isn't in the JSONL; we'd need to read the session's startup config or Claude Code settings to pick the right window (200K Sonnet vs 1M Opus 1M-context vs 200K Haiku). Revisit in M2/M3 if the hardcode misleads Opus/Haiku users.
 - **In-place compaction.** Deferred past v1 (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.
-- **Preview-pane content.** Currently spec'd as notes + first prompt + summary + full path. May want to add "last assistant message" once we see how cramped the layout gets. Defer to M2 dogfooding.
+- **Preview-pane content.** Resolved in M2 dogfooding: headline is the full display name (the grid truncates it), followed by project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. The `summary` block was dropped — the field is never populated today. May still add "last assistant message" later if the layout has room.
 - **`session-explorer browse` as a standalone shell command.** Removed from this spec — the TUI is only reachable via the slash command's launcher. Easy to re-add as a thin CLI wrapper in M3 if users ask. Decision: ship without it; let usage tell us if it's needed.

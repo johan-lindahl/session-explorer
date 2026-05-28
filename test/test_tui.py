@@ -31,6 +31,10 @@ def index_path(tmp_path):
             }
         }
     }, open(path, "w"))
+    # Mark help as already seen so the first-launch auto-open doesn't pop the
+    # HelpScreen over the tree these tests drive. First-launch behaviour has its
+    # own dedicated test that uses a marker-free index path.
+    (tmp_path / ".session-explorer.help-seen").write_text("")
     yield path
 
 
@@ -204,6 +208,78 @@ async def test_preview_toggles(index_path):
         await pilot.press("space")
         await pilot.pause()
         assert app._preview.display is False
+
+
+def test_preview_text_headline_is_full_display_name():
+    """The headline is the full (un-truncated) display segment — the part the
+    grid truncates — and the folder path is surfaced separately."""
+    from _pkg.tui import _preview_text
+    long_name = "sprint14-a-very-long-name-that-the-grid-would-truncate"
+    s = {
+        "sid": "sid-1",
+        "name_cached": f"planning/{long_name}",
+        "project_label": "demo",
+        "last_active_at": None,
+        "tokens_estimate": 0,
+        "tokens_window_pct": 0,
+        "message_count": 3,
+        "first_prompt": "hello",
+        "transcript_path": "/p/t.jsonl",
+    }
+    text = _preview_text(s)
+    assert long_name in text          # full display name present, not truncated
+    assert "planning" in text          # folder path surfaced
+
+
+def test_preview_text_includes_relevant_fields():
+    from _pkg.tui import _preview_text
+    s = {
+        "sid": "abc12345-def-6789",
+        "name_cached": "auth/login",
+        "project_label": "myproj",
+        "branch": "feat/login",
+        "last_active_at": None,
+        "created_at": "2026-05-20T10:00:00Z",
+        "tokens_estimate": 18000,
+        "tokens_window_pct": 9,
+        "message_count": 42,
+        "first_prompt": "do the thing",
+        "notes": "remember this",
+        "transcript_path": "/x/y/abc.jsonl",
+    }
+    text = _preview_text(s)
+    for needle in (
+        "login",            # headline (display segment)
+        "auth",             # folder
+        "myproj",           # project
+        "feat/login",       # branch
+        "2026-05-20",       # created date
+        "42",               # message count
+        "abc12345-def-6789",  # full session id
+        "remember this",    # notes
+        "do the thing",     # first prompt
+        "/x/y/abc.jsonl",   # transcript path
+    ):
+        assert needle in text, needle
+    assert "18K" in text and "9%" in text   # context size + window pct
+    assert "Summary" not in text             # summary block dropped
+
+
+async def test_esc_closes_preview_then_does_not_quit(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("space")          # open preview
+        await pilot.pause()
+        assert app._preview.display is True
+        await pilot.press("escape")         # closes the preview …
+        await pilot.pause()
+        assert app._preview.display is False
+        assert app.is_running               # … without quitting
+        await pilot.press("escape")         # preview already closed → no-op
+        await pilot.pause()
+        assert app.is_running               # still must not quit
 
 
 def _collect_leaf_sids(node):
@@ -492,3 +568,72 @@ async def test_move_to_new_path_adds_to_folder_store(index_path, tmp_path):
     paths = folder_store.list_paths(fs_path, "demo")
     assert "team/new-folder" in paths
     assert json.load(open(index_path))["sessions"]["sid-1"]["name_cached"] == "team/new-folder/sprint14"
+
+
+def test_help_text_explains_naming_visibility_and_credit():
+    from _pkg.tui import _help_text
+    text = _help_text()
+    # Slash-folder naming explanation, with a concrete example.
+    assert "/" in text
+    assert "team/planning/sprint14" in text
+    # Named-only default + `u` to toggle unnamed.
+    assert "u" in text
+    lowered = text.lower()
+    assert "unnamed" in lowered
+    assert "rename" in lowered or "named" in lowered
+    # Credit line.
+    assert "Johan Lindahl" in text
+    assert "johan.lindahl@snojken.com" in text
+
+
+async def test_h_opens_help_and_esc_dismisses(index_path):
+    from _pkg.tui import SessionExplorerApp, HelpScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+        assert app.is_running   # dismissing help must not quit
+
+
+async def test_help_quit_key_dismisses_not_quits(index_path):
+    from _pkg.tui import SessionExplorerApp, HelpScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("q")     # dismisses the help overlay …
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+        assert app.is_running       # … rather than quitting the app
+
+
+async def test_help_auto_opens_on_first_launch_and_writes_marker(tmp_path):
+    import json
+    from _pkg.tui import SessionExplorerApp, HelpScreen
+    # A fresh index with NO help-seen marker beside it.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    idx = str(fresh / "se-index.json")
+    json.dump({"version": 2, "sessions": {}}, open(idx, "w"))
+    marker = fresh / ".session-explorer.help-seen"
+    assert not marker.exists()
+
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)   # auto-opened
+    assert marker.exists()                           # marker now recorded
+
+    # Second launch: marker present → help must NOT auto-open.
+    app2 = SessionExplorerApp(index_path=idx)
+    async with app2.run_test() as pilot:
+        await pilot.pause()
+        assert not isinstance(app2.screen, HelpScreen)

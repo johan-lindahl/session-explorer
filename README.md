@@ -62,14 +62,16 @@ session-explorer tui       # run the TUI in the current terminal
 | `↑` `↓` | Move between rows |
 | `←` `→` | Collapse / expand the current folder or project |
 | `Enter` | Resume the selected session (`exec claude --resume <id>`) |
-| `Space` | Toggle the preview pane (notes, first prompt, summary, path) |
+| `Space` | Toggle the preview pane (full name, project, folder, branch, age, created, messages, context, session id, notes, first prompt, path) |
 | `r` | Rename — also moves the session between folders |
 | `n` | Create an empty folder |
 | `m` | Move the selected session to a folder |
 | `d` | Delete the selected session (confirms; removes the JSONL too) |
 | `e` | Edit notes (Ctrl+S to save) |
 | `/` | Live filter across name, notes, first prompt, summary |
-| `q` `Esc` | Quit |
+| `h` | Show help (auto-opens once on first launch) |
+| `Esc` | Close the preview pane / help (or clear an active filter) |
+| `q` | Quit |
 
 ## How sessions are organized
 

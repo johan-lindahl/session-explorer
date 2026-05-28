@@ -10,7 +10,7 @@ import os
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Label, OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
@@ -67,6 +67,88 @@ def _column_header() -> str:
     leaf's absolute stat offset (2 levels of guide × GUIDE_DEPTH + NAME_W)."""
     name_region = NAME_W + 2 * GUIDE_DEPTH
     return f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
+
+
+def _preview_text(s: dict) -> str:
+    """Markup for the preview pane of a session `data` dict. Pure so it can be
+    unit-tested without spinning up the app.
+
+    The headline is the full display segment — the grid truncates the name to a
+    fixed column width, so the preview is where you see it whole. The folder
+    path, project, and the rest of the metadata follow as labelled fields."""
+    segments, display = split_path(s.get("name_cached"))
+    sid = s.get("sid") or ""
+    headline = display or (sid[:8] if sid else "(unnamed)")
+    context = f"{fmt_tokens(s.get('tokens_estimate', 0))} {fmt_pct(s.get('tokens_window_pct', 0))}"
+
+    def field(label: str, value: str) -> str:
+        return f"[b]{label:<10}[/]{value}"
+
+    lines = [
+        f"[b]{headline}[/]",
+        "",
+        field("Project", s.get("project_label") or "(unknown)"),
+        field("Folder", "/".join(segments) or "(none)"),
+        field("Branch", s.get("branch") or "(none)"),
+        field("Active", fmt_age(s.get("last_active_at"))),
+        field("Created", (s.get("created_at") or "")[:10] or "—"),
+        field("Messages", str(s.get("message_count", 0))),
+        field("Context", context),
+        field("Session", sid or "—"),
+        "",
+        "[b]Notes[/]",
+        s.get("notes") or "(no notes)",
+        "",
+        "[b]First prompt[/]",
+        s.get("first_prompt") or "(no first prompt recorded)",
+        "",
+        "[b]Transcript[/]",
+        s.get("transcript_path") or "(unknown path)",
+    ]
+    return "\n".join(lines)
+
+
+def _help_text() -> str:
+    """Markup for the help overlay. Pure so it can be unit-tested. Explains the
+    two non-obvious concepts (slash-folders, named-only visibility) and lists
+    every keybinding, then credits the author."""
+
+    def key(k: str, desc: str) -> str:
+        return f"  [b]{k:<7}[/]{desc}"
+
+    return "\n".join([
+        "[b]session-explorer — help[/]",
+        "",
+        "[b]Naming & folders[/]",
+        "A session's name doubles as its folder path. Slashes split it: the last",
+        "segment is the display name, everything before it is the folder tree.",
+        "  [b]team/planning/sprint14[/]  →  folders [b]team/planning[/], shown as [b]sprint14[/]",
+        "Rename (r) or move (m) to re-file a session — there are no separate tags.",
+        "",
+        "[b]What you see[/]",
+        "Only named (renamed) sessions show by default. Unnamed stubs are hidden;",
+        "press [b]u[/] to toggle them on so you can rename or delete them.",
+        "",
+        "[b]Keys[/]",
+        key("↑ ↓", "Move between rows"),
+        key("← →", "Collapse / expand a folder or project"),
+        key("Enter", "Resume the selected session"),
+        key("Space", "Toggle the preview pane"),
+        key("r", "Rename (also re-files into a different folder)"),
+        key("m", "Move the selected session to a folder"),
+        key("n", "New folder under the current project/folder"),
+        key("d", "Delete the selected session (confirms)"),
+        key("e", "Edit notes (Ctrl+S to save)"),
+        key("u", "Toggle visibility of unnamed sessions"),
+        key("/", "Live filter across name, notes, first prompt"),
+        key("h", "Show this help"),
+        key("Esc", "Close the preview, filter, or this help"),
+        key("q", "Quit"),
+        "",
+        "[dim]Esc, q, h, or Space closes this help.[/]",
+        "",
+        "[b]Made by Johan Lindahl[/]  <johan.lindahl@snojken.com>",
+    ])
 
 
 class RenameScreen(ModalScreen[str]):
@@ -187,12 +269,29 @@ class NotesScreen(ModalScreen[str]):
         self.dismiss(self._ta.text)
 
 
+class HelpScreen(ModalScreen[None]):
+    """Read-only help overlay. Any of Esc / q / h / Space closes it."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("q", "dismiss", "Close", show=False),
+        Binding("h", "dismiss", "Close", show=False),
+        Binding("space", "dismiss", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield VerticalScroll(Static(_help_text(), id="help-body"), id="help")
+
+
 class SessionExplorerApp(App):
     CSS = """
     #treepane { width: 1fr; }
     #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
+    HelpScreen { align: center middle; }
+    #help { width: 78; max-width: 90%; height: auto; max-height: 90%;
+            padding: 1 2; border: round $accent; background: $surface; }
     """
 
     BINDINGS = [
@@ -205,8 +304,9 @@ class SessionExplorerApp(App):
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
+        Binding("h", "help", "Help"),
         Binding("q", "quit", "Quit"),
-        Binding("escape", "quit", "Quit", show=False),
+        Binding("escape", "close_preview", "Close preview", show=False),
     ]
 
     def __init__(self, index_path: str | None = None) -> None:
@@ -221,17 +321,17 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "filter", "toggle_unnamed") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "help") and isinstance(self.screen, ModalScreen):
             return False
-        # When the filter Input is focused, swallow the global Esc→quit so Esc
-        # can hide the filter (handled in on_key) instead of killing the TUI.
+        # While the filter Input is focused, never let `q` quit the TUI — the
+        # keystroke belongs in the filter text, not the global quit binding.
         if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         return True
 
     def on_key(self, event) -> None:
-        # Hide filter on Esc and refocus the tree; the bubble-up Esc-quit is
-        # gated off by check_action while the filter has focus.
+        # Hide the filter on Esc and refocus the tree. Stopping the event here
+        # keeps the global Esc→close_preview binding from also firing.
         if event.key == "escape" and self._filter.has_focus:
             self._filter.value = ""
             self._filter_needle = ""
@@ -264,6 +364,24 @@ class SessionExplorerApp(App):
         self._populate()
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
+        # First run only: pop the help overlay so newcomers learn the slash-
+        # folder naming and the named-only default. The marker is written up
+        # front so a crash mid-session still counts as "seen".
+        if not os.path.exists(self._help_marker_path()):
+            self._mark_help_seen()
+            self.action_help()
+
+    def _help_marker_path(self) -> str:
+        return os.path.join(
+            os.path.dirname(os.path.abspath(self._index_path)),
+            ".session-explorer.help-seen",
+        )
+
+    def _mark_help_seen(self) -> None:
+        try:
+            open(self._help_marker_path(), "a").close()
+        except OSError:
+            pass
 
     def _matches(self, sid: str, s: dict) -> bool:
         if not self._filter_needle:
@@ -503,6 +621,15 @@ class SessionExplorerApp(App):
         self._preview.display = not self._preview.display
         self._refresh_preview()
 
+    def action_close_preview(self) -> None:
+        # Esc hides the preview when it's open; otherwise it does nothing.
+        # (Quit moved to `q` only — Esc no longer kills the explorer.)
+        if self._preview.display:
+            self._preview.display = False
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
     def action_toggle_unnamed(self) -> None:
         self._show_unnamed = not self._show_unnamed
         self._populate()
@@ -529,17 +656,12 @@ class SessionExplorerApp(App):
         if not self._preview.display:
             return
         node = self._tree.cursor_node
-        s = node.data if node and node.data else {}
-        notes = s.get("notes") or "(no notes)"
-        prompt = s.get("first_prompt") or "(no first prompt recorded)"
-        summary = s.get("summary") or "(no summary)"
-        path = s.get("transcript_path") or "(unknown path)"
-        self._preview.update(
-            f"[b]Notes[/]\n{notes}\n\n"
-            f"[b]First prompt[/]\n{prompt}\n\n"
-            f"[b]Summary[/]\n{summary}\n\n"
-            f"[b]Path[/]\n{path}"
-        )
+        data = node.data if node and node.data else {}
+        if "sid" not in data:
+            # Cursor is on a project/folder node, not a session.
+            self._preview.update("[dim]Select a session to preview.[/]")
+            return
+        self._preview.update(_preview_text(data))
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._refresh_preview()
