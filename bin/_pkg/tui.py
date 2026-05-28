@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -108,6 +109,29 @@ def _preview_text(s: dict) -> str:
     return "\n".join(lines)
 
 
+def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
+                      filter_active: bool, scanned: bool) -> "str | None":
+    """Message for the tree pane when no rows are visible, else None.
+
+    Pure so it can be unit-tested. Branch order is deliberate: an active filter
+    explains itself first (the user is mid-search), then hidden-unnamed, then
+    the empty-index prompts — split by whether a rescan has already run, so a
+    fruitless scan doesn't keep telling the user to "press R"."""
+    if visible > 0:
+        return None
+    if filter_active:
+        return "No sessions match the current filter.\nPress Esc to clear it."
+    if unnamed_hidden > 0:
+        return (f"{unnamed_hidden} unnamed session(s) hidden.\n"
+                "Press u to show them, then r to name one.")
+    if total_indexed == 0:
+        if scanned:
+            return "No sessions found under ~/.claude/projects/."
+        return ("No sessions indexed yet.\n"
+                "Press R to scan ~/.claude/projects/ for your sessions.")
+    return None
+
+
 def _help_text() -> str:
     """Markup for the help overlay. Pure so it can be unit-tested. Explains the
     two non-obvious concepts (slash-folders, named-only visibility) and lists
@@ -140,6 +164,7 @@ def _help_text() -> str:
         key("d", "Delete the selected session (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
         key("u", "Toggle visibility of unnamed sessions"),
+        key("R", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
         key("/", "Live filter across name, notes, first prompt"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
@@ -287,6 +312,7 @@ class SessionExplorerApp(App):
     CSS = """
     #treepane { width: 1fr; }
     #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
+    #empty-state { padding: 2 2; color: $text-muted; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     HelpScreen { align: center middle; }
@@ -302,6 +328,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
+        Binding("R", "rescan", "Rescan"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
@@ -309,19 +336,26 @@ class SessionExplorerApp(App):
         Binding("escape", "close_preview", "Close preview", show=False),
     ]
 
-    def __init__(self, index_path: str | None = None) -> None:
+    def __init__(self, index_path: str | None = None,
+                 projects_root: str | None = None) -> None:
         super().__init__()
         self._index_path = index_path or _index_path()
+        # None → index.reindex/backfill use the default ~/.claude/projects.
+        # Injected in tests to point the rescan at a fixture tree.
+        self._projects_root = projects_root
         self._resume_target: str | None = None
         self._resume_cwd: str | None = None
         self._filter_needle: str = ""
         self._show_unnamed: bool = False
+        # Flips after the first rescan so the empty-state can switch from
+        # "press R to scan" to "no sessions found".
+        self._scanned: bool = False
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "help") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -349,8 +383,10 @@ class SessionExplorerApp(App):
         self._tree.guide_depth = GUIDE_DEPTH
         self._preview = Static("", id="preview")
         self._preview.display = False
+        self._empty = Static("", id="empty-state")
+        self._empty.display = False
         yield Horizontal(
-            Vertical(self._colheader, self._tree, id="treepane"),
+            Vertical(self._colheader, self._tree, self._empty, id="treepane"),
             self._preview,
         )
         self._filter = Input(placeholder="filter…", id="filter")
@@ -418,6 +454,30 @@ class SessionExplorerApp(App):
             self.sub_title = f"{total} sessions across {len(tree)} projects · {unnamed_hidden} unnamed hidden (u)"
         else:
             self.sub_title = f"{total} sessions across {len(tree)} projects"
+
+        # Empty-state: when no session rows would render (after the filter),
+        # show an actionable message in place of the tree instead of blank space.
+        def visible_count(node):
+            n = sum(1 for sid, s in node["_sessions"] if self._matches(sid, s))
+            return n + sum(visible_count(c) for c in node["_folders"].values())
+
+        visible = sum(visible_count(p) for p in tree.values())
+        msg = _empty_state_text(
+            total_indexed=len(data.get("sessions", {})),
+            visible=visible,
+            unnamed_hidden=unnamed_hidden,
+            filter_active=bool(self._filter_needle),
+            scanned=self._scanned,
+        )
+        if msg is None:
+            self._empty.display = False
+            self._tree.display = True
+            self._colheader.display = True
+        else:
+            self._empty.update(msg)
+            self._empty.display = True
+            self._tree.display = False
+            self._colheader.display = False
 
         # `child_depth` is the tree depth (number of guide levels) of any leaf
         # or folder added at this level. With show_root=False, a session that
@@ -633,6 +693,20 @@ class SessionExplorerApp(App):
     def action_toggle_unnamed(self) -> None:
         self._show_unnamed = not self._show_unnamed
         self._populate()
+
+    def action_rescan(self) -> None:
+        # reindex shells out to `git` per session, so it runs in a worker thread
+        # to keep the UI responsive on large histories.
+        self.sub_title = "scanning ~/.claude/projects/…"
+        self._rescan_worker()
+
+    @work(thread=True, exclusive=True)
+    def _rescan_worker(self) -> None:
+        try:
+            _index.reindex(self._index_path, projects_root=self._projects_root)
+        finally:
+            self._scanned = True
+            self.call_from_thread(self._populate)
 
     def action_filter(self) -> None:
         self._filter.display = True

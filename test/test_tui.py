@@ -586,6 +586,96 @@ def test_help_text_explains_naming_visibility_and_credit():
     assert "johan.lindahl@snojken.com" in text
 
 
+def test_empty_state_text_none_when_rows_visible():
+    from _pkg.tui import _empty_state_text
+    assert _empty_state_text(total_indexed=3, visible=3, unnamed_hidden=0,
+                             filter_active=False, scanned=False) is None
+
+
+def test_empty_state_text_prompts_rescan_on_empty_index():
+    from _pkg.tui import _empty_state_text
+    msg = _empty_state_text(total_indexed=0, visible=0, unnamed_hidden=0,
+                            filter_active=False, scanned=False)
+    assert "Press R" in msg
+    assert "~/.claude/projects" in msg
+
+
+def test_empty_state_text_after_scan_found_nothing():
+    from _pkg.tui import _empty_state_text
+    msg = _empty_state_text(total_indexed=0, visible=0, unnamed_hidden=0,
+                            filter_active=False, scanned=True)
+    assert "No sessions found" in msg
+
+
+def test_empty_state_text_prompts_u_when_all_unnamed_hidden():
+    from _pkg.tui import _empty_state_text
+    msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=5,
+                            filter_active=False, scanned=False)
+    assert "Press u" in msg
+    assert "5" in msg
+
+
+def test_empty_state_text_filter_no_match_takes_precedence():
+    from _pkg.tui import _empty_state_text
+    # Filter active wins even if unnamed sessions are also hidden.
+    msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=2,
+                            filter_active=True, scanned=False)
+    assert "filter" in msg.lower()
+    assert "Esc" in msg
+
+
+async def test_empty_state_shown_when_only_unnamed(tmp_path):
+    """An index with only unnamed sessions shows the 'press u' empty-state; u hides it."""
+    import json
+    fresh = tmp_path / "only-unnamed"
+    fresh.mkdir()
+    idx = str(fresh / "se-index.json")
+    json.dump({"version": 2, "sessions": {
+        "u1": {"project_label": "demo", "name_cached": None,
+               "last_active_at": "2026-05-25T00:00:00Z",
+               "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0},
+    }}, open(idx, "w"))
+    (fresh / ".session-explorer.help-seen").write_text("")
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._empty.display is True
+        assert "Press u" in str(app._empty.render())
+        await pilot.press("u")
+        await pilot.pause()
+        assert app._empty.display is False   # unnamed now visible
+
+
+async def test_rescan_imports_sessions_from_projects_root(tmp_path):
+    """Empty index → empty-state prompts R → pressing R imports transcripts."""
+    import json, shutil, os
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    idx = str(fresh / "se-index.json")
+    json.dump({"version": 2, "sessions": {}}, open(idx, "w"))
+    (fresh / ".session-explorer.help-seen").write_text("")
+
+    projects = tmp_path / "projects"
+    proj = projects / "-Users-jl-proj-foo"
+    proj.mkdir(parents=True)
+    FIX = os.path.join(os.path.dirname(__file__), "fixtures")
+    shutil.copy(os.path.join(FIX, "named.jsonl"), proj / "AAA.jsonl")
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=idx, projects_root=str(projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._empty.display is True            # empty index → prompt
+        await pilot.press("R")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app._empty.display is False           # imported (named) session visible
+
+    assert "AAA" in json.load(open(idx))["sessions"]
+
+
 async def test_h_opens_help_and_esc_dismisses(index_path):
     from _pkg.tui import SessionExplorerApp, HelpScreen
     app = SessionExplorerApp(index_path=index_path)

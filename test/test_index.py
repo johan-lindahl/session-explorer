@@ -319,6 +319,47 @@ def test_record_session_unnamed_does_not_touch_folder_store(tmp_path):
     assert not _os.path.exists(fs_path)
 
 
+def test_reindex_adds_untracked_and_prunes_dead(tmp_path):
+    """reindex() = refresh (prune dead) + backfill (add new) in one call."""
+    projects = tmp_path / "projects"
+    proj = projects / "-Users-jl-proj-foo"
+    proj.mkdir(parents=True)
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), proj / "NEW.jsonl")
+    idx_path = str(tmp_path / "index.json")
+    # A tracked session whose JSONL is gone -> refresh should prune it.
+    index.save(idx_path, {"version": 2, "sessions": {
+        "DEAD": {"transcript_path": str(proj / "GONE.jsonl"), "name_cached": "old"}
+    }})
+
+    result = index.reindex(idx_path, projects_root=str(projects))
+
+    data = index.load(idx_path)
+    assert "DEAD" not in data["sessions"]   # pruned by refresh
+    assert "NEW" in data["sessions"]        # added by backfill
+    assert result == {"added": 1, "total": 1}
+
+
+def test_reindex_preserves_notes_and_name(tmp_path):
+    """A re-indexed tracked session keeps user notes and its custom-title name."""
+    projects = tmp_path / "projects"
+    proj = projects / "-x"
+    proj.mkdir(parents=True)
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), proj / "AAA.jsonl")
+    idx_path = str(tmp_path / "index.json")
+    index.record_session(idx_path, session_id="AAA",
+                         transcript_path=str(proj / "AAA.jsonl"), cwd="/x")
+    def add_notes(d: dict) -> dict:
+        d["sessions"]["AAA"]["notes"] = "keep me"
+        return d
+    index.mutate(idx_path, add_notes)
+
+    index.reindex(idx_path, projects_root=str(projects))
+
+    data = index.load(idx_path)
+    assert data["sessions"]["AAA"]["notes"] == "keep me"
+    assert data["sessions"]["AAA"]["name_cached"] == "planning-sprint14-custom"
+
+
 def test_record_session_uses_default_folder_store_path(tmp_path):
     """When folder_store_path is None, derive a sibling of the index file."""
     from _pkg import folder_store

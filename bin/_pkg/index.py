@@ -216,6 +216,23 @@ def refresh_all(index_path: str) -> dict:
     return load(index_path)
 
 
+def reindex(index_path: str, projects_root: "str | None" = None) -> dict:
+    """Recompute tracked sessions (pruning dead JSONLs), then import any
+    untracked sessions under ~/.claude/projects/.
+
+    Refresh runs first so each already-tracked session is touched once; backfill
+    then adds the rest. Non-destructive: notes and custom-title names survive
+    (see record_session). Returns {"added": int, "total": int}.
+
+    This is the user-facing "rescan" the TUI binds to `R`; nothing imports
+    pre-install sessions automatically.
+    """
+    refresh_all(index_path)
+    added = backfill(index_path, projects_root=projects_root)
+    total = len(load(index_path).get("sessions", {}))
+    return {"added": added, "total": total}
+
+
 def migrate_to_v2(index_path: str, folder_store_path: str) -> None:
     """One-shot migration of the index from v1 (with flat `folders[]`) to v2
     (folders moved out to a separate file under a synthetic (unfiled) project).
