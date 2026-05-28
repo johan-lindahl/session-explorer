@@ -383,7 +383,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 | M1 | Plugin manifest + `marketplace.json` + `SessionStart` hook with first-run setup + index core (`record`, `refresh`, `list`). Installable from a self-hosted marketplace. macOS terminal launcher. Reverse-engineer `/rename` JSONL format. |
 | M2 | Textual TUI: tree view, all keybindings, rename/move/delete/notes, preview pane, **context-size stats columns**. Linux launchers. |
 | M3 | `--gc` (old unnamed sessions; auto-fired once/day by the hook + manual; empty-folder pruning deferred — see edge case #7); `session-explorer uninstall`; search across notes/prompts/summaries. |
-| M4 | bats + pytest suites; CI; README quickstart with both install paths. |
+| M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
 | M5 | Submit to `anthropics/claude-plugins-community`. WSL launcher (shipped: `wt.exe` re-entry + fallback); native Windows out of scope. |
 
 ## Open questions

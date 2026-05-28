@@ -1,5 +1,7 @@
 # session-explorer
 
+[![CI](https://github.com/johan-lindahl/session-explorer/actions/workflows/ci.yml/badge.svg)](https://github.com/johan-lindahl/session-explorer/actions/workflows/ci.yml)
+
 A Claude Code plugin that turns `~/.claude/projects/*.jsonl` transcripts into a
 file-explorer-style listing: browse, organize, and resume sessions from a single
 slash command.
@@ -185,8 +187,18 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-M3 complete: the Textual TUI (M2), plus `--gc` retention with a once-daily
-auto-trigger, rescan (`F5`), `session-explorer uninstall`, and live filtering
-across names, notes, and prompts. macOS, Linux, and WSL launchers ship; native
-Windows is out of scope. Next up — M4 CI and M5 (community-marketplace
-submission).
+M3 + M4 complete: the Textual TUI (M2), `--gc` retention with a once-daily
+auto-trigger, rescan (`F5`), `session-explorer uninstall`, live filtering,
+model-aware context sizing, and macOS/Linux/WSL launchers (native Windows is out
+of scope). Tested by pytest + bats, run in CI on ubuntu + macos across Python
+3.11–3.13. Next up — M5: submission to the community marketplace.
+
+### Running the tests
+
+```bash
+python3 -m pytest test/ -q                                   # Python logic + CLI/TUI
+bats test/install.bats test/uninstall.bats test/hook.bats    # shell scripts + hook
+```
+
+pytest needs `pytest` + `pytest-asyncio` (`pip install -r test/requirements-dev.txt`);
+Textual is vendored, so nothing else is required. `bats` is [bats-core](https://github.com/bats-core/bats-core).

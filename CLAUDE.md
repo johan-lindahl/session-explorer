@@ -39,14 +39,12 @@ These are the constraints to preserve — violating any breaks the spec's contra
 
 ## Commands
 
-No build/test tooling exists yet. Planned (per spec):
-
-- **Tests:** `bats test/` for the shell-facing CLI, `pytest test/` for index/jsonl/TUI logic.
+- **Tests (Python):** `python3 -m pytest test/ -q`. Single file: `python3 -m pytest test/test_gc.py -q`. Single test: `python3 -m pytest test/test_gc.py::test_old_unnamed_session_is_deleted -q`. Config in `pytest.ini` (`asyncio_mode = auto`); dev deps in `test/requirements-dev.txt` (pytest + pytest-asyncio). Textual is vendored, so nothing else needs installing.
+- **Tests (shell):** `bats test/install.bats test/uninstall.bats test/hook.bats` — shell-level coverage of `install.sh`, `uninstall.sh`, and the hook. (CLI subcommands are covered by pytest via subprocess in `test_cli.py`, so bats deliberately doesn't re-test them.)
+- **CI:** `.github/workflows/ci.yml` runs both suites on ubuntu + macos across Python 3.11–3.13 for every push/PR to `main`.
 - **Install (dev, plain path):** `./install.sh` writes the hook to `~/.claude/settings.json`, symlinks `bin/session-explorer` to `~/.local/bin/`, performs first-run setup eagerly.
 - **Install (marketplace path):** `/plugin marketplace add <this-repo>` then `/plugin install session-explorer`. The plugin's `bin/` is on the Bash-tool PATH automatically.
 - **Uninstall:** `./uninstall.sh` (plain) or `session-explorer uninstall` (marketplace, since `/plugin uninstall` has no teardown hook). Both restore `cleanupPeriodDays` from the backup.
-
-Fill in concrete single-test invocations here once the test suites land.
 
 ## Implementation order
 

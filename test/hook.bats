@@ -1,0 +1,69 @@
+#!/usr/bin/env bats
+# Shell-level tests for hooks/session-start.sh — first-run setup + the throttled
+# gc auto-trigger. pytest also covers this; these assert the same contract in a
+# pure-bash harness (the form the hook actually runs in).
+
+setup() {
+  REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+  TMP="$(mktemp -d)"
+  export HOME="$TMP"
+  export CLAUDE_PLUGIN_ROOT="$REPO"   # so the hook resolves the real CLI
+  PAYLOAD='{"session_id":"01HOOK","transcript_path":"/tmp/x.jsonl","cwd":"/tmp"}'
+}
+
+teardown() {
+  # Tolerant: the hook's detached gc child may still be writing under $HOME=$TMP.
+  [ -n "$TMP" ] && rm -rf "$TMP" 2>/dev/null || true
+}
+
+run_hook() {  # run_hook  (reads $PAYLOAD on stdin)
+  printf '%s' "$PAYLOAD" | bash "$REPO/hooks/session-start.sh"
+}
+
+@test "hook exits 0 and never blocks startup" {
+  run run_hook
+  [ "$status" -eq 0 ]
+}
+
+@test "hook first-run sets cleanupPeriodDays and writes the backup" {
+  mkdir -p "$HOME/.claude"
+  echo '{"cleanupPeriodDays": 21}' > "$HOME/.claude/settings.json"
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/.session-explorer.backup")" = "21" ]
+  run python3 -c "import json; print(json.load(open('$HOME/.claude/settings.json'))['cleanupPeriodDays'])"
+  [ "$output" = "36500" ]
+}
+
+@test "hook writes the active-session pointer" {
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/.session-explorer.current")" = "01HOOK" ]
+}
+
+@test "hook fires gc on first run and stamps the throttle file" {
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/.session-explorer.gc" ]
+  # gc is detached; poll the log for its output (generous for cold CI runners).
+  for _ in $(seq 1 200); do
+    grep -q "Removed" "$HOME/.claude/session-explorer.log" 2>/dev/null && break
+    sleep 0.05
+  done
+  grep -q "Removed" "$HOME/.claude/session-explorer.log"
+}
+
+@test "hook throttles gc within 24h (recent stamp left untouched)" {
+  mkdir -p "$HOME/.claude"
+  stamp="$HOME/.claude/.session-explorer.gc"
+  : > "$stamp"
+  # Backdate 1 hour.
+  touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d '1 hour ago' +%Y%m%d%H%M)" "$stamp"
+  before="$(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp")"
+  run run_hook
+  [ "$status" -eq 0 ]
+  after="$(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp")"
+  [ "$before" = "$after" ]   # not refreshed -> gc did not fire
+  sleep 0.3
+  ! grep -q "Removed" "$HOME/.claude/session-explorer.log" 2>/dev/null
+}
