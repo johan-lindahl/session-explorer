@@ -1,7 +1,9 @@
 {
   "name": "session-explorer",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "description": "File-explorer-style session management for Claude Code",
+  "license": "MIT",
+  "homepage": "https://github.com/johan-lindahl/session-explorer",
   "hooks": {
     "SessionStart": [
       {
