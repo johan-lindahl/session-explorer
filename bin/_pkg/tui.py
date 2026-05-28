@@ -90,6 +90,7 @@ def _preview_text(s: dict) -> str:
         f"[b]{headline}[/]",
         "",
         field("Project", s.get("project_label") or "(unknown)"),
+        field("Path", s.get("project_path") or "(unknown)"),
         field("Folder", "/".join(segments) or "(none)"),
         field("Branch", s.get("branch") or "(none)"),
         field("Active", fmt_age(s.get("last_active_at"))),

@@ -887,3 +887,14 @@ async def test_left_right_collapse_and_expand_folder(index_path):
         assert find(app._tree.root, "planning/").is_expanded is False
         await pilot.press("right"); await pilot.pause()
         assert find(app._tree.root, "planning/").is_expanded is True
+
+
+def test_preview_text_shows_full_project_path():
+    """Several projects can share a basename (e.g. magento2) under different
+    roots, so the preview shows the full project_path to disambiguate."""
+    from _pkg.tui import _preview_text
+    s = {"sid": "x", "name_cached": "magento2",
+         "project_label": "magento2",
+         "project_path": "/Users/jl/clients/acme/magento2"}
+    text = _preview_text(s)
+    assert "/Users/jl/clients/acme/magento2" in text
