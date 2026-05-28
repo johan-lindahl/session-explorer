@@ -176,9 +176,10 @@ Auto-detection logic, first match wins:
   1. `$TERMINAL` env var
   2. `x-terminal-emulator` (Debian/Ubuntu meta)
   3. `gnome-terminal`, `konsole`, `xfce4-terminal`, `alacritty`, `kitty`, `wezterm`
-- **Windows / WSL** — out of scope for v1; falls through to "print + clipboard".
+- **WSL** — inside WSL `platform.system()` reports `Linux`, so the Linux probe runs first; when it finds no Linux GUI terminal (the common WSL case) and `_is_wsl()` is true, open a Windows Terminal window via `wt.exe wsl.exe -d <distro> -- bash -lc <cmd>` so the new window re-enters the same distro. Falls through to "print the command" when `wt.exe` is absent. Detection: `WSL_DISTRO_NAME` env or `microsoft` in `/proc/version`.
+- **Native Windows** (PowerShell/cmd, no WSL) — out of scope: the core relies on `fcntl` locking and a bash hook, neither of which exists there. Falls through to "print + clipboard".
 
-In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogfooding has shaken out the Textual UX. Windows / WSL lands in M5.
+In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogfooding has shaken out the Textual UX. WSL lands in M5; native Windows stays out of scope.
 
 ## Data model — `~/.claude/session-explorer-index.json`
 
@@ -382,7 +383,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 | M2 | Textual TUI: tree view, all keybindings, rename/move/delete/notes, preview pane, **context-size stats columns**. Linux launchers. |
 | M3 | `--gc` (old unnamed sessions; auto-fired once/day by the hook + manual; empty-folder pruning deferred — see edge case #7); `session-explorer uninstall`; search across notes/prompts/summaries. |
 | M4 | bats + pytest suites; CI; README quickstart with both install paths. |
-| M5 | Submit to `anthropics/claude-plugins-community`. Windows / WSL launcher. |
+| M5 | Submit to `anthropics/claude-plugins-community`. WSL launcher (shipped: `wt.exe` re-entry + fallback); native Windows out of scope. |
 
 ## Open questions
 

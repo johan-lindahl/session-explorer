@@ -65,8 +65,13 @@ cd session-explorer
 Both paths perform the same first-run setup: back up your existing
 `cleanupPeriodDays`, set it to 36500, and register the `SessionStart` hook.
 
-> **Platform note:** `/session-explorer:open` currently spawns a new
-> **macOS** Terminal.app window. Linux and Windows launchers are planned (M5).
+> **Platform note:** `/session-explorer:open` opens the TUI in a new terminal
+> window — **macOS** (Terminal.app) and **Linux** (your `$TERMINAL` or a known
+> emulator) are supported directly. On **Windows, use WSL**: the plugin runs as
+> a Linux app there, and the launcher opens a Windows Terminal window back into
+> your distro when `wt.exe` is available. If no launcher is found on any
+> platform, the command to run is printed so you can paste it into a terminal
+> yourself. Native (non-WSL) Windows is not supported.
 
 ## Usage
 
@@ -182,5 +187,6 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 M3 complete: the Textual TUI (M2), plus `--gc` retention with a once-daily
 auto-trigger, rescan (`F5`), `session-explorer uninstall`, and live filtering
-across names, notes, and prompts. Next up — M4 CI and M5 (community-marketplace
-submission, Linux/Windows launchers).
+across names, notes, and prompts. macOS, Linux, and WSL launchers ship; native
+Windows is out of scope. Next up — M4 CI and M5 (community-marketplace
+submission).
