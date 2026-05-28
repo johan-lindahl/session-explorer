@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Textual is vendored under bin/_pkg/_vendor/, so only the test runners
+      # need installing — never the runtime deps.
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip -r test/requirements-dev.txt
+
+      - name: Run pytest
+        run: python -m pytest test/ -q
+
+      - name: Install bats
+        run: npm install -g bats
+
+      - name: Run bats (shell-facing CLI / install / hook)
+        run: bats test/install.bats test/uninstall.bats test/hook.bats
