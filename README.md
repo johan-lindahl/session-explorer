@@ -12,23 +12,42 @@ See [`SPEC.md`](./SPEC.md) for the full design.
 
 ## Install
 
-### Option A — Claude Code marketplace (primary)
+This GitHub repo **is** the plugin marketplace — there's no separate packaging
+or publishing step. Installing and distributing are the same two commands.
 
-```bash
-/plugin marketplace add <owner>/session-explorer
-/plugin install session-explorer
+### Option A — Claude Code marketplace (recommended; also how you share it)
+
+Run these inside Claude Code:
+
+```
+/plugin marketplace add johan-lindahl/session-explorer
+/plugin install session-explorer@session-explorer
 ```
 
-### Option B — plain shell installer
+`session-explorer@session-explorer` is `<plugin-name>@<marketplace-name>`; both
+happen to be `session-explorer` here.
+
+**Distributing to colleagues:** the repo is public, so just send them those two
+lines — no access grants needed. When you push a new version, they update with:
+
+```
+/plugin marketplace update session-explorer
+/plugin install session-explorer@session-explorer
+```
+
+### Option B — plain shell installer (local development)
 
 ```bash
-git clone https://github.com/<owner>/session-explorer.git
+git clone https://github.com/johan-lindahl/session-explorer.git
 cd session-explorer
 ./install.sh
 ```
 
 Both paths perform the same first-run setup: back up your existing
 `cleanupPeriodDays`, set it to 36500, and register the `SessionStart` hook.
+
+> **Platform note:** `/session-explorer:open` currently spawns a new
+> **macOS** Terminal.app window. Linux and Windows launchers are planned (M5).
 
 ## Usage
 
