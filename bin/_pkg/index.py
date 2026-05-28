@@ -85,7 +85,29 @@ def _git_branch(cwd: str) -> "str | None":
     return None
 
 
-_TOKEN_WINDOW = 200_000  # v1 hardcode (Sonnet 4.6 default); see SPEC open question
+_STANDARD_WINDOW = 200_000   # default context window for current Claude 4.x models
+_LARGE_WINDOW = 1_000_000    # the 1M-context tier (beta opt-in)
+
+# Standard context window per model id. All current Claude 4.x models default to
+# 200K, so this is intentionally minimal — extend it when a model ships a
+# different *standard* window. The 1M-context tier is NOT encoded in the model
+# id, so _context_window infers it from observed usage instead.
+MODEL_WINDOWS: Dict[str, int] = {}
+
+
+def _context_window(model: "str | None", tokens: int) -> int:
+    """Denominator for the context-usage %.
+
+    Start from the model's standard window (default 200K). If the session has
+    already used more tokens than that window, it must be running on the
+    1M-context tier — which the model id doesn't reveal — so promote to 1M.
+    This keeps ordinary sessions at 200K while stopping large (e.g. 600K+)
+    sessions from pegging uselessly at 100%.
+    """
+    base = MODEL_WINDOWS.get(model or "", _STANDARD_WINDOW)
+    if tokens > base:
+        return _LARGE_WINDOW
+    return base
 
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
@@ -122,6 +144,8 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
         except FileNotFoundError:
             file_bytes = 0
         tokens = _jsonl.tokens_estimate(transcript_path)
+        model = _jsonl.latest_model(transcript_path)
+        window = _context_window(model, tokens)
         new_entry = {
             **existing,  # preserve notes and other user-edited fields
             "name_cached": _jsonl.session_name(transcript_path),
@@ -129,7 +153,8 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
             "message_count": _jsonl.message_count(transcript_path),
             "bytes": file_bytes,
             "tokens_estimate": tokens,
-            "tokens_window_pct": min(100, int(tokens * 100 / _TOKEN_WINDOW)),
+            "model": model,
+            "tokens_window_pct": min(100, int(tokens * 100 / window)),
             "project_path": cwd,
             "project_label": _project_label(cwd),
             "branch": _git_branch(cwd),

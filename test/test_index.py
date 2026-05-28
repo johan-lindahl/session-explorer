@@ -400,3 +400,41 @@ def test_record_session_uses_default_folder_store_path(tmp_path):
                          transcript_path=str(jsonl), cwd="/u/x/acme-api")
     sibling = str(tmp_path / "session-explorer-folders.json")
     assert folder_store.list_paths(sibling, "acme-api") == ["x"]
+
+
+def test_context_window_default_standard():
+    from _pkg.index import _context_window
+    assert _context_window("claude-opus-4-8", 50_000) == 200_000
+    assert _context_window(None, 0) == 200_000
+
+
+def test_context_window_promotes_to_1m_on_overflow():
+    from _pkg.index import _context_window
+    # A session that has used more than the standard window must be on the 1M tier.
+    assert _context_window("claude-opus-4-8", 620_000) == 1_000_000
+
+
+def test_context_window_uses_model_map(monkeypatch):
+    """A model with a non-default standard window is honored via the map."""
+    from _pkg import index
+    monkeypatch.setitem(index.MODEL_WINDOWS, "future-model-500k", 500_000)
+    assert index._context_window("future-model-500k", 100_000) == 500_000
+    # Overflow past that still promotes to 1M.
+    assert index._context_window("future-model-500k", 700_000) == 1_000_000
+
+
+def test_record_session_sets_model_and_window_pct(tmp_path):
+    """A >200K session records its model and computes pct against the 1M window."""
+    import json as _json
+    transcript = str(tmp_path / "BIG.jsonl")
+    with open(transcript, "w") as f:
+        f.write('{"type":"user","message":{"content":"hi"},"timestamp":"2026-05-20T10:00:00Z","cwd":"/p"}\n')
+        f.write('{"type":"assistant","message":{"model":"claude-opus-4-8",'
+                '"usage":{"cache_read_input_tokens":620000}},"timestamp":"2026-05-20T10:00:05Z"}\n')
+    idx_path = str(tmp_path / "index.json")
+    index.record_session(idx_path, session_id="BIG", transcript_path=transcript, cwd="/p")
+    s = index.load(idx_path)["sessions"]["BIG"]
+    assert s["model"] == "claude-opus-4-8"
+    assert s["tokens_estimate"] == 620000
+    # 620000 / 1_000_000 = 62%, not pegged at 100 (which 200K would give).
+    assert s["tokens_window_pct"] == 62

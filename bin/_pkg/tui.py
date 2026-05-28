@@ -95,6 +95,7 @@ def _preview_text(s: dict) -> str:
         field("Created", (s.get("created_at") or "")[:10] or "—"),
         field("Messages", str(s.get("message_count", 0))),
         field("Context", context),
+        field("Model", s.get("model") or "(unknown)"),
         field("Session", sid or "—"),
         "",
         "[b]Notes[/]",

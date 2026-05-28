@@ -155,6 +155,23 @@ def tokens_estimate(path: str) -> int:
         return 0
 
 
+def latest_model(path: str) -> Optional[str]:
+    """Model id from the latest assistant message that carries a real one.
+
+    `message.model` is present on every assistant line (e.g. "claude-opus-4-8").
+    Skips "<synthetic>" (injected, non-model lines). Returns None when no
+    assistant message records a model. Used to pick the context-window
+    denominator (see index._context_window).
+    """
+    last = None
+    for msg in _iter_messages(path):
+        if msg.get("type") == "assistant":
+            model = (msg.get("message") or {}).get("model")
+            if model and model != "<synthetic>":
+                last = model
+    return last
+
+
 def last_active_at(path: str) -> Optional[str]:
     """ISO8601 timestamp of the LAST line that carries one; None if missing/empty."""
     last = None

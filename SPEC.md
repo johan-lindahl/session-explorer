@@ -136,7 +136,7 @@ Each session row shows:
 
 - **Age** since `last_active_at` (relative).
 - **Approx. tokens.** Derived from `cache_read_input_tokens` of the latest assistant message in the JSONL — accurate when caching is active. Falls back to `bytes / 4` when the session has no cached turns (early sessions, cache disabled). Always prefixed with `~` in the UI to signal it's an estimate.
-- **Context-window %.** v1 hardcodes a 200K denominator (Sonnet 4.6 default). Per-message model id isn't recorded in the JSONL, so model-aware sizing is an M2/M3 follow-up.
+- **Context-window %.** The denominator is model-aware: `index._context_window(model, tokens)` starts from the model's standard window (`MODEL_WINDOWS`, default 200K) and promotes to 1M when observed tokens exceed the standard window — because the 1M-context tier is a beta opt-in that the model id does NOT encode, so it's inferred from usage. The session's model id (`jsonl.latest_model`, from `message.model` on the latest non-synthetic assistant line) is cached in the index and shown in the preview pane.
 - **Message count** (`wc -l` on the JSONL; always exact).
 - **First-prompt tail** (truncated; full text in the preview pane).
 
@@ -200,7 +200,8 @@ In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogf
       "message_count": 47,
       "bytes": 481203,                          // JSONL file size
       "tokens_estimate": 38234,                 // from cache_read_input_tokens, fallback bytes/4
-      "tokens_window_pct": 19                   // assumes 200K denominator (v1)
+      "model": "claude-opus-4-8",               // latest assistant message.model (or null)
+      "tokens_window_pct": 19                   // model-aware denominator (200K, or 1M when tokens overflow)
     }
   }
 }
@@ -389,7 +390,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 - **Claude's `/rename` JSONL format.** Decided during M1 by inspecting a real renamed transcript. Fallback: `display_name` override field in the index.
 - **Exact `message.usage` field path.** v1 reads `cache_read_input_tokens` from the latest assistant message; the precise JSON path is confirmed during M1 by inspecting a real transcript.
-- **Model-aware context window.** v1 hardcodes a 200K denominator. Per-message model id isn't in the JSONL; we'd need to read the session's startup config or Claude Code settings to pick the right window (200K Sonnet vs 1M Opus 1M-context vs 200K Haiku). Revisit in M2/M3 if the hardcode misleads Opus/Haiku users.
+- **Model-aware context window.** ✅ Resolved. `message.model` *is* present on every assistant line (the earlier "isn't in the JSONL" assumption was wrong). The denominator now reads the latest model id and maps it through `MODEL_WINDOWS` (default 200K), promoting to 1M when observed tokens exceed the standard window — the 1M-context tier isn't encoded in the model id, so it's inferred from usage. Remaining nuance: a 1M-context session that has used <200K is still measured against 200K until it grows past it; acceptable and self-correcting.
 - **In-place compaction.** Deferred past v1 (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.
 - **Preview-pane content.** Resolved in M2 dogfooding: headline is the full display name (the grid truncates it), followed by project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. The `summary` block was dropped — the field is never populated today. May still add "last assistant message" later if the layout has room.
 - **`session-explorer browse` as a standalone shell command.** Removed from this spec — the TUI is only reachable via the slash command's launcher. Easy to re-add as a thin CLI wrapper in M3 if users ask. Decision: ship without it; let usage tell us if it's needed.
