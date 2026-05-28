@@ -91,6 +91,23 @@ def remove(path: str, project: str, folder: str) -> None:
     mutate(path, mutator)
 
 
+def remove_subtree(path: str, project: str, folder: str) -> None:
+    """Remove `folder` and every descendant path (anything under `folder/`)
+    from `project`'s list. No-op for missing entries. Used to delete an empty
+    folder along with its empty subfolders."""
+    prefix = folder + "/"
+
+    def mutator(data: dict) -> dict:
+        projects = data.get("projects", {})
+        if project in projects:
+            projects[project] = [
+                f for f in projects[project]
+                if f != folder and not f.startswith(prefix)
+            ]
+        return data
+    mutate(path, mutator)
+
+
 def list_paths(path: str, project: str) -> List[str]:
     """Return a sorted copy of `project`'s stored folder paths (may be empty)."""
     data = load(path)

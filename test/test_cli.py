@@ -13,7 +13,7 @@ _FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 def test_version_flag_prints_version():
     result = subprocess.run([_BIN, "--version"], capture_output=True, text=True)
     assert result.returncode == 0
-    assert "session-explorer 0.7.2" in result.stdout
+    assert "session-explorer 0.7.3" in result.stdout
 
 
 def test_help_when_no_args():

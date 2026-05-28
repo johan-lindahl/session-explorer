@@ -111,6 +111,23 @@ def _preview_text(s: dict) -> str:
     return "\n".join(lines)
 
 
+def _folder_has_sessions(index_data: dict, project: str, folder_segments: list) -> bool:
+    """True if any session in `project` lives under the folder `folder_segments`
+    (its name's folder path has them as a prefix). Pure, so it can be
+    unit-tested. Unnamed sessions have no folder and never count."""
+    n = len(folder_segments)
+    for s in index_data.get("sessions", {}).values():
+        if s.get("project_label") != project:
+            continue
+        name = s.get("name_cached")
+        if not name:
+            continue
+        segs, _ = split_path(name)
+        if segs[:n] == folder_segments:
+            return True
+    return False
+
+
 def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
                       filter_active: bool, scanned: bool) -> "str | None":
     """Message for the tree pane when no rows are visible, else None.
@@ -163,7 +180,7 @@ def _help_text() -> str:
         key("r", "Rename (also re-files into a different folder)"),
         key("m", "Move the selected session to a folder"),
         key("n", "New folder under the current project/folder"),
-        key("d", "Delete the selected session (confirms)"),
+        key("d", "Delete the selected session, or an empty folder (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
         key("u", "Toggle visibility of unnamed sessions"),
         key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
@@ -652,22 +669,52 @@ class SessionExplorerApp(App):
 
     def action_delete(self) -> None:
         node = self._tree.cursor_node
-        if not node or not node.data or "sid" not in node.data:
-            self.bell()
+        data = node.data if (node and node.data) else {}
+
+        # Session leaf: delete the session + its JSONL (with confirmation).
+        if "sid" in data:
+            sid = data["sid"]
+            name = data.get("name_cached") or sid[:8]
+
+            def after(ok: bool) -> None:
+                if not ok:
+                    return
+                from .delete import delete_session
+                delete_session(self._index_path, sid)
+                self._populate()
+
+            self.push_screen(
+                ConfirmScreen(f"Delete '{name}'? This removes the JSONL too."), after
+            )
             return
-        sid = node.data["sid"]
-        name = node.data.get("name_cached") or sid[:8]
+
+        # Folder node (has segments, no sid): delete it only if empty.
+        segments = data.get("segments") or []
+        project = data.get("project")
+        if project and segments:
+            self._delete_folder(project, segments)
+            return
+
+        # Project node or non-selectable row.
+        self.bell()
+
+    def _delete_folder(self, project: str, segments: list) -> None:
+        from . import folder_store as _fs
+        folder_path = "/".join(segments)
+        if _folder_has_sessions(_index.load(self._index_path), project, segments):
+            self.notify(
+                f"Cannot delete '{folder_path}': folder is not empty.",
+                severity="warning",
+            )
+            return
 
         def after(ok: bool) -> None:
             if not ok:
                 return
-            from .delete import delete_session
-            delete_session(self._index_path, sid)
+            _fs.remove_subtree(_fs.default_path_for(self._index_path), project, folder_path)
             self._populate()
 
-        self.push_screen(
-            ConfirmScreen(f"Delete '{name}'? This removes the JSONL too."), after
-        )
+        self.push_screen(ConfirmScreen(f"Delete empty folder '{folder_path}'?"), after)
 
     def action_notes(self) -> None:
         node = self._tree.cursor_node

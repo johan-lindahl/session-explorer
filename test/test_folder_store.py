@@ -94,3 +94,20 @@ def test_list_paths_returns_sorted_copy(tmp_path):
 def test_list_paths_missing_project_returns_empty(tmp_path):
     path = str(tmp_path / "f.json")
     assert folder_store.list_paths(path, "p1") == []
+
+
+def test_remove_subtree_removes_folder_and_descendants(tmp_path):
+    p = str(tmp_path / "fs.json")
+    for f in ["a", "a/b", "a/b/c", "a2", "other"]:
+        folder_store.add(p, "proj", f)
+    folder_store.remove_subtree(p, "proj", "a")
+    # "a" and everything under "a/" gone; sibling "a2" (not a descendant) kept.
+    assert folder_store.list_paths(p, "proj") == ["a2", "other"]
+
+
+def test_remove_subtree_leaf_only(tmp_path):
+    p = str(tmp_path / "fs.json")
+    for f in ["a", "a/b", "a/b/c"]:
+        folder_store.add(p, "proj", f)
+    folder_store.remove_subtree(p, "proj", "a/b")
+    assert folder_store.list_paths(p, "proj") == ["a"]
