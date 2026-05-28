@@ -57,12 +57,14 @@ run_hook() {  # run_hook  (reads $PAYLOAD on stdin)
   mkdir -p "$HOME/.claude"
   stamp="$HOME/.claude/.session-explorer.gc"
   : > "$stamp"
-  # Backdate 1 hour.
-  touch -t "$(date -v-1H +%Y%m%d%H%M 2>/dev/null || date -d '1 hour ago' +%Y%m%d%H%M)" "$stamp"
-  before="$(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp")"
+  # Backdate 1 hour and read mtime via python3 (guaranteed present) so the test
+  # doesn't depend on BSD-vs-GNU `date`/`stat` flag differences — the macOS-only
+  # `date -v` / `stat -f` form silently misbehaved on the Linux CI runner.
+  python3 -c "import os,time; t=time.time()-3600; os.utime('$stamp',(t,t))"
+  before="$(python3 -c "import os; print(int(os.path.getmtime('$stamp')))")"
   run run_hook
   [ "$status" -eq 0 ]
-  after="$(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp")"
+  after="$(python3 -c "import os; print(int(os.path.getmtime('$stamp')))")"
   [ "$before" = "$after" ]   # not refreshed -> gc did not fire
   sleep 0.3
   ! grep -q "Removed" "$HOME/.claude/session-explorer.log" 2>/dev/null
