@@ -34,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     index_p.add_argument("--refresh", action="store_true")
     index_p.add_argument("--backfill", action="store_true",
                          help="Scan ~/.claude/projects/ and index any session not yet tracked.")
+    index_p.add_argument("--gc", action="store_true",
+                         help="Delete old unnamed sessions (retention cleanup).")
+    index_p.add_argument("--dry-run", action="store_true",
+                         help="With --gc: report what would be removed, delete nothing.")
+    index_p.add_argument("--retention-days", type=int, default=30, metavar="N",
+                         help="With --gc: delete unnamed sessions idle longer than N days (default 30).")
 
     uninstall_p = sub.add_parser(
         "uninstall",
@@ -107,7 +113,19 @@ def _cmd_index(args) -> int:
         added = _index.backfill(path)
         print(f"Backfilled {added} session(s) from ~/.claude/projects/")
         return 0
-    print("index: pass --record SID TRANSCRIPT CWD, --refresh, or --backfill", file=sys.stderr)
+    if args.gc:
+        from _pkg import gc as _gc
+        result = _gc.collect_garbage(
+            path, retention_days=args.retention_days, dry_run=args.dry_run)
+        n = len(result["removed"])
+        live = result["skipped_live"]
+        suffix = f" ({live} live session(s) skipped)" if live else ""
+        if args.dry_run:
+            print(f"[dry-run] Would remove {n} old unnamed session(s){suffix}")
+        else:
+            print(f"Removed {n} old unnamed session(s){suffix}")
+        return 0
+    print("index: pass --record SID TRANSCRIPT CWD, --refresh, --backfill, or --gc", file=sys.stderr)
     return 2
 
 

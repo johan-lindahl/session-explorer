@@ -89,6 +89,18 @@ if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
   if [ -n "${SID}" ] && [ -n "${TPATH}" ] && [ -n "${CWD}" ]; then
     "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" 2>>"${LOG}" || log "warn: index --record failed for ${SID}"
   fi
+
+  # --- Retention GC: at most once per 24h, fully detached so startup never waits ---
+  # cleanupPeriodDays is neutralised above, so the plugin must expire old unnamed
+  # sessions itself. Throttle via a stamp file; stamp BEFORE launching so a slow
+  # or failed gc can't re-fire on the next session start.
+  GC_STAMP="${CLAUDE_DIR}/.session-explorer.gc"
+  if [ ! -f "${GC_STAMP}" ] || [ -n "$(find "${GC_STAMP}" -mmin +1440 2>/dev/null)" ]; then
+    : > "${GC_STAMP}" 2>/dev/null || true
+    # Redirect the gc child's fds away from the hook's stdout/stderr so the
+    # caller doesn't block waiting on an inherited pipe; background the subshell.
+    ( "${CLI}" index --gc >>"${LOG}" 2>&1 ) >/dev/null 2>&1 &
+  fi
 else
   log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-(unset)}; ~/.local/bin checked; PATH checked"
 fi

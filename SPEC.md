@@ -277,12 +277,24 @@ deletion criteria:
   AND JSONL mtime older than 60 seconds
 ```
 
+`last_active_at` is read from the index; when it's missing or unparseable, the JSONL's mtime is used to judge age. Deletion removes both the JSONL and the index row, atomically under the index lock (the live-check and `unlink` run inside the same `index.mutate()` to minimise TOCTOU against a concurrent hook write).
+
+Flags:
+
+- `--retention-days N` — override the 30-day default.
+- `--dry-run` — report what would be removed (and how many live sessions were skipped) without touching anything.
+
+When it runs:
+
+- **Automatically** — the `SessionStart` hook fires `session-explorer index --gc` at most once per 24 hours, fully detached so startup never blocks. A stamp file `~/.claude/.session-explorer.gc` throttles it; the stamp is written *before* gc launches, so a slow or failed run can't re-fire on the next session start. Because native cleanup is neutralised, this auto-trigger is what actually expires old unnamed stubs over time.
+- **Manually** — run `session-explorer index --gc` any time, or wire it into a cron / launchd job for a fixed schedule.
+
 Who writes the `36500`:
 
 - **Marketplace install** — `SessionStart` hook's first-run step.
 - **Plain `install.sh`** — eagerly, so the first hook fire is a no-op.
 
-`~/.claude/.session-explorer.backup` holds the prior value so uninstall can restore it. `--gc` runs manually or via a user-configured cron / launchd job.
+`~/.claude/.session-explorer.backup` holds the prior value so uninstall can restore it.
 
 ## Installation
 
@@ -356,7 +368,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 4. **`/rename` inside Claude Code.** The next `SessionStart` hook fire refreshes `name_cached`. Mid-session renames are visible after closing/reopening the TUI or running `session-explorer index --refresh`.
 5. **Concurrent index writes** (two `claude` sessions starting at once). Every index write uses `flock` + temp-file-rename.
 6. **Folder collisions.** Renaming `plans/sprint14` to `plans/sprint15` moves the session within the folder. Renaming to `sprint14` (no slash) drops it to ungrouped. Deleting a session leaves its folder behind only if the folder also appears in the folder store; otherwise the folder evaporates with the last session.
-7. **Empty-folder accumulation.** `--gc` also prunes entries from the folder store that have remained empty for >90 days.
+7. **Empty-folder accumulation.** *Deferred (still open).* The intent is for `--gc` to also prune folder-store entries that have remained empty for >90 days, but the folder store records no per-folder timestamps today, so "empty for 90 days" isn't computable without a schema change. v1 ships session GC only; empty-folder pruning needs an `empty_since` field (folders.json schema bump) before it can be implemented. Empty folders persist until then.
 8. **Launcher fallback.** No terminal detected → CLI prints the absolute command + copies to clipboard; the slash command's response shows "Run: …".
 9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. A fresh install creates the index at `version: 1` (no `folders[]` since the field is never written to a new file); the one-shot v1→v2 migration runs at every CLI entry point and bumps `version` to `2` (moving any legacy `folders[]` to the folder store under `(unfiled)`). The migration is idempotent — once `version >= 2`, it short-circuits. Readers tolerate either version.
 10. **Token estimate accuracy.** Per-message `input_tokens` / `output_tokens` in the JSONL are streaming-time estimates and can be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` so users know it's approximate.
@@ -368,7 +380,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 | M0 | Spec lands. (This file.) |
 | M1 | Plugin manifest + `marketplace.json` + `SessionStart` hook with first-run setup + index core (`record`, `refresh`, `list`). Installable from a self-hosted marketplace. macOS terminal launcher. Reverse-engineer `/rename` JSONL format. |
 | M2 | Textual TUI: tree view, all keybindings, rename/move/delete/notes, preview pane, **context-size stats columns**. Linux launchers. |
-| M3 | `--gc` (sessions + empty folders); `session-explorer uninstall`; search across notes/prompts/summaries. |
+| M3 | `--gc` (old unnamed sessions; auto-fired once/day by the hook + manual; empty-folder pruning deferred — see edge case #7); `session-explorer uninstall`; search across notes/prompts/summaries. |
 | M4 | bats + pytest suites; CI; README quickstart with both install paths. |
 | M5 | Submit to `anthropics/claude-plugins-community`. Windows / WSL launcher. |
 

@@ -117,3 +117,46 @@ def test_launch_invokes_osascript_on_mac(monkeypatch):
     assert result.returncode == 0, result.stderr
     assert "session-explorer" in result.stdout
     assert "tui" in result.stdout  # the would-be terminal runs `... tui`
+
+
+def _write_gc_index(tmp_path):
+    """Index with one old, unnamed session backed by an idle JSONL.
+
+    last_active_at is 45 days back and the JSONL mtime is an hour old (>60s),
+    so the session is eligible and not mistaken for a live one. Both are keyed
+    to the real wall clock because the CLI uses the real `now`.
+    """
+    import json
+    import time
+    from datetime import datetime, timedelta, timezone
+    jsonl = tmp_path / "old.jsonl"
+    jsonl.write_text('{"type":"user"}\n')
+    past = time.time() - 3600
+    os.utime(jsonl, (past, past))
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    idx = tmp_path / "index.json"
+    idx.write_text(json.dumps({"version": 2, "sessions": {
+        "sid": {"name_cached": None, "last_active_at": old, "transcript_path": str(jsonl)}}}))
+    return idx, jsonl
+
+
+def test_index_gc_deletes_old_unnamed(tmp_path):
+    import json
+    idx, jsonl = _write_gc_index(tmp_path)
+    env = {**os.environ, "SESSION_EXPLORER_INDEX": str(idx)}
+    result = subprocess.run([_BIN, "index", "--gc"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Removed 1" in result.stdout
+    assert not jsonl.exists()
+    assert "sid" not in json.loads(idx.read_text())["sessions"]
+
+
+def test_index_gc_dry_run_changes_nothing(tmp_path):
+    import json
+    idx, jsonl = _write_gc_index(tmp_path)
+    env = {**os.environ, "SESSION_EXPLORER_INDEX": str(idx)}
+    result = subprocess.run([_BIN, "index", "--gc", "--dry-run"], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "dry-run" in result.stdout.lower()
+    assert jsonl.exists()
+    assert "sid" in json.loads(idx.read_text())["sessions"]

@@ -4,11 +4,30 @@ A Claude Code plugin that turns `~/.claude/projects/*.jsonl` transcripts into a
 file-explorer-style listing: browse, organize, and resume sessions from a single
 slash command.
 
-M2 ships a Textual TUI with arrow navigation, expand/collapse, rename, move,
-delete, notes, preview pane, and live filter. The text-mode `list` subcommand
+The Textual TUI gives you arrow navigation, expand/collapse, rename, move,
+delete, notes, a preview pane, and live filter. The text-mode `list` subcommand
 remains for scripting.
 
 See [`SPEC.md`](./SPEC.md) for the full design.
+
+## What it looks like
+
+Sessions are grouped by project, then by the `/`-separated folders encoded in
+their names. Stat columns show age, approximate context size, the share of the
+context window used, and message count.
+
+![The session-explorer tree view](docs/images/tree.png)
+
+Press `Space` for a preview pane with the full name, project, branch, notes,
+first prompt, and transcript path:
+
+![The preview pane](docs/images/preview.png)
+
+Press `h` for the built-in help (it also auto-opens on first launch):
+
+![The help overlay](docs/images/help.png)
+
+> Screenshots use sample data.
 
 ## Install
 
@@ -110,6 +129,27 @@ create nested folders of any depth. Rename a session with Claude's built-in
 `/rename` command; the next session start (or `session-explorer index
 --refresh`) reflects the change.
 
+## Cleanup & retention
+
+Installing sets `cleanupPeriodDays` to 36500, which disables Claude Code's own
+session expiry — so the plugin handles cleanup instead. `session-explorer index
+--gc` deletes **unnamed** sessions idle longer than the retention window
+(default 30 days). Named (renamed) sessions are never touched, and sessions that
+look live — a transcript modified in the last 60 seconds, or one holding an
+active lock — are skipped.
+
+You don't have to run it manually: the `SessionStart` hook fires `--gc` at most
+once every 24 hours, in the background, so old unnamed stubs expire on their own.
+
+```bash
+session-explorer index --gc                   # delete now (defaults)
+session-explorer index --gc --dry-run         # show what would be deleted
+session-explorer index --gc --retention-days 7
+```
+
+`--dry-run` reports the count (and how many live sessions it skipped) without
+deleting anything.
+
 ## Uninstall
 
 Uninstalling restores your original `cleanupPeriodDays` (saved at install time)
@@ -140,6 +180,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-M2 — Textual TUI complete. M3 in progress: rescan (`F5`) and the
-`session-explorer uninstall` command have shipped; `--gc` retention and the
-Windows launcher are still pending.
+M3 complete: the Textual TUI (M2), plus `--gc` retention with a once-daily
+auto-trigger, rescan (`F5`), `session-explorer uninstall`, and live filtering
+across names, notes, and prompts. Next up — M4 CI and M5 (community-marketplace
+submission, Linux/Windows launchers).
