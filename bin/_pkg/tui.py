@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, OptionList, Static, TextArea, Tree
+from textual.widgets import Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from . import index as _index
@@ -164,7 +164,7 @@ def _help_text() -> str:
         key("d", "Delete the selected session (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
         key("u", "Toggle visibility of unnamed sessions"),
-        key("R", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
+        key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
         key("/", "Live filter across name, notes, first prompt"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
@@ -313,6 +313,7 @@ class SessionExplorerApp(App):
     #treepane { width: 1fr; }
     #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
     #empty-state { padding: 2 2; color: $text-muted; }
+    #scanbar { margin: 0 2 1 2; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     HelpScreen { align: center middle; }
@@ -328,7 +329,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
-        Binding("R", "rescan", "Rescan"),
+        Binding("f5", "rescan", "Rescan"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
@@ -385,8 +386,10 @@ class SessionExplorerApp(App):
         self._preview.display = False
         self._empty = Static("", id="empty-state")
         self._empty.display = False
+        self._progress = ProgressBar(show_eta=False, id="scanbar")
+        self._progress.display = False
         yield Horizontal(
-            Vertical(self._colheader, self._tree, self._empty, id="treepane"),
+            Vertical(self._colheader, self._tree, self._empty, self._progress, id="treepane"),
             self._preview,
         )
         self._filter = Input(placeholder="filter…", id="filter")
@@ -460,6 +463,10 @@ class SessionExplorerApp(App):
         def visible_count(node):
             n = sum(1 for sid, s in node["_sessions"] if self._matches(sid, s))
             return n + sum(visible_count(c) for c in node["_folders"].values())
+
+        # The scan UI is transient — only action_rescan/_on_progress show it.
+        # _populate always runs after a scan completes, so clear it here.
+        self._progress.display = False
 
         visible = sum(visible_count(p) for p in tree.values())
         msg = _empty_state_text(
@@ -696,14 +703,34 @@ class SessionExplorerApp(App):
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread
-        # to keep the UI responsive on large histories.
+        # to keep the UI responsive on large histories. Show the scan UI now so
+        # there's no flash of the old tree before the first progress callback.
         self.sub_title = "scanning ~/.claude/projects/…"
+        self._empty.update("Scanning ~/.claude/projects/…")
+        self._empty.display = True
+        self._tree.display = False
+        self._colheader.display = False
+        self._progress.update(total=None, progress=0)  # indeterminate until pre-count
+        self._progress.display = True
         self._rescan_worker()
+
+    def _on_progress(self, done: int, total: int) -> None:
+        """Update the scan UI. Called on the main thread (marshalled from the
+        worker via call_from_thread)."""
+        self._empty.update(f"Scanning ~/.claude/projects/…  {done}/{total}")
+        self._empty.display = True
+        self._tree.display = False
+        self._colheader.display = False
+        self._progress.update(total=total or None, progress=done)
+        self._progress.display = True
 
     @work(thread=True, exclusive=True)
     def _rescan_worker(self) -> None:
+        def progress(done: int, total: int) -> None:
+            self.call_from_thread(self._on_progress, done, total)
         try:
-            _index.reindex(self._index_path, projects_root=self._projects_root)
+            _index.reindex(self._index_path, projects_root=self._projects_root,
+                           progress=progress)
         finally:
             self._scanned = True
             self.call_from_thread(self._populate)

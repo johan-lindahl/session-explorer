@@ -360,6 +360,31 @@ def test_reindex_preserves_notes_and_name(tmp_path):
     assert data["sessions"]["AAA"]["name_cached"] == "planning-sprint14-custom"
 
 
+def test_reindex_reports_progress(tmp_path):
+    """reindex(progress=cb) emits (done, total) over both phases: an initial
+    (0, N), then one tick per session processed, ending at (N, N)."""
+    projects = tmp_path / "projects"
+    proj = projects / "-p"
+    proj.mkdir(parents=True)
+    # One tracked session whose JSONL still exists -> refresh re-records it (1 tick).
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), proj / "AAA.jsonl")
+    idx_path = str(tmp_path / "index.json")
+    index.record_session(idx_path, session_id="AAA",
+                         transcript_path=str(proj / "AAA.jsonl"), cwd="/p")
+    # Two untracked JSONLs -> backfill adds them (2 ticks).
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), proj / "BBB.jsonl")
+    shutil.copy(_os.path.join(_FIX, "unnamed.jsonl"), proj / "CCC.jsonl")
+
+    calls = []
+    index.reindex(idx_path, projects_root=str(projects),
+                  progress=lambda done, total: calls.append((done, total)))
+
+    assert calls[0] == (0, 3)          # initial, total pre-counted
+    assert calls[-1] == (3, 3)         # all units done
+    assert all(t == 3 for _, t in calls)
+    assert [d for d, _ in calls] == [0, 1, 2, 3]
+
+
 def test_record_session_uses_default_folder_store_path(tmp_path):
     """When folder_store_path is None, derive a sibling of the index file."""
     from _pkg import folder_store

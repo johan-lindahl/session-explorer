@@ -106,7 +106,7 @@ session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (u)      
 ▶ session-explorer (4)
 ```
 
-Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Unnamed sessions are hidden by default** — only "kept" sessions (those with a Claude-assigned name) appear in the default view, mirroring the spec's "kept ⇔ named" rule and cutting the visual noise from stub records (sessions started but never used). Press `u` to surface unnamed sessions when you need to rename or delete them; they then appear under an `(unnamed)` sub-group per project. The header advertises the hidden count. When the visible tree is empty, the tree pane shows an actionable empty-state instead of blank space — prompting `R` to scan when nothing is indexed yet, or `u` when sessions exist but are all unnamed/hidden.
+Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Unnamed sessions are hidden by default** — only "kept" sessions (those with a Claude-assigned name) appear in the default view, mirroring the spec's "kept ⇔ named" rule and cutting the visual noise from stub records (sessions started but never used). Press `u` to surface unnamed sessions when you need to rename or delete them; they then appear under an `(unnamed)` sub-group per project. The header advertises the hidden count. When the visible tree is empty, the tree pane shows an actionable empty-state instead of blank space — prompting `F5` to scan when nothing is indexed yet, or `u` when sessions exist but are all unnamed/hidden.
 
 ### Keybindings
 
@@ -122,7 +122,7 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
 | `u` | Toggle visibility of unnamed sessions (hidden by default). |
-| `R` | Rescan: import any sessions under `~/.claude/projects/` not yet tracked and refresh cached fields (runs `index.reindex` in a background worker). Use after a fresh install to pull in pre-existing sessions. |
+| `F5` | Rescan: import any sessions under `~/.claude/projects/` not yet tracked and refresh cached fields (runs `index.reindex` in a background worker, with a determinate progress bar). Use after a fresh install to pull in pre-existing sessions. |
 | `/` | Live filter across name, notes, first prompt, summary. |
 | `h` | Show the help overlay (slash-folder naming, the named-only default + `u`, full key list, author credit). Auto-opens once on first launch, then only on demand. |
 | `Esc` | Close the preview pane, the help overlay, or clear an active filter. Does **not** quit. |
@@ -230,7 +230,7 @@ at every CLI entry point.
 
 **`session-explorer index --backfill`** populates the index from every JSONL under `~/.claude/projects/` that isn't already tracked. Pre-install sessions don't fire the `SessionStart` hook, so without backfill they'd be invisible. Backfill recovers `cwd` per session from the JSONL's envelope lines (via `jsonl.session_cwd()`) since the hook payload isn't available retrospectively. Existing entries are left untouched — backfill is additive; use `--refresh` to recompute caches for already-tracked sessions. Safe to re-run.
 
-`index.reindex()` combines the two (refresh then backfill, so each session is touched once) and is what the TUI's `R` key calls. This is the user-facing way to populate a fresh install — nothing imports pre-install sessions automatically (the `SessionStart` hook deliberately stays out of the scan path so it never blocks startup). A freshly-installed explorer shows an empty-state prompting `R`; after a rescan the imported sessions are unnamed, so the empty-state then prompts `u` to surface them.
+`index.reindex()` combines the two (refresh then backfill, so each session is touched once; accepts a `progress(done, total)` callback for the TUI's progress bar) and is what the TUI's `F5` key calls. This is the user-facing way to populate a fresh install — nothing imports pre-install sessions automatically (the `SessionStart` hook deliberately stays out of the scan path so it never blocks startup). A freshly-installed explorer shows an empty-state prompting `F5`; after a rescan the imported sessions are unnamed, so the empty-state then prompts `u` to surface them.
 
 ## Hooks
 

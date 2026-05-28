@@ -152,7 +152,8 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
     return result
 
 
-def backfill(index_path: str, projects_root: "str | None" = None) -> int:
+def backfill(index_path: str, projects_root: "str | None" = None,
+             on_session: "Callable[[], None] | None" = None) -> int:
     """Index every JSONL under ~/.claude/projects/ that isn't already tracked.
 
     For each new session, recovers `cwd` from the JSONL's envelope lines via
@@ -160,7 +161,8 @@ def backfill(index_path: str, projects_root: "str | None" = None) -> int:
     pre-install sessions). Skips sessions already in the index — existing
     entries are refreshed via `--refresh`, not here.
 
-    Returns the count of newly-added sessions.
+    `on_session`, if given, is called once per newly-added session (for progress
+    reporting). Returns the count of newly-added sessions.
     """
     projects_root = projects_root or os.path.expanduser("~/.claude/projects")
     if not os.path.isdir(projects_root):
@@ -182,6 +184,8 @@ def backfill(index_path: str, projects_root: "str | None" = None) -> int:
             try:
                 record_session(index_path, sid, transcript_path, cwd)
                 added += 1
+                if on_session:
+                    on_session()
             except Exception:
                 # Pre-install JSONLs can be malformed in edge ways; skip
                 # silently rather than abort the whole scan.
@@ -189,12 +193,14 @@ def backfill(index_path: str, projects_root: "str | None" = None) -> int:
     return added
 
 
-def refresh_all(index_path: str) -> dict:
+def refresh_all(index_path: str,
+                on_session: "Callable[[], None] | None" = None) -> dict:
     """Recompute every session's cached fields; prune entries whose JSONL is gone.
 
     The prune phase runs inside mutate() so a concurrent hook can't lose a write
     via a load/save race. record_session uses its own mutate() per call, which
-    correctly merges with any session added between iterations.
+    correctly merges with any session added between iterations. `on_session`, if
+    given, is called once per recomputed (surviving) session.
     """
     def prune(data: dict) -> dict:
         keep: "dict[str, dict]" = {}
@@ -213,10 +219,37 @@ def refresh_all(index_path: str) -> dict:
             transcript_path=entry["transcript_path"],
             cwd=entry.get("project_path", ""),
         )
+        if on_session:
+            on_session()
     return load(index_path)
 
 
-def reindex(index_path: str, projects_root: "str | None" = None) -> dict:
+def _reindex_units(index_path: str, projects_root: "str | None") -> int:
+    """How many sessions a reindex will touch: surviving tracked sessions
+    (refresh re-records these) plus untracked JSONLs on disk (backfill adds
+    these). Used to pre-count the progress denominator."""
+    data = load(index_path)
+    tracked = data.get("sessions", {})
+    refresh_n = sum(
+        1 for e in tracked.values()
+        if e.get("transcript_path") and os.path.exists(e["transcript_path"])
+    )
+    root = projects_root or os.path.expanduser("~/.claude/projects")
+    backfill_n = 0
+    if os.path.isdir(root):
+        tracked_ids = set(tracked.keys())
+        for project_dir in os.listdir(root):
+            full = os.path.join(root, project_dir)
+            if not os.path.isdir(full):
+                continue
+            for fname in os.listdir(full):
+                if fname.endswith(".jsonl") and fname[:-len(".jsonl")] not in tracked_ids:
+                    backfill_n += 1
+    return refresh_n + backfill_n
+
+
+def reindex(index_path: str, projects_root: "str | None" = None,
+            progress: "Callable[[int, int], None] | None" = None) -> dict:
     """Recompute tracked sessions (pruning dead JSONLs), then import any
     untracked sessions under ~/.claude/projects/.
 
@@ -224,11 +257,23 @@ def reindex(index_path: str, projects_root: "str | None" = None) -> dict:
     then adds the rest. Non-destructive: notes and custom-title names survive
     (see record_session). Returns {"added": int, "total": int}.
 
-    This is the user-facing "rescan" the TUI binds to `R`; nothing imports
-    pre-install sessions automatically.
+    `progress`, if given, is called as progress(done, total): once with
+    (0, total) up front, then after each session processed. This is the
+    user-facing "rescan" the TUI binds to F5; nothing imports pre-install
+    sessions automatically.
     """
-    refresh_all(index_path)
-    added = backfill(index_path, projects_root=projects_root)
+    units = _reindex_units(index_path, projects_root)
+    done = [0]
+    if progress:
+        progress(0, units)
+
+    def tick() -> None:
+        done[0] += 1
+        if progress:
+            progress(done[0], units)
+
+    refresh_all(index_path, on_session=tick)
+    added = backfill(index_path, projects_root=projects_root, on_session=tick)
     total = len(load(index_path).get("sessions", {}))
     return {"added": added, "total": total}
 

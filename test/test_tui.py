@@ -668,12 +668,27 @@ async def test_rescan_imports_sessions_from_projects_root(tmp_path):
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._empty.display is True            # empty index → prompt
-        await pilot.press("R")
+        await pilot.press("f5")
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app._empty.display is False           # imported (named) session visible
+        assert app._progress.display is False        # progress bar hidden once done
 
     assert "AAA" in json.load(open(idx))["sessions"]
+
+
+async def test_rescan_progress_updates_bar(index_path):
+    """_on_progress shows the bar with the right total/progress and an X/N label."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_progress(2, 5)
+        await pilot.pause()
+        assert app._progress.display is True
+        assert app._progress.total == 5
+        assert app._progress.progress == 2
+        assert "2/5" in str(app._empty.render())
 
 
 async def test_h_opens_help_and_esc_dismisses(index_path):

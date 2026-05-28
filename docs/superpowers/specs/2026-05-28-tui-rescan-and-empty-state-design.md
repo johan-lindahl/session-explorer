@@ -58,31 +58,40 @@ A pure, unit-testable function in `bin/_pkg/tui.py` returning the message string
 2. filter active → "No sessions match the current filter. Press Esc to clear."
 3. `unnamed_hidden > 0` → "N unnamed session(s) hidden. Press u to show them,
    then r to name one."
-4. index empty & not yet scanned → "No sessions indexed yet. Press R to scan
+4. index empty & not yet scanned → "No sessions indexed yet. Press F5 to scan
    ~/.claude/projects/ for your sessions."
 5. index empty & already scanned → "No sessions found under ~/.claude/projects/."
 
 Rendered in a `Static` (`#empty-state`) inside the tree pane, shown only when the
 message is non-`None`; the `Tree` and column header are hidden in that case.
-App-level bindings (`u`, `R`, `q`, `h`) still fire while the message shows.
+App-level bindings (`u`, `F5`, `q`, `h`) still fire while the message shows.
 
-### 3. Rescan key `R`
+### 3. Rescan key `F5`
 
-- `Binding("R", "rescan", "Rescan")` on the app (`r` stays rename; `R` is
-  shift-r).
-- `action_rescan` sets a `scanning ~/.claude/projects/…` subtitle and launches a
-  Textual `@work(thread=True, exclusive=True)` worker that calls
-  `index.reindex`, then repaints via `self.call_from_thread(self._populate)`.
-  Running in a worker keeps the UI responsive (reindex shells out to `git` per
-  session, so it can take seconds on a large history).
+- `Binding("f5", "rescan", "Rescan")` on the app. `F5` is the universal refresh
+  convention and avoids the easy `r` (rename) / `R` (rescan) mix-up.
+- `action_rescan` shows the scan UI immediately (a "Scanning ~/.claude/projects/…"
+  line plus an indeterminate `ProgressBar`, tree/header hidden) and launches a
+  Textual `@work(thread=True, exclusive=True)` worker that calls `index.reindex`
+  with a `progress` callback, then repaints via
+  `self.call_from_thread(self._populate)`. Running in a worker keeps the UI
+  responsive (reindex shells out to `git` per session, so it can take seconds on
+  a large history).
+- **Determinate progress.** `index.reindex(progress=cb)` pre-counts the work
+  (surviving tracked sessions + untracked JSONLs on disk) and calls
+  `cb(done, total)` — once with `(0, total)`, then after each session in both the
+  refresh and backfill phases. The worker marshals each callback to the main
+  thread via `call_from_thread(self._on_progress, done, total)`, which updates the
+  `ProgressBar` and an "X/N" label. `_populate` (always run when the scan finishes)
+  hides the bar.
 - Added to the `check_action` modal-guard so it can't fire over a modal.
 - A `_scanned` flag flips after the first rescan so the empty-state message can
-  switch from "Press R to scan" to "No sessions found".
+  switch from "Press F5 to scan" to "No sessions found".
 
 ### 4. Docs
 
-- `_help_text` gains an `R` row.
-- **SPEC.md** keybinding table gains `R`; the backfill paragraph notes the TUI
+- `_help_text` gains an `F5` row.
+- **SPEC.md** keybinding table gains `F5`; the backfill paragraph notes the TUI
   rescan as the user-facing trigger; the unnamed/visibility paragraph notes the
   empty-state hint.
 
@@ -95,5 +104,6 @@ App-level bindings (`u`, `R`, `q`, `h`) still fire while the message shows.
 
 ## Flow for the reported bug
 
-Colleague opens the explorer → sees "Press R to scan" → presses `R` → sees
-"N unnamed sessions hidden — press u" → presses `u` → his history appears.
+Colleague opens the explorer → sees "Press F5 to scan" → presses `F5` (watches the
+progress bar) → sees "N unnamed sessions hidden — press u" → presses `u` → his
+history appears.
