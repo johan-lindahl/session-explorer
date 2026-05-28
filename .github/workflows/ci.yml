@@ -32,8 +32,14 @@ jobs:
       - name: Run pytest
         run: python -m pytest test/ -q
 
+      # Install bats-core into a user-writable prefix (no root). `npm install -g`
+      # hits EACCES on the Ubuntu runner's /usr/local prefix; this avoids npm,
+      # sudo, and apt version skew, and behaves identically on macOS and Linux.
       - name: Install bats
-        run: npm install -g bats
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats-core"
+          "$RUNNER_TEMP/bats-core/install.sh" "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run bats (shell-facing CLI / install / hook)
         run: bats test/install.bats test/uninstall.bats test/hook.bats
