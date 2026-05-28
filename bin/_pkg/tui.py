@@ -424,11 +424,40 @@ class SessionExplorerApp(App):
         yield self._filter
         yield Footer()
 
+    def _claude_dir(self) -> str:
+        return os.path.dirname(os.path.abspath(self._index_path))
+
     def on_mount(self) -> None:
         self.title = "session-explorer"
         self._populate()
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
+        # Opt-in retention: neutralising cleanupPeriodDays modifies the user's
+        # settings.json, so ask once on first launch rather than have the hook
+        # do it silently. Then (after the choice) pop the first-run help.
+        from . import retention
+        cd = self._claude_dir()
+        if not retention.is_decided(cd):
+            def after(ok: bool) -> None:
+                if ok:
+                    retention.enable(cd)
+                else:
+                    retention.decline(cd)
+                self._maybe_open_help()
+            self.push_screen(
+                ConfirmScreen(
+                    "Let session-explorer manage session retention?\n\n"
+                    "This sets Claude Code's cleanupPeriodDays to 36500 (your "
+                    "current value is backed up) so old sessions expire on the "
+                    "plugin's schedule instead of Claude's. Restored on uninstall.\n"
+                    "Choose No to leave Claude's native cleanup in charge."
+                ),
+                after,
+            )
+        else:
+            self._maybe_open_help()
+
+    def _maybe_open_help(self) -> None:
         # First run only: pop the help overlay so newcomers learn the slash-
         # folder naming and the named-only default. The marker is written up
         # front so a crash mid-session still counts as "seen".

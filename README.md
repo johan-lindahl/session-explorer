@@ -64,8 +64,10 @@ cd session-explorer
 ./install.sh
 ```
 
-Both paths perform the same first-run setup: back up your existing
-`cleanupPeriodDays`, set it to 36500, and register the `SessionStart` hook.
+Both paths register the `SessionStart` hook. Neither touches your Claude Code
+settings: managing session retention (which changes `cleanupPeriodDays`) is
+**opt-in** — the explorer asks the first time you open it. See
+[Cleanup & retention](#cleanup--retention).
 
 > **Platform note:** `/session-explorer:open` opens the TUI in a new terminal
 > window — **macOS** (Terminal.app) and **Linux** (your `$TERMINAL` or a known
@@ -138,15 +140,25 @@ create nested folders of any depth. Rename a session with Claude's built-in
 
 ## Cleanup & retention
 
-Installing sets `cleanupPeriodDays` to 36500, which disables Claude Code's own
-session expiry — so the plugin handles cleanup instead. `session-explorer index
---gc` deletes **unnamed** sessions idle longer than the retention window
-(default 30 days). Named (renamed) sessions are never touched, and sessions that
-look live — a transcript modified in the last 60 seconds, or one holding an
-active lock — are skipped.
+Retention is **opt-in**. The first time you open the explorer, it asks whether
+to let session-explorer manage retention. This is the *only* time the plugin
+modifies your Claude Code settings — the `SessionStart` hook never touches them.
 
-You don't have to run it manually: the `SessionStart` hook fires `--gc` at most
-once every 24 hours, in the background, so old unnamed stubs expire on their own.
+- **If you say yes:** your current `cleanupPeriodDays` is backed up to
+  `~/.claude/.session-explorer.backup` and set to `36500`, disabling Claude's
+  native expiry so the plugin handles it. `uninstall` restores your original
+  value. Old-session GC (below) is then active.
+- **If you say no:** nothing is changed — Claude's native cleanup stays in
+  charge, and the plugin just browses/organizes/resumes. (You won't be asked
+  again; delete `~/.claude/.session-explorer.retention-declined` to re-trigger
+  the prompt.)
+
+Once enabled, `session-explorer index --gc` deletes **unnamed** sessions idle
+longer than the retention window (default 30 days). Named (renamed) sessions are
+never touched, and sessions that look live — a transcript modified in the last
+60 seconds, or one holding an active lock — are skipped. You don't have to run
+it manually: while retention is enabled, the `SessionStart` hook fires `--gc` at
+most once every 24 hours, in the background.
 
 ```bash
 session-explorer index --gc                   # delete now (defaults)
@@ -159,9 +171,10 @@ deleting anything.
 
 ## Uninstall
 
-Uninstalling restores your original `cleanupPeriodDays` (saved at install time)
-and removes session-explorer's files. **Run the teardown first, then remove the
-plugin** — `/plugin uninstall` deletes the binary, so the order matters.
+Uninstalling restores your original `cleanupPeriodDays` (saved when you enabled
+retention, if you did) and removes session-explorer's files. **Run the teardown
+first, then remove the plugin** — `/plugin uninstall` deletes the binary, so the
+order matters.
 
 Your session index and folder data (names, notes, folders) are **kept by
 default** so a reinstall restores them. Add `--purge` to delete those too.
@@ -187,11 +200,11 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-M3 + M4 complete: the Textual TUI (M2), `--gc` retention with a once-daily
-auto-trigger, rescan (`F5`), `session-explorer uninstall`, live filtering,
-model-aware context sizing, and macOS/Linux/WSL launchers (native Windows is out
-of scope). Tested by pytest + bats, run in CI on ubuntu + macos across Python
-3.11–3.13. Next up — M5: submission to the community marketplace.
+**v1.0.0.** Textual TUI; opt-in `--gc` retention with a once-daily auto-trigger;
+rescan (`F5`); `session-explorer uninstall`; live filtering; model-aware context
+sizing; macOS/Linux/WSL launchers (native Windows out of scope). Tested by
+pytest + bats in CI on ubuntu + macos across Python 3.11–3.13. Ready for M5
+submission to the community marketplace.
 
 ### Running the tests
 

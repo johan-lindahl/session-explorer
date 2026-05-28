@@ -16,22 +16,9 @@ mkdir -p "${CLAUDE_DIR}" "${LOCAL_BIN}"
 ln -sf "${REPO_DIR}/bin/session-explorer" "${LOCAL_BIN}/session-explorer"
 echo "Linked: ${LOCAL_BIN}/session-explorer -> ${REPO_DIR}/bin/session-explorer"
 
-# --- First-run cleanupPeriodDays handling (idempotent) ---
-if [ ! -f "${BACKUP}" ]; then
-  PRIOR=30
-  if [ -f "${SETTINGS}" ]; then
-    PRIOR="$(python3 -c "
-import json
-try:
-    with open('${SETTINGS}') as f: print(json.load(f).get('cleanupPeriodDays', 30))
-except Exception: print(30)
-")"
-  fi
-  echo "${PRIOR}" > "${BACKUP}"
-  echo "Backed up cleanupPeriodDays=${PRIOR} to ${BACKUP}"
-fi
-
-# --- Write/overwrite settings.json fragment (cleanupPeriodDays + SessionStart hook) ---
+# --- Register the SessionStart hook (does NOT touch cleanupPeriodDays) ---
+# Retention is opt-in: the TUI asks on first launch before neutralising
+# cleanupPeriodDays. install.sh only wires up the binary + hook.
 python3 - "$REPO_DIR" <<'PY'
 import json, os, sys
 
@@ -42,8 +29,6 @@ try:
         data = json.load(f)
 except FileNotFoundError:
     data = {}
-
-data["cleanupPeriodDays"] = 36500
 
 hooks = data.setdefault("hooks", {})
 ss = hooks.setdefault("SessionStart", [])
@@ -60,10 +45,11 @@ hooks["SessionStart"] = ss
 with open(settings_path, "w") as f:
     json.dump(data, f, indent=2)
 
-print(f"Updated {settings_path}: cleanupPeriodDays=36500, SessionStart hook -> {hook_cmd}")
+print(f"Updated {settings_path}: registered SessionStart hook -> {hook_cmd}")
 PY
 
 chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/bin/session-explorer"
 
 echo
 echo "Install complete. Start a new Claude session; run /session-explorer:open to open the explorer."
+echo "On first open you'll be asked whether to let session-explorer manage retention."

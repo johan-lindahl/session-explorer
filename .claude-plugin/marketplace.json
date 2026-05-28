@@ -1,5 +1,6 @@
 {
   "name": "session-explorer",
+  "description": "Browse, organize, and resume your Claude Code sessions from a file-explorer-style TUI.",
   "owner": {
     "name": "Johan Lindahl",
     "email": "johan.lindahl@snojken.com"

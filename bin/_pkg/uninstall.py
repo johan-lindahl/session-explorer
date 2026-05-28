@@ -15,6 +15,8 @@ _HOOK_MARKERS = ("session-explorer", "session-start.sh")
 _OPERATIONAL_SIDECARS = (
     ".session-explorer.current",
     ".session-explorer.help-seen",
+    ".session-explorer.retention-declined",
+    ".session-explorer.gc",
     "session-explorer.log",
 )
 _DATA_FILES = (

@@ -143,7 +143,15 @@ def test_uninstall_sh_reverses_install_sh(tmp_path):
     link = tmp_path / ".local" / "bin" / "session-explorer"
     settings_path = tmp_path / ".claude" / "settings.json"
     assert link.is_symlink()
-    assert json.loads(settings_path.read_text())["cleanupPeriodDays"] == 36500
+    # install.sh registers the hook but does NOT neutralise cleanupPeriodDays.
+    assert "cleanupPeriodDays" not in json.loads(settings_path.read_text())
+
+    # Simulate the user opting into retention (the TUI prompt's effect): back up
+    # the prior value and neutralise. Uninstall must then restore it.
+    settings = json.loads(settings_path.read_text())
+    settings["cleanupPeriodDays"] = 36500
+    settings_path.write_text(json.dumps(settings))
+    (tmp_path / ".claude" / ".session-explorer.backup").write_text("30")
 
     proc = subprocess.run(["bash", str(repo / "uninstall.sh")],
                           capture_output=True, text=True, env=env)

@@ -37,41 +37,29 @@ def _seed_settings(home: Path, payload: dict) -> Path:
     return path
 
 
-def test_first_run_backs_up_and_sets_cleanup(tmp_path):
+def test_hook_never_modifies_settings(tmp_path):
+    """Retention is opt-in (TUI prompt), so the hook must NOT touch settings.json
+    or create the backup — neutralising cleanupPeriodDays without consent was the
+    review concern."""
     settings = _seed_settings(tmp_path, {"cleanupPeriodDays": 30, "other": "stuff"})
 
     proc = _run_hook(tmp_path, stdin='{"session_id":"abc","transcript_path":"/tmp/x.jsonl","cwd":"/tmp"}')
     assert proc.returncode == 0, proc.stderr
 
-    backup = tmp_path / ".claude" / ".session-explorer.backup"
-    assert backup.exists()
-    assert backup.read_text().strip() == "30"
-
+    # No backup written; settings.json left exactly as-is.
+    assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
     data = json.loads(settings.read_text())
-    assert data["cleanupPeriodDays"] == 36500
-    assert data["other"] == "stuff"  # preserves unrelated fields
+    assert data["cleanupPeriodDays"] == 30   # untouched
+    assert data["other"] == "stuff"
 
 
-def test_second_run_is_noop(tmp_path):
-    _seed_settings(tmp_path, {"cleanupPeriodDays": 30})
-
-    # First run — sets 36500, backs up 30
-    _run_hook(tmp_path, stdin='{"session_id":"abc","transcript_path":"/tmp/x.jsonl","cwd":"/tmp"}')
-
-    # Tamper: change settings.json to include a marker
-    settings_path = tmp_path / ".claude" / "settings.json"
-    settings_path.write_text(json.dumps({"cleanupPeriodDays": 36500, "marker": "do not touch"}))
-
-    # Second run — should not touch settings.json (backup file exists)
-    proc = _run_hook(tmp_path, stdin='{"session_id":"def","transcript_path":"/tmp/y.jsonl","cwd":"/tmp"}')
+def test_hook_does_not_create_settings_when_absent(tmp_path):
+    """With no settings.json, the hook must not create one (no silent opt-in)."""
+    (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
+    proc = _run_hook(tmp_path, stdin='{"session_id":"abc","transcript_path":"/tmp/x.jsonl","cwd":"/tmp"}')
     assert proc.returncode == 0
-
-    after = json.loads(settings_path.read_text())
-    assert after["marker"] == "do not touch"
-    assert after["cleanupPeriodDays"] == 36500
-
-    backup = tmp_path / ".claude" / ".session-explorer.backup"
-    assert backup.read_text().strip() == "30"  # still the original prior value
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+    assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
 
 
 def test_hook_never_exits_nonzero_on_malformed_stdin(tmp_path):
@@ -173,20 +161,37 @@ def _log_has_removed(home):
     return log.exists() and "Removed" in log.read_text()
 
 
+def _enable_retention(tmp_path):
+    """Mark retention as opted-in (gc only runs once the backup exists)."""
+    claude = tmp_path / ".claude"
+    claude.mkdir(parents=True, exist_ok=True)
+    (claude / ".session-explorer.backup").write_text("30")
+    return claude
+
+
+def test_gc_does_not_run_until_retention_enabled(tmp_path):
+    """Without the opt-in backup, the hook must not gc or stamp."""
+    (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
+    proc = _run_hook(tmp_path, stdin='{"session_id":"g0","transcript_path":"/tmp/g.jsonl","cwd":"/tmp"}')
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / ".claude" / ".session-explorer.gc").exists()
+    time.sleep(0.4)
+    assert not _log_has_removed(tmp_path)
+
+
 def test_gc_fires_on_first_run_and_writes_stamp(tmp_path):
-    """No stamp yet -> hook stamps and launches `index --gc` (detached)."""
+    """Retention enabled, no stamp yet -> hook stamps and launches gc (detached)."""
+    _enable_retention(tmp_path)
     proc = _run_hook(tmp_path, stdin='{"session_id":"g1","transcript_path":"/tmp/g.jsonl","cwd":"/tmp"}')
     assert proc.returncode == 0, proc.stderr
     stamp = tmp_path / ".claude" / ".session-explorer.gc"
     assert stamp.exists()
-    # gc runs in the background; its output lands in the log.
     assert _wait_until(lambda: _log_has_removed(tmp_path)), "gc never ran"
 
 
 def test_gc_throttled_within_24h(tmp_path):
     """A stamp younger than 24h suppresses gc and is left untouched."""
-    claude = tmp_path / ".claude"
-    claude.mkdir(parents=True, exist_ok=True)
+    claude = _enable_retention(tmp_path)
     stamp = claude / ".session-explorer.gc"
     stamp.write_text("")
     recent = time.time() - 3600  # 1h ago
@@ -194,17 +199,14 @@ def test_gc_throttled_within_24h(tmp_path):
 
     proc = _run_hook(tmp_path, stdin='{"session_id":"g2","transcript_path":"/tmp/g.jsonl","cwd":"/tmp"}')
     assert proc.returncode == 0, proc.stderr
-    # Stamp not refreshed.
-    assert abs(stamp.stat().st_mtime - recent) < 2
-    # gc did not run.
+    assert abs(stamp.stat().st_mtime - recent) < 2  # not refreshed
     time.sleep(0.4)
     assert not _log_has_removed(tmp_path)
 
 
 def test_gc_fires_again_after_24h(tmp_path):
     """A stamp older than 24h lets gc fire again and refreshes the stamp."""
-    claude = tmp_path / ".claude"
-    claude.mkdir(parents=True, exist_ok=True)
+    claude = _enable_retention(tmp_path)
     stamp = claude / ".session-explorer.gc"
     stamp.write_text("")
     long_ago = time.time() - 25 * 3600

@@ -269,7 +269,7 @@ The hook never blocks startup; failures log to `~/.claude/session-explorer.log` 
 
 ## Disabling native auto-cleanup
 
-`cleanupPeriodDays` in `~/.claude/settings.json` is set to `36500` (100 years) so Claude's expiry never touches user sessions. The plugin's `session-explorer index --gc` does deletion instead:
+**Opt-in.** Modifying the user's `settings.json` without consent is a marketplace-review concern, so the plugin does NOT neutralise native cleanup automatically. The TUI asks on first launch (`tui.on_mount` → `retention.enable`/`retention.decline`); neither the `SessionStart` hook nor `install.sh` ever touches `settings.json`. Only when the user agrees is `cleanupPeriodDays` in `~/.claude/settings.json` set to `36500` (100 years) — with the prior value backed up — so Claude's expiry never touches user sessions and the plugin's `session-explorer index --gc` does deletion instead:
 
 ```
 deletion criteria:
@@ -288,15 +288,14 @@ Flags:
 
 When it runs:
 
-- **Automatically** — the `SessionStart` hook fires `session-explorer index --gc` at most once per 24 hours, fully detached so startup never blocks. A stamp file `~/.claude/.session-explorer.gc` throttles it; the stamp is written *before* gc launches, so a slow or failed run can't re-fire on the next session start. Because native cleanup is neutralised, this auto-trigger is what actually expires old unnamed stubs over time.
+- **Automatically** — once retention is enabled, the `SessionStart` hook fires `session-explorer index --gc` at most once per 24 hours, fully detached so startup never blocks. A stamp file `~/.claude/.session-explorer.gc` throttles it; the stamp is written *before* gc launches, so a slow or failed run can't re-fire on the next session start. The auto-trigger is gated on the backup file existing (i.e. retention opted-in), so a user who declined never has sessions deleted.
 - **Manually** — run `session-explorer index --gc` any time, or wire it into a cron / launchd job for a fixed schedule.
 
-Who writes the `36500`:
+Opt-in state (all under `~/.claude/`):
 
-- **Marketplace install** — `SessionStart` hook's first-run step.
-- **Plain `install.sh`** — eagerly, so the first hook fire is a no-op.
-
-`~/.claude/.session-explorer.backup` holds the prior value so uninstall can restore it.
+- `.session-explorer.backup` exists → retention **enabled**; holds the prior `cleanupPeriodDays` so uninstall can restore it, and gates the auto-trigger.
+- `.session-explorer.retention-declined` → user **declined**; the prompt isn't shown again.
+- neither → **undecided**; the TUI prompts on next launch.
 
 ## Installation
 

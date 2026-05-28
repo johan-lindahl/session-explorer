@@ -25,25 +25,13 @@ settings_get() {  # settings_get <key>
   [ "$(readlink "$HOME/.local/bin/session-explorer")" = "$REPO/bin/session-explorer" ]
 }
 
-@test "install sets cleanupPeriodDays to 36500" {
-  run bash "$REPO/install.sh"
-  [ "$status" -eq 0 ]
-  [ "$(settings_get cleanupPeriodDays)" = "36500" ]
-}
-
-@test "install backs up the prior cleanupPeriodDays" {
+@test "install does NOT touch cleanupPeriodDays (retention is opt-in)" {
   mkdir -p "$HOME/.claude"
   echo '{"cleanupPeriodDays": 14}' > "$HOME/.claude/settings.json"
   run bash "$REPO/install.sh"
   [ "$status" -eq 0 ]
-  [ -f "$HOME/.claude/.session-explorer.backup" ]
-  [ "$(cat "$HOME/.claude/.session-explorer.backup")" = "14" ]
-}
-
-@test "install backs up default 30 when no settings.json exists" {
-  run bash "$REPO/install.sh"
-  [ "$status" -eq 0 ]
-  [ "$(cat "$HOME/.claude/.session-explorer.backup")" = "30" ]
+  [ "$(settings_get cleanupPeriodDays)" = "14" ]   # left as-is
+  [ ! -f "$HOME/.claude/.session-explorer.backup" ]
 }
 
 @test "install registers a SessionStart hook pointing at session-start.sh" {
@@ -60,13 +48,11 @@ print('ok')
   [ "$output" = "ok" ]
 }
 
-@test "install is idempotent — second run keeps one hook and the original backup" {
+@test "install is idempotent — second run keeps exactly one hook entry" {
   mkdir -p "$HOME/.claude"
   echo '{"cleanupPeriodDays": 14}' > "$HOME/.claude/settings.json"
   bash "$REPO/install.sh"
   bash "$REPO/install.sh"
-  # Backup still holds the original prior value, not 36500.
-  [ "$(cat "$HOME/.claude/.session-explorer.backup")" = "14" ]
   # Exactly one session-explorer SessionStart hook entry.
   run python3 -c "
 import json
