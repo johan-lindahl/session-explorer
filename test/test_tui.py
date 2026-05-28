@@ -778,3 +778,81 @@ def test_preview_text_model_unknown_when_absent():
     s = {"sid": "x", "name_cached": "n"}
     text = _preview_text(s)
     assert "(unknown)" in text
+
+
+# --- delete empty folders (d on a folder node) ---
+
+def test_folder_has_sessions_detects_session_under_folder():
+    from _pkg.tui import _folder_has_sessions
+    data = {"sessions": {"s1": {"project_label": "demo", "name_cached": "planning/sprint14"}}}
+    assert _folder_has_sessions(data, "demo", ["planning"]) is True
+    assert _folder_has_sessions(data, "demo", ["audits"]) is False
+
+
+def test_folder_has_sessions_ignores_other_projects_and_unnamed():
+    from _pkg.tui import _folder_has_sessions
+    data = {"sessions": {
+        "s1": {"project_label": "other", "name_cached": "planning/x"},
+        "s2": {"project_label": "demo", "name_cached": None},
+    }}
+    assert _folder_has_sessions(data, "demo", ["planning"]) is False
+
+
+async def test_delete_empty_folder_removes_it(index_path):
+    from _pkg.tui import SessionExplorerApp
+    from _pkg import folder_store
+    from textual.screen import ModalScreen
+    fs_path = folder_store.default_path_for(index_path)
+    folder_store.add(fs_path, "demo", "scratch")  # empty folder, no sessions under it
+
+    def find(node, lbl):
+        for c in node.children:
+            if lbl in str(c.label):
+                return c
+            g = find(c, lbl)
+            if g:
+                return g
+        return None
+
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        scratch = find(app._tree.root, "scratch/")
+        assert scratch is not None
+        app._tree.select_node(scratch); app._tree.cursor_line = scratch.line
+        await pilot.pause()
+        await pilot.press("d"); await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)  # confirm dialog opened
+        app.screen.dismiss(True)
+        await pilot.pause()
+
+    assert "scratch" not in folder_store.list_paths(fs_path, "demo")
+
+
+async def test_delete_nonempty_folder_refuses(index_path):
+    from _pkg.tui import SessionExplorerApp
+    from textual.screen import ModalScreen
+    import json
+
+    def find(node, lbl):
+        for c in node.children:
+            if lbl in str(c.label):
+                return c
+            g = find(c, lbl)
+            if g:
+                return g
+        return None
+
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The fixture's sid-1 is named "planning/sprint14", so "planning/" has a session.
+        planning = find(app._tree.root, "planning/")
+        assert planning is not None
+        app._tree.select_node(planning); app._tree.cursor_line = planning.line
+        await pilot.pause()
+        await pilot.press("d"); await pilot.pause()
+        # Refused: no confirm dialog, session untouched.
+        assert not isinstance(app.screen, ModalScreen)
+
+    assert "sid-1" in json.load(open(index_path))["sessions"]

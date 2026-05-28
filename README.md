@@ -111,7 +111,7 @@ session-explorer tui       # run the TUI in the current terminal
 | `r` | Rename — also moves the session between folders |
 | `n` | Create an empty folder |
 | `m` | Move the selected session to a folder |
-| `d` | Delete the selected session (confirms; removes the JSONL too) |
+| `d` | Delete the selected session (confirms; removes the JSONL too), or an empty folder (refuses if it still contains sessions) |
 | `e` | Edit notes (Ctrl+S to save) |
 | `u` | Toggle visibility of unnamed sessions (hidden by default) |
 | `F5` | Rescan `~/.claude/projects/` — import sessions not yet tracked (shows a progress bar) |
