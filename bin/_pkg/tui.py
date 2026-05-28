@@ -354,6 +354,11 @@ class SessionExplorerApp(App):
         Binding("h", "help", "Help"),
         Binding("q", "quit", "Quit"),
         Binding("escape", "close_preview", "Close preview", show=False),
+        # The Tree's own toggle keys (enter/space) are taken over by resume and
+        # preview above, and this Textual version has no left/right binding, so
+        # bind them explicitly or keyboard expand/collapse wouldn't work at all.
+        Binding("right", "expand_node", "Expand", show=False),
+        Binding("left", "collapse_node", "Collapse", show=False),
     ]
 
     def __init__(self, index_path: str | None = None,
@@ -375,7 +380,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -544,6 +549,16 @@ class SessionExplorerApp(App):
             # children — both ungrouped sessions and top-level folders — are at
             # tree depth 1.
             render(proj_node, project, [], node, child_depth=1)
+
+    def action_expand_node(self) -> None:
+        node = self._tree.cursor_node
+        if node is not None and node.allow_expand:
+            node.expand()
+
+    def action_collapse_node(self) -> None:
+        node = self._tree.cursor_node
+        if node is not None and node.allow_expand:
+            node.collapse()
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node
