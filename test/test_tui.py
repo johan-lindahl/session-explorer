@@ -1066,3 +1066,56 @@ async def test_resume_dead_worktree_cancel_does_not_resume(tmp_path):
         await pilot.press("enter"); await pilot.pause()
         app.screen.dismiss(False); await pilot.pause()
         assert getattr(app, "_resume_target", None) is None  # cancelled
+
+
+# --- _PanelScreen dialog restyle (centered rounded panel on dimmed backdrop) ---
+
+from _pkg import tui as _tui
+
+
+def _make_app_with_one_named_session(tmp_path):
+    import json
+    from _pkg.tui import SessionExplorerApp
+    idx = tmp_path / "session-explorer-index.json"
+    idx.write_text(json.dumps({"version": 2, "sessions": {
+        "s1": {"project_label": "demo", "project_path": "/p", "name_cached": "alpha",
+               "last_active_at": "2026-05-29T10:00:00+00:00", "tokens_estimate": 1,
+               "tokens_window_pct": 0, "message_count": 1, "first_prompt": "hi",
+               "transcript_path": "/p/s1.jsonl"}}}))
+    (tmp_path / ".session-explorer.help-seen").touch()
+    (tmp_path / ".session-explorer.retention-declined").touch()
+    return SessionExplorerApp(index_path=str(idx))
+
+
+async def test_rename_dialog_returns_value_on_enter(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result = {}
+        app.push_screen(_tui.RenameScreen("old"), lambda v: result.__setitem__("v", v))
+        await pilot.pause()
+        app.screen.query_one("#rename-input", _tui.Input).value = "team/new"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert result["v"] == "team/new"
+
+
+async def test_rename_dialog_cancels_on_escape(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result = {}
+        app.push_screen(_tui.RenameScreen("old"), lambda v: result.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert result["v"] == ""
+
+
+def test_panelscreen_css_defines_centered_dimmed_panel():
+    css = _tui._PanelScreen.DEFAULT_CSS
+    assert "align: center middle" in css
+    assert "#panel" in css
+    assert "border: round $accent" in css
+    assert "background: $surface" in css
+    assert "%" in css  # translucent backdrop

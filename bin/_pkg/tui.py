@@ -219,7 +219,28 @@ def _help_text() -> str:
     ])
 
 
-class RenameScreen(ModalScreen[str]):
+class _PanelScreen(ModalScreen):
+    """Base for input/confirm dialogs: a centered rounded panel on a dimmed,
+    translucent backdrop so the session tree shows through (matches the help
+    overlay). Subclasses wrap their widgets in `Vertical(..., id="panel")` with a
+    bold `.dialog-title` Label first and a dim `.dialog-hint` Label last. Each
+    subclass keeps its own Esc binding/return value (unchanged behavior)."""
+
+    DEFAULT_CSS = """
+    _PanelScreen { align: center middle; background: $surface-darken-1 60%; }
+    _PanelScreen #panel {
+        width: auto; max-width: 80%; height: auto; max-height: 90%;
+        padding: 1 2; border: round $accent; background: $surface;
+    }
+    _PanelScreen #panel Input,
+    _PanelScreen #panel OptionList,
+    _PanelScreen #panel TextArea { width: 60; }
+    _PanelScreen .dialog-title { text-style: bold; }
+    _PanelScreen .dialog-hint { color: $text-muted; }
+    """
+
+
+class RenameScreen(_PanelScreen):
     """Prompt for a new session name. Returns the entered string or '' on cancel."""
 
     BINDINGS = [Binding("escape", "dismiss('')", "Cancel")]
@@ -230,8 +251,10 @@ class RenameScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label("Rename session (Enter to confirm, Esc to cancel):"),
+            Label("Rename session", classes="dialog-title"),
             Input(value=self._current, id="rename-input"),
+            Label("enter save · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -273,7 +296,7 @@ class MoveScreen(ModalScreen[str]):
         self.dismiss(event.value.strip())
 
 
-class NewFolderScreen(ModalScreen[str]):
+class NewFolderScreen(_PanelScreen):
     """Prompt for a folder path. The Input is prefilled with `prefix` (which
     ends in '/' when creating a child of an existing folder)."""
 
@@ -286,8 +309,10 @@ class NewFolderScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label(f"New folder path under '{self._project}' (use / for nesting):"),
+            Label(f"New folder under '{self._project}' (use / to nest)", classes="dialog-title"),
             Input(value=self._prefix, id="newfolder-input"),
+            Label("enter create · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
