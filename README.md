@@ -29,6 +29,16 @@ Press `h` for the built-in help (it also auto-opens on first launch):
 
 ![The help overlay](docs/images/help.png)
 
+### Live sessions
+
+Sessions running right now are flagged in the left column — an animated green
+spinner for a session actively working, a dim `○` for one that's open but idle —
+and the subtitle shows `● N active`. Live rows refresh from their transcript
+about every 2 seconds, so the first prompt, message count, tokens, and context %
+fill in and tick up as the agent works. Live sessions appear even when unnamed.
+
+![Live-session indicator](docs/images/live.png)
+
 > Screenshots use sample data.
 
 ## Install
@@ -121,6 +131,10 @@ session-explorer tui       # run the TUI in the current terminal
 | `h` | Show help (auto-opens once on first launch) |
 | `Esc` | Close the preview pane / help (or clear an active filter) |
 | `q` | Quit |
+
+> The leftmost column shows live state: an animated spinner (working), a dim `○`
+> (idle), or blank (inactive). The rename / move / new-folder / notes dialogs now
+> appear as centered overlays matching the help screen.
 
 ## How sessions are organized
 

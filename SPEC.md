@@ -320,6 +320,9 @@ Two `set_interval` timers, neither of which re-reads JSONLs or reindexes (that s
 
 - **Spinner tick (~200ms):** advances the animated green braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) for every `working` row, rewriting only those rows' labels in place.
 - **Registry poll (~2s):** re-reads the registry, runs death detection, recomputes each session's state, and re-renders only changed rows.
+- Live rows also refresh their index metadata (first prompt, message count,
+  tokens, context %) from the transcript on each ~2s poll, off the UI thread
+  (only the live sessions are re-read; F5 remains the full reindex).
 
 Glyphs: **working** → animated green spinner; **open but idle** → steady dim `○`; **inactive** → nothing. The subtitle shows the active count, e.g. `· ● N active`.
 
