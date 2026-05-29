@@ -49,20 +49,26 @@ def _walk_to(node: dict, segments: List[str]) -> dict:
 
 
 def build_nested_tree(index_data: dict, folder_store_data: dict,
-                      include_unnamed: bool = False) -> Dict[str, dict]:
+                      include_unnamed: bool = False,
+                      live_ids: "set[str] | None" = None) -> Dict[str, dict]:
     """Nested project → folder → folder ... → sessions, the form the TUI renders.
 
     Each node is {"_sessions": [(sid, s)], "_folders": {seg: node, ...}}.
 
     Unnamed sessions: hidden by default. When include_unnamed=True they appear
     under a synthetic "(unnamed)" folder per project (preserves prior UX).
+
+    Live sessions (`live_ids`) are always placed, even when unnamed and
+    `include_unnamed` is False — a live unnamed session is surfaced under the
+    synthetic "(unnamed)" folder.
     """
+    live_ids = live_ids or set()
     out: Dict[str, dict] = {}
 
     # 1. Place each session into its project + folder path.
     for sid, s in index_data.get("sessions", {}).items():
         name = s.get("name_cached")
-        if not name and not include_unnamed:
+        if not name and not include_unnamed and sid not in live_ids:
             continue
         project = s.get("project_label") or "(unknown)"
         proj_node = out.setdefault(project, _empty_node())

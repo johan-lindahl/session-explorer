@@ -185,3 +185,22 @@ def test_build_nested_tree_stored_path_overlapping_session_folder_does_not_dupli
     assert q1["_folders"] == {}
     # No duplicate q1 sibling under plans.
     assert list(plans["_folders"].keys()) == ["q1"]
+
+
+def test_build_nested_tree_live_unnamed_surfaced_even_when_hidden():
+    idx = {"sessions": {
+        "u1": {"project_label": "proj", "name_cached": None, "last_active_at": "2026-01-01"},
+    }}
+    fs = {"projects": {}}
+    # Without live_ids: hidden.
+    assert build_nested_tree(idx, fs, include_unnamed=False) == {}
+    # With u1 live: surfaced under the synthetic (unnamed) folder.
+    t = build_nested_tree(idx, fs, include_unnamed=False, live_ids={"u1"})
+    assert "proj" in t
+    assert any(sid == "u1" for sid, _ in t["proj"]["_folders"]["(unnamed)"]["_sessions"])
+
+
+def test_build_nested_tree_live_ids_none_is_default_behaviour():
+    idx = {"sessions": {"u1": {"project_label": "proj", "name_cached": None,
+                               "last_active_at": "2026-01-01"}}}
+    assert build_nested_tree(idx, {"projects": {}}, include_unnamed=False) == {}
