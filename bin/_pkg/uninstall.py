@@ -13,6 +13,7 @@ import os
 
 _HOOK_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh")
 # Lifecycle events the plugin registers the live dispatcher on (plus SessionStart).
+# Mirrored in install.sh and .claude-plugin/plugin.json; keep all three in sync.
 _HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "Notification",
                 "SessionEnd")
 _OPERATIONAL_SIDECARS = (

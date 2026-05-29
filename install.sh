@@ -44,8 +44,13 @@ def _is_ours(h):
     )
 
 def _strip_ours(evt):
-    return [h for h in hooks.get(evt, []) if not _is_ours(h)]
+    vals = hooks.get(evt)
+    if not isinstance(vals, list):
+        return []
+    return [h for h in vals if not _is_ours(h)]
 
+# Lifecycle event set is mirrored in bin/_pkg/uninstall.py (_HOOK_EVENTS) and
+# .claude-plugin/plugin.json; keep all three in sync.
 # SessionStart: keep any user hooks, re-add session-start.sh + session-live.sh.
 ss = _strip_ours("SessionStart")
 ss.append({"matchers": [], "command": start_cmd})
@@ -69,7 +74,7 @@ with open(settings_path, "w") as f:
 print(f"Updated {settings_path}: registered SessionStart + live-session hooks")
 PY
 
-chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/bin/session-explorer"
+chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/hooks/session-live.sh" "${REPO_DIR}/bin/session-explorer"
 
 echo
 echo "Install complete. Start a new Claude session; run /session-explorer:open to open the explorer."
