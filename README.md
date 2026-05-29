@@ -7,8 +7,9 @@ file-explorer-style listing: browse, organize, and resume sessions from a single
 slash command.
 
 The Textual TUI gives you arrow navigation, expand/collapse, rename, move,
-delete, notes, a preview pane, and live filter. The text-mode `list` subcommand
-remains for scripting.
+delete, notes, a preview pane, live filter, and a live indicator showing which
+sessions are running right now. The text-mode `list` subcommand remains for
+scripting.
 
 See [`SPEC.md`](./SPEC.md) for the full design.
 
@@ -74,9 +75,10 @@ cd session-explorer
 ./install.sh
 ```
 
-Both paths register the `SessionStart` hook. Neither touches your Claude Code
-settings: managing session retention (which changes `cleanupPeriodDays`) is
-**opt-in** — the explorer asks the first time you open it. See
+Both paths register session-explorer's lifecycle hooks (session indexing plus
+the live-session indicator). Neither touches your Claude Code settings: managing
+session retention (which changes `cleanupPeriodDays`) is **opt-in** — the
+explorer asks the first time you open it. See
 [Cleanup & retention](#cleanup--retention).
 
 > **Platform note:** `/session-explorer:open` opens the TUI in a new terminal
@@ -156,7 +158,7 @@ create nested folders of any depth. Rename a session with Claude's built-in
 
 Retention is **opt-in**. The first time you open the explorer, it asks whether
 to let session-explorer manage retention. This is the *only* time the plugin
-modifies your Claude Code settings — the `SessionStart` hook never touches them.
+modifies your Claude Code settings — the hooks never touch them.
 
 - **If you say yes:** your current `cleanupPeriodDays` is backed up to
   `~/.claude/.session-explorer.backup` and set to `36500`, disabling Claude's
@@ -214,11 +216,14 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.0.0.** Textual TUI; opt-in `--gc` retention with a once-daily auto-trigger;
-rescan (`F5`); `session-explorer uninstall`; live filtering; model-aware context
-sizing; macOS/Linux/WSL launchers (native Windows out of scope). Tested by
-pytest + bats in CI on ubuntu + macos across Python 3.11–3.13. Ready for M5
-submission to the community marketplace.
+**v1.2.0.** Released and installable from the Claude Code marketplace. Textual
+TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
+`● N active` subtitle, live-refreshing stats) and centered-overlay dialogs;
+rename/move/folders/delete/notes; preview pane; live filtering; rescan (`F5`);
+opt-in `--gc` retention with a once-daily auto-trigger; `session-explorer
+uninstall`; model-aware context sizing; macOS/Linux/WSL launchers (native
+Windows out of scope). Tested by pytest + bats in CI on ubuntu + macOS across
+Python 3.11–3.13.
 
 ### Running the tests
 
