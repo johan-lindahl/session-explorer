@@ -204,3 +204,26 @@ def test_build_nested_tree_live_ids_none_is_default_behaviour():
     idx = {"sessions": {"u1": {"project_label": "proj", "name_cached": None,
                                "last_active_at": "2026-01-01"}}}
     assert build_nested_tree(idx, {"projects": {}}, include_unnamed=False) == {}
+
+
+def test_build_nested_tree_only_live_unnamed_surfaces_others_stay_hidden():
+    # Two unnamed sessions in the same project; only the live one surfaces.
+    idx = {"sessions": {
+        "live1": {"project_label": "proj", "name_cached": None, "last_active_at": "2026-01-02"},
+        "dead1": {"project_label": "proj", "name_cached": None, "last_active_at": "2026-01-01"},
+    }}
+    t = build_nested_tree(idx, {"projects": {}}, include_unnamed=False, live_ids={"live1"})
+    unnamed = t["proj"]["_folders"]["(unnamed)"]["_sessions"]
+    sids = {sid for sid, _ in unnamed}
+    assert sids == {"live1"}  # dead1 stays hidden
+
+
+def test_build_nested_tree_live_named_session_routes_to_its_folder_not_unnamed():
+    # A live session that IS named must land in its real folder, not (unnamed).
+    idx = {"sessions": {
+        "n1": {"project_label": "proj", "name_cached": "team/sprint", "last_active_at": "2026-01-01"},
+    }}
+    t = build_nested_tree(idx, {"projects": {}}, include_unnamed=False, live_ids={"n1"})
+    assert "(unnamed)" not in t["proj"]["_folders"]
+    team = t["proj"]["_folders"]["team"]
+    assert any(sid == "n1" for sid, _ in team["_sessions"])
