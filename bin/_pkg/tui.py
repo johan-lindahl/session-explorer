@@ -195,6 +195,14 @@ def _help_text() -> str:
         "Only named (renamed) sessions show by default. Unnamed stubs are hidden;",
         "press [b]u[/] to toggle them on so you can rename or delete them.",
         "",
+        "[b]Live sessions[/]",
+        "Sessions running right now are flagged in the left column:",
+        "  [green]⠿[/] a spinner = actively working   [dim]○[/] = open but idle",
+        "The subtitle shows [b]● N active[/]. Live rows refresh from their",
+        "transcript about every 2s, so the first prompt, message count, tokens",
+        "and context % fill in and tick up as the agent works. Live sessions",
+        "show even when unnamed.",
+        "",
         "[b]Keys[/]",
         key("↑ ↓", "Move between rows"),
         key("← →", "Collapse / expand a folder or project"),
@@ -219,7 +227,29 @@ def _help_text() -> str:
     ])
 
 
-class RenameScreen(ModalScreen[str]):
+class _PanelScreen(ModalScreen):
+    """Base for the modal dialogs (rename, move, new folder, delete, notes): a centered rounded panel on a dimmed,
+    translucent backdrop so the session tree shows through (matches the help
+    overlay). Subclasses wrap their widgets in `Vertical(..., id="panel")` with a
+    bold `.dialog-title` Label first and a dim `.dialog-hint` Label last. Each
+    subclass keeps its own Esc binding/return value (unchanged behavior)."""
+
+    DEFAULT_CSS = """
+    _PanelScreen { align: center middle; background: $surface-darken-1 60%; }
+    _PanelScreen #panel {
+        width: auto; max-width: 80%; height: auto; max-height: 90%;
+        padding: 1 2; border: round $accent; background: $surface;
+    }
+    _PanelScreen #panel Input,
+    _PanelScreen #panel OptionList,
+    _PanelScreen #panel TextArea { width: 60; }
+    _PanelScreen #panel TextArea { min-height: 8; }
+    _PanelScreen .dialog-title { text-style: bold; }
+    _PanelScreen .dialog-hint { color: $text-muted; }
+    """
+
+
+class RenameScreen(_PanelScreen):
     """Prompt for a new session name. Returns the entered string or '' on cancel."""
 
     BINDINGS = [Binding("escape", "dismiss('')", "Cancel")]
@@ -230,15 +260,17 @@ class RenameScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label("Rename session (Enter to confirm, Esc to cancel):"),
+            Label("Rename session", classes="dialog-title"),
             Input(value=self._current, id="rename-input"),
+            Label("enter save · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip())
 
 
-class MoveScreen(ModalScreen[str]):
+class MoveScreen(_PanelScreen):
     """Pick or type a folder path (e.g. 'planning/sprint14').
 
     Returns "" to ungroup, the chosen/typed path string, or None on cancel.
@@ -257,12 +289,12 @@ class MoveScreen(ModalScreen[str]):
             Option(p, id=p) for p in self._existing
         ]
         yield Vertical(
-            Label(
-                f"Move within '{self._project}' (current: {self._current or '(none)'})."
-                " Pick or type a path (use / for nesting):"
-            ),
+            Label(f"Move within '{self._project}'  (current: {self._current or '(none)'})",
+                  classes="dialog-title"),
             OptionList(*opts, id="move-list"),
             Input(placeholder="…or type a new path (e.g. team/planning)", id="move-input"),
+            Label("enter / select to move · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -273,7 +305,7 @@ class MoveScreen(ModalScreen[str]):
         self.dismiss(event.value.strip())
 
 
-class NewFolderScreen(ModalScreen[str]):
+class NewFolderScreen(_PanelScreen):
     """Prompt for a folder path. The Input is prefilled with `prefix` (which
     ends in '/' when creating a child of an existing folder)."""
 
@@ -286,15 +318,17 @@ class NewFolderScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label(f"New folder path under '{self._project}' (use / for nesting):"),
+            Label(f"New folder under '{self._project}' (use / to nest)", classes="dialog-title"),
             Input(value=self._prefix, id="newfolder-input"),
+            Label("enter create · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip())
 
 
-class ConfirmScreen(ModalScreen[bool]):
+class ConfirmScreen(_PanelScreen):
     """Yes/no confirmation modal. Returns True iff the user confirmed."""
 
     BINDINGS = [
@@ -309,12 +343,13 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label(self._prompt),
-            Label("[y] yes   [n / esc] cancel"),
+            Label(self._prompt, classes="dialog-title"),
+            Label("y yes · n / esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
 
-class NotesScreen(ModalScreen[str]):
+class NotesScreen(_PanelScreen):
     """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
 
     BINDINGS = [
@@ -329,8 +364,10 @@ class NotesScreen(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         self._ta = TextArea(self._current)
         yield Vertical(
-            Label("Notes (Ctrl+S to save, Esc to cancel):"),
+            Label("Notes", classes="dialog-title"),
             self._ta,
+            Label("ctrl-s save · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def action_save(self) -> None:
@@ -864,29 +901,27 @@ class SessionExplorerApp(App):
     def _poll_live(self) -> None:
         """Refresh live-session state from the registry (called on a timer).
 
-        A change that alters row *visibility* — a live unnamed session appearing
-        or a surfaced one dying — needs a full repopulate (tree membership
-        changed); a pure state change only needs glyph relabeling.
+        Liveness changes update glyphs (or repopulate on a visibility change);
+        then, regardless, live sessions' metadata is refreshed off-thread so
+        first_prompt / msgs / tokens fill in and tick as the agent works.
         """
         from . import live as _live
         try:
             new_states = _live.poll(self._live_path())
         except Exception:
             return  # never let the indicator break the UI
-        if new_states == self._live_states:
-            return
-        old = self._live_states
-        self._live_states = new_states
-        if self._visibility_changed(old, new_states):
-            # A timer-driven repopulate clears and rebuilds the tree, which
-            # resets the cursor to the top. Capture the selected session first
-            # and restore it afterwards so the involuntary refresh doesn't yank
-            # the user's selection out from under them.
-            sid = self._selected_sid()
-            self._populate()
-            self._restore_cursor_to_sid(sid)
-        else:
-            self._relabel_live_rows()
+        if new_states != self._live_states:
+            old = self._live_states
+            self._live_states = new_states
+            if self._visibility_changed(old, new_states):
+                sid = self._selected_sid()
+                self._populate()
+                self._restore_cursor_to_sid(sid)
+            else:
+                self._relabel_live_rows()
+        # Always refresh live metadata (stats change even when liveness doesn't).
+        if self._live_states:
+            self._refresh_live_metadata()
 
     def _selected_sid(self) -> "str | None":
         """The sid of the currently-selected row, or None if on a non-session node."""
@@ -939,6 +974,51 @@ class SessionExplorerApp(App):
             data = leaf.data or {}
             glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
             leaf.set_label(_row_label(sid, data, depth, glyph))
+
+    def _do_live_metadata_refresh(self) -> None:
+        """Re-index each live session from its transcript so first_prompt / msgs /
+        tokens populate and tick as the agent works. Plain (no threading) so it's
+        unit-testable; the worker wraps it. Only touches live sessions; swallows
+        per-session errors (a transcript mid-write must never break the UI)."""
+        from . import live as _live
+        try:
+            live = _live.load(self._live_path()).get("sessions", {})
+            indexed = _index.load(self._index_path).get("sessions", {})
+        except Exception:
+            return
+        for sid in list(self._live_states):
+            entry = live.get(sid, {})
+            ie = indexed.get(sid, {})
+            tp = entry.get("transcript_path") or ie.get("transcript_path")
+            cwd = entry.get("cwd") or ie.get("project_path")
+            if not tp or not cwd:
+                continue  # can't refresh without transcript+cwd; F5 remains the catch-all
+            try:
+                # skip_git: the branch is static for a live session — avoid forking git every 2s.
+                _index.record_session(self._index_path, sid, tp, cwd, skip_git=True)
+            except Exception:
+                continue
+
+    @work(thread=True, exclusive=True, group="live-meta")
+    def _refresh_live_metadata(self) -> None:
+        """Off-thread wrapper: refresh live metadata on disk, then update rows on
+        the UI thread. `exclusive` so a slow refresh can't stack across polls."""
+        self._do_live_metadata_refresh()
+        self.call_from_thread(self._apply_live_metadata)
+
+    def _apply_live_metadata(self) -> None:
+        """Reload the index and refresh only the live rows in place (update each
+        live leaf's stored `data` + relabel). No full repopulate, so cursor /
+        scroll / expansion are preserved."""
+        try:
+            data = _index.load(self._index_path).get("sessions", {})
+        except Exception:
+            return
+        for sid, (leaf, _depth) in self._row_nodes.items():
+            if sid in self._live_states and sid in data:
+                leaf.data = {"sid": sid, **data[sid]}
+        self._relabel_live_rows()
+        self._refresh_preview()
 
     def _tick_spinner(self) -> None:
         """Advance the spinner frame and relabel only the working rows."""

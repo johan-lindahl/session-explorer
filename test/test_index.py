@@ -91,6 +91,45 @@ def test_record_session_idempotent(tmp_path):
     assert len(data["sessions"]) == 1
 
 
+def test_record_session_skip_git_preserves_existing_branch(tmp_path, monkeypatch):
+    """skip_git=True must not fork git; it reuses the existing entry's branch."""
+    calls = []
+    monkeypatch.setattr(
+        index, "_git_branch", lambda cwd: calls.append(cwd) or "feature-x"
+    )
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+
+    # Default path: _git_branch is called and the branch is recorded.
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript, cwd=str(tmp_path))
+    assert calls == [str(tmp_path)]
+    assert index.load(idx_path)["sessions"]["01ABC"]["branch"] == "feature-x"
+
+    # skip_git path: _git_branch is NOT called; the stored branch is preserved.
+    calls.clear()
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript,
+                         cwd=str(tmp_path), skip_git=True)
+    assert calls == []
+    assert index.load(idx_path)["sessions"]["01ABC"]["branch"] == "feature-x"
+
+
+def test_record_session_skip_git_no_existing_entry_is_none(tmp_path, monkeypatch):
+    """skip_git=True on a brand-new session has no prior branch -> None."""
+    calls = []
+    monkeypatch.setattr(
+        index, "_git_branch", lambda cwd: calls.append(cwd) or "feature-x"
+    )
+    transcript = str(tmp_path / "01ABC.jsonl")
+    shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
+    idx_path = str(tmp_path / "index.json")
+
+    index.record_session(idx_path, session_id="01ABC", transcript_path=transcript,
+                         cwd=str(tmp_path), skip_git=True)
+    assert calls == []
+    assert index.load(idx_path)["sessions"]["01ABC"]["branch"] is None
+
+
 def test_record_session_preserves_notes(tmp_path):
     """A user-edited 'notes' field survives a re-record."""
     transcript = str(tmp_path / "01ABC.jsonl")

@@ -132,3 +132,90 @@ async def test_poll_live_repopulate_preserves_cursor(tmp_path):
         await pilot.pause()
 
         assert app._selected_sid() == "named"
+
+
+import os
+
+import pytest
+from _pkg.tui import SessionExplorerApp
+
+
+def _write_jsonl(path, prompt):
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": prompt},
+         "timestamp": "2026-05-29T10:00:00.000Z"},
+        {"type": "assistant", "message": {"role": "assistant",
+         "content": [{"type": "text", "text": "ok"}], "model": "claude-opus-4-8",
+         "usage": {"cache_read_input_tokens": 1234}},
+         "timestamp": "2026-05-29T10:00:01.000Z"},
+    ]
+    path.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+
+
+def _app_with_live_empty_session(tmp_path):
+    tp = tmp_path / "live1.jsonl"
+    _write_jsonl(tp, "the real first prompt")
+    idx = tmp_path / "session-explorer-index.json"
+    idx.write_text(json.dumps({"version": 2, "sessions": {
+        "live1": {"project_label": "demo", "project_path": str(tmp_path),
+                  "name_cached": "alpha", "last_active_at": "2026-05-29T10:00:00+00:00",
+                  "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+                  "first_prompt": None, "transcript_path": str(tp)},
+        "dead1": {"project_label": "demo", "project_path": str(tmp_path),
+                  "name_cached": "beta", "last_active_at": "2026-05-29T09:00:00+00:00",
+                  "tokens_estimate": 5, "tokens_window_pct": 0, "message_count": 3,
+                  "first_prompt": "beta prompt", "transcript_path": str(tmp_path / "x.jsonl")}}}))
+    # Live registry: marks live1 as a genuinely-live session so the poll timer
+    # (which runs on mount and overwrites _live_states from disk) keeps it live.
+    # last_seen=now + this process's pid keeps it inside live.poll's TTL/PID gate.
+    from datetime import datetime, timezone
+    live = tmp_path / "session-explorer-live.json"
+    live.write_text(json.dumps({"version": 1, "sessions": {
+        "live1": {"state": "working",
+                  "last_seen": datetime.now(timezone.utc).isoformat(),
+                  "transcript_path": str(tp), "cwd": str(tmp_path),
+                  "pid": os.getpid()}}}))
+    (tmp_path / ".session-explorer.help-seen").touch()
+    (tmp_path / ".session-explorer.retention-declined").touch()
+    return SessionExplorerApp(index_path=str(idx))
+
+
+def test_do_live_metadata_refresh_fills_in_index(tmp_path):
+    from _pkg import index as _index
+    app = _app_with_live_empty_session(tmp_path)
+    app._live_states = {"live1": "working"}
+    app._do_live_metadata_refresh()
+    data = _index.load(app._index_path)["sessions"]
+    assert data["live1"]["first_prompt"] == "the real first prompt"
+    assert data["live1"]["message_count"] == 2
+    assert data["dead1"]["first_prompt"] == "beta prompt"  # non-live untouched
+
+
+@pytest.mark.asyncio
+async def test_apply_live_metadata_updates_row_without_repopulate(tmp_path):
+    app = _app_with_live_empty_session(tmp_path)
+    app._live_states = {"live1": "working"}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before_line = app._tree.cursor_line
+        app._do_live_metadata_refresh()
+        app._apply_live_metadata()
+        await pilot.pause()
+        leaf, _ = app._row_nodes["live1"]
+        assert leaf.data.get("first_prompt") == "the real first prompt"
+        assert app._tree.cursor_line == before_line
+
+
+@pytest.mark.asyncio
+async def test_refresh_live_metadata_worker_updates_row(tmp_path):
+    """End-to-end: the @work(thread=True) wrapper refreshes the index off-thread
+    and pushes the new metadata onto the live row."""
+    app = _app_with_live_empty_session(tmp_path)
+    app._live_states = {"live1": "working"}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh_live_metadata()              # the @work(thread=True) wrapper
+        await app.workers.wait_for_complete()     # let the worker thread finish
+        await pilot.pause()
+        leaf, _ = app._row_nodes["live1"]
+        assert leaf.data.get("first_prompt") == "the real first prompt"

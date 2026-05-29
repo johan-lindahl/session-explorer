@@ -3,6 +3,21 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.2.0
+
+### Added
+- Live sessions' rows now refresh from their transcript about every 2s, so a
+  freshly-started session's first prompt, message count, tokens, and context %
+  fill in and tick up live (no manual F5). Persisted to the index, off the UI
+  thread; only live sessions are re-read.
+- README + in-app help now document the live-session glyphs, with a new
+  screenshot; a dev-only `scripts/gen_screenshots.py` regenerates the images.
+
+### Changed
+- The rename / move / new-folder / delete / notes dialogs are now centered
+  overlays on a dimmed backdrop (matching the help screen) instead of
+  full-screen black panels.
+
 ## 1.1.0
 
 ### Added
