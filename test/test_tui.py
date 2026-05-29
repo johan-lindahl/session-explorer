@@ -368,38 +368,40 @@ def test_row_label_columns_align_across_depth():
     absolute screen column. In the bare row string this means the stat suffix
     sits at `name_w` in each, and that `name_w` differs by GUIDE_DEPTH, which
     exactly equals one tree-indent level."""
-    from _pkg.tui import _row_label, _stat_suffix, NAME_W, GUIDE_DEPTH
+    from _pkg.tui import _row_label, _stat_suffix, NAME_W, GUIDE_DEPTH, GLYPH_W
     s = {"name_cached": "x", "last_active_at": None,
          "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 7,
          "first_prompt": "hello"}
     ungrouped = _row_label("sid", s, depth=1)
     grouped = _row_label("sid", s, depth=2)
+    # Every row carries a GLYPH_W-wide live-state prefix before the name field.
     # At depth=2: name_w = NAME_W. At depth=1: name_w = NAME_W + GUIDE_DEPTH.
-    name_w_grouped = NAME_W
-    name_w_ungrouped = NAME_W + GUIDE_DEPTH
+    name_w_grouped = GLYPH_W + NAME_W
+    name_w_ungrouped = GLYPH_W + NAME_W + GUIDE_DEPTH
     assert grouped[name_w_grouped:] == ungrouped[name_w_ungrouped:]
     assert grouped[name_w_grouped:] == _stat_suffix("—", "~0", "(0%)", "7", "msgs", "hello")
 
 
 def test_column_header_offset_matches_grouped_leaf():
-    from _pkg.tui import _column_header, _stat_suffix, NAME_W, GUIDE_DEPTH
+    from _pkg.tui import _column_header, _stat_suffix, NAME_W, GUIDE_DEPTH, GLYPH_W
     header = _column_header()
-    name_region = NAME_W + 2 * GUIDE_DEPTH
-    # Left region is the NAME label; the stat labels begin at the same absolute
-    # column a grouped leaf's stats do (prefix 2*GUIDE_DEPTH + NAME_W).
-    assert header[:name_region].rstrip() == "NAME"
+    name_region = GLYPH_W + NAME_W + 2 * GUIDE_DEPTH
+    # Left region is the GLYPH_W glyph cells + NAME label; the stat labels begin
+    # at the same absolute column a grouped leaf's stats do (prefix GLYPH_W +
+    # 2*GUIDE_DEPTH + NAME_W).
+    assert header[:name_region].strip() == "NAME"
     assert header[name_region:] == _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
 def test_long_name_truncates_to_field_width():
-    from _pkg.tui import _row_label, NAME_W
+    from _pkg.tui import _row_label, NAME_W, GLYPH_W
     s = {"name_cached": "a" * 100, "last_active_at": None,
          "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
          "first_prompt": ""}
-    # depth=2 → name_w == NAME_W
+    # depth=2 → name_w == NAME_W, preceded by the GLYPH_W live-state prefix.
     row = _row_label("sid", s, depth=2)
-    assert row[:NAME_W].endswith("…")
-    assert row[NAME_W] == " "  # stat suffix's leading space sits exactly at NAME_W
+    assert row[GLYPH_W:GLYPH_W + NAME_W].endswith("…")
+    assert row[GLYPH_W + NAME_W] == " "  # stat suffix's leading space sits exactly after the name field
 
 
 async def test_column_header_rendered(index_path):

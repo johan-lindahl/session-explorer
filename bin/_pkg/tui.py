@@ -35,6 +35,25 @@ def _index_path() -> str:
 # field is widened by GUIDE_DEPTH to push the stats back to the same column.
 NAME_W = 24
 GUIDE_DEPTH = 4  # cells Textual indents per tree level (Tree.guide_depth)
+GLYPH_W = 2  # leading cells reserved on every row for the live-state glyph
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+IDLE_GLYPH = "○"
+SPINNER_INTERVAL = 0.2   # seconds between spinner frames
+LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
+
+
+def _glyph(state: "str | None", frame: int) -> str:
+    """A GLYPH_W-wide leading cell for a row's live state. Returns Textual
+    console markup (rendered by Tree.process_label). Pure for unit testing.
+
+    Display width is always GLYPH_W cells after markup is stripped (the markup
+    glyph is 1 cell + 1 separating space), so stat columns stay aligned."""
+    if state == "working":
+        ch = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
+        return f"[green]{ch}[/] "
+    if state == "idle":
+        return f"[dim]{IDLE_GLYPH}[/] "
+    return " " * GLYPH_W
 
 
 def _stat_suffix(age: str, tok: str, pct: str, msgs: str, msgs_unit: str, prompt: str) -> str:
@@ -43,10 +62,12 @@ def _stat_suffix(age: str, tok: str, pct: str, msgs: str, msgs_unit: str, prompt
     return f" {age:>4}  {tok:>6} {pct:>5}  {msgs:>4} {msgs_unit}   {prompt}"
 
 
-def _row_label(sid: str, s: dict, depth: int) -> str:
+def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ") -> str:
     """Leaf row. `depth` is the number of tree levels above the leaf
     (project = 1 level above ungrouped leaves; folder above that = 2 levels;
-    etc.). Used to choose the name_field width so stat columns align."""
+    etc.). Used to choose the name_field width so stat columns align.
+    `glyph` is a GLYPH_W-wide live-state prefix (see _glyph); default is blank
+    so non-live rows and existing callers are unaffected."""
     _, display = split_path(s.get("name_cached"))
     display = display or sid[:8]
     # Each level of indent steals GUIDE_DEPTH cells from the name field.
@@ -61,14 +82,15 @@ def _row_label(sid: str, s: dict, depth: int) -> str:
     pct = fmt_pct(s.get("tokens_window_pct", 0))
     msgs = str(s.get("message_count", 0))
     prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
-    return f"{display:<{name_w}}" + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
+    return glyph + f"{display:<{name_w}}" + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
 
 
 def _column_header() -> str:
     """Header line whose labels sit above the stat columns. Pads to a depth-2
-    leaf's absolute stat offset (2 levels of guide × GUIDE_DEPTH + NAME_W)."""
+    leaf's absolute stat offset (GLYPH_W glyph cells + 2 levels of guide ×
+    GUIDE_DEPTH + NAME_W)."""
     name_region = NAME_W + 2 * GUIDE_DEPTH
-    return f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
+    return " " * GLYPH_W + f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
 def _preview_text(s: dict) -> str:
