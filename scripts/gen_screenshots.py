@@ -103,9 +103,9 @@ def main():
     d = os.path.dirname(idx)
     open(os.path.join(d, ".session-explorer.help-seen"), "w").close()
     open(os.path.join(d, ".session-explorer.retention-declined"), "w").close()
-    asyncio.run(_shoot(idx, "tree", live=LIVE))
+    asyncio.run(_shoot(idx, "tree"))
     asyncio.run(_shoot(idx, "live", live=LIVE))
-    asyncio.run(_shoot(idx, "preview", live=LIVE, open_preview=True))
+    asyncio.run(_shoot(idx, "preview", open_preview=True))
     asyncio.run(_shoot(idx, "help", open_help=True))
     for name in ("tree", "live", "preview", "help"):
         _svg_to_png(name)
