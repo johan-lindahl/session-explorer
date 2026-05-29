@@ -3,6 +3,15 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.3.0
+
+### Changed
+- The `F5` rescan progress now shows in a centered modal panel (the same
+  `_PanelScreen` styling as the rename / move / new-folder / delete / notes
+  dialogs) overlaid on the dimmed tree, instead of blanking the tree pane to a
+  full-screen black panel. This completes the 1.2.0 dialog restyle, which had
+  missed the rescan view because it was drawn inline rather than as a modal.
+
 ## 1.2.0
 
 ### Added

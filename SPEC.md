@@ -124,7 +124,7 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
 | `u` | Toggle visibility of unnamed sessions (hidden by default). |
-| `F5` | Rescan: import any sessions under `~/.claude/projects/` not yet tracked and refresh cached fields (runs `index.reindex` in a background worker, with a determinate progress bar). Use after a fresh install to pull in pre-existing sessions. |
+| `F5` | Rescan: import any sessions under `~/.claude/projects/` not yet tracked and refresh cached fields (runs `index.reindex` in a background worker, with a determinate progress bar shown in a modal panel — the same centered `_PanelScreen` styling as the other dialogs, overlaid on the dimmed tree). Use after a fresh install to pull in pre-existing sessions. |
 | `/` | Live filter across name, notes, first prompt, summary. |
 | `h` | Show the help overlay (slash-folder naming, the named-only default + `u`, full key list, author credit). Auto-opens once on first launch, then only on demand. |
 | `Esc` | Close the preview pane, the help overlay, or clear an active filter. Does **not** quit. |

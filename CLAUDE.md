@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Implemented and released (**v1.2.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
+Implemented and released (**v1.3.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
 
 ## What this project is
 
@@ -48,7 +48,7 @@ These are the constraints to preserve — violating any breaks the spec's contra
 
 ## Implementation order
 
-All milestones (M1–M6) are shipped as of v1.2.0; the `SPEC.md` milestone table records what each delivered. For new work, keep `SPEC.md` authoritative — update it in the same change rather than letting code and spec diverge.
+All milestones (M1–M6) are shipped as of v1.3.0; the `SPEC.md` milestone table records what each delivered. For new work, keep `SPEC.md` authoritative — update it in the same change rather than letting code and spec diverge.
 
 ## Resolved design decisions
 

@@ -682,23 +682,30 @@ async def test_rescan_imports_sessions_from_projects_root(tmp_path):
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app._empty.display is False           # imported (named) session visible
-        assert app._progress.display is False        # progress bar hidden once done
+        from _pkg.tui import RescanScreen
+        assert not isinstance(app.screen, RescanScreen)  # progress modal dismissed
+        assert app._rescan_screen is None
 
     assert "AAA" in json.load(open(idx))["sessions"]
 
 
-async def test_rescan_progress_updates_bar(index_path):
-    """_on_progress shows the bar with the right total/progress and an X/N label."""
-    from _pkg.tui import SessionExplorerApp
+async def test_rescan_progress_updates_modal(index_path):
+    """The rescan modal shows the bar with the right total/progress and an X/N
+    label; _on_progress feeds the pushed RescanScreen."""
+    from _pkg.tui import SessionExplorerApp, RescanScreen
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        screen = RescanScreen()
+        app._rescan_screen = screen
+        app.push_screen(screen)
+        await pilot.pause()
         app._on_progress(2, 5)
         await pilot.pause()
-        assert app._progress.display is True
-        assert app._progress.total == 5
-        assert app._progress.progress == 2
-        assert "2/5" in str(app._empty.render())
+        assert isinstance(app.screen, RescanScreen)
+        assert screen._progress.total == 5
+        assert screen._progress.progress == 2
+        assert "2/5" in str(screen._status.render())
 
 
 async def test_h_opens_help_and_esc_dismisses(index_path):
