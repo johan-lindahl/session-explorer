@@ -78,3 +78,32 @@ run_hook() {  # run_hook  (reads $PAYLOAD on stdin)
   sleep 0.3
   ! grep -q "Removed" "$HOME/.claude/session-explorer.log" 2>/dev/null
 }
+
+# --- hooks/session-live.sh: lifecycle dispatcher for the live-session registry ---
+
+@test "session-live.sh forwards SessionStart with pid to the CLI" {
+  STUB="$BATS_TEST_TMPDIR/cli-args"
+  cat > "$BATS_TEST_TMPDIR/session-explorer" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$STUB"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/session-explorer"
+  export PATH="$BATS_TEST_TMPDIR:$PATH"
+  # Don't let the marketplace CLI resolution win over the PATH stub.
+  unset CLAUDE_PLUGIN_ROOT
+
+  echo '{"hook_event_name":"SessionStart","session_id":"s9","transcript_path":"/t/s9.jsonl","cwd":"/repo"}' \
+    | "$REPO/hooks/session-live.sh"
+  # The CLI call is backgrounded; give it a moment to write.
+  sleep 0.5
+
+  run cat "$STUB"
+  [[ "$output" == *"live --event SessionStart"* ]]
+  [[ "$output" == *"--sid s9"* ]]
+  [[ "$output" == *"--pid "* ]]
+}
+
+@test "session-live.sh exits 0 even with empty stdin" {
+  run bash -c "printf '' | bash '$REPO/hooks/session-live.sh'"
+  [ "$status" -eq 0 ]
+}
