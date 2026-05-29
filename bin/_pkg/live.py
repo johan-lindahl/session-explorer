@@ -92,8 +92,8 @@ def record_event(path: str, *, event: str, session_id: str,
 
 
 def _pid_alive(pid: Optional[int]) -> bool:
-    if pid is None:
-        return False
+    if pid is None or pid <= 0:
+        return False  # os.kill(0/-N, 0) targets process groups, not a single pid
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -110,7 +110,7 @@ def _age_seconds(last_seen: Optional[str], now: datetime) -> Optional[float]:
         return None
     try:
         return (now - datetime.fromisoformat(last_seen)).total_seconds()
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -120,7 +120,8 @@ def _alive(entry: dict, now: datetime, ttl_seconds: int) -> bool:
     if pid is not None:
         if not _pid_alive(pid):
             return False
-        return not (age is not None and age > ttl_seconds)  # TTL backstop
+        # alive unless it's both timestamped and older than the TTL backstop
+        return age is None or age <= ttl_seconds
     # No pid -> TTL only.
     return age is not None and age <= ttl_seconds
 
@@ -142,6 +143,9 @@ def poll(path: str, *, now: Optional[datetime] = None,
         else:
             dead.append(sid)
     if dead:
+        # Prune by sid from the LOCK_SH snapshot. If one became live again
+        # between read and lock it's wrongly dropped, but the next hook event
+        # re-adds it -- acceptable for a transient indicator.
         def m(d: dict) -> dict:
             for sid in dead:
                 d.get("sessions", {}).pop(sid, None)

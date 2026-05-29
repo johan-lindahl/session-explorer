@@ -125,3 +125,22 @@ def test_poll_does_not_write_when_nothing_dead(tmp_path):
     before = os.path.getmtime(lp)
     live.poll(lp, now=T0)
     assert os.path.getmtime(lp) == before  # no needless rewrite
+
+
+def test_poll_prunes_zero_or_negative_pid(tmp_path):
+    lp = _seed(tmp_path, state="idle", pid=0, last_seen=T0.isoformat())
+    assert live.poll(lp, now=T0) == {}
+
+
+def test_poll_alive_pid_with_missing_last_seen_is_kept(tmp_path):
+    # A live pid with no timestamp stays alive on pid alone (age is None).
+    lp = _seed(tmp_path, state="working", pid=os.getpid())
+    assert live.poll(lp, now=T0) == {"s1": "working"}
+
+
+def test_poll_future_last_seen_is_treated_as_alive(tmp_path):
+    # Clock skew: a future last_seen yields negative age, not stale.
+    from datetime import timedelta as _td
+    future = (T0 + _td(seconds=120)).isoformat()
+    lp = _seed(tmp_path, state="idle", pid=os.getpid(), last_seen=future)
+    assert live.poll(lp, now=T0) == {"s1": "idle"}
