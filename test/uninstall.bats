@@ -48,6 +48,55 @@ print(sum(1 for h in ss if 'session-start.sh' in str(h.get('command',''))))
   [ "$output" = "0" ]
 }
 
+@test "uninstall removes the live-session lifecycle hooks" {
+  bash "$REPO/install.sh"
+  run bash "$REPO/uninstall.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+h = d.get('hooks', {})
+# No session-live.sh references should remain anywhere.
+def refs(evt):
+    out = 0
+    for entry in h.get(evt, []):
+        out += str(entry.get('command','')).count('session-live.sh')
+        for x in entry.get('hooks', []):
+            out += str(x.get('command','')).count('session-live.sh')
+    return out
+total = sum(refs(e) for e in ('SessionStart','UserPromptSubmit','Stop','Notification','SessionEnd'))
+# The four standalone events should be gone entirely (empty or absent).
+empties = all(not h.get(e) for e in ('UserPromptSubmit','Stop','Notification','SessionEnd'))
+print(total, empties)
+"
+  [ "$output" = "0 True" ]
+}
+
+@test "uninstall keeps unrelated user hooks intact" {
+  bash "$REPO/install.sh"
+  # A user-owned hook the plugin must never touch.
+  python3 - "$HOME/.claude/settings.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("hooks", {}).setdefault("Stop", []).append(
+    {"matchers": [], "command": "/usr/bin/my-own-hook.sh"})
+json.dump(d, open(p, "w"))
+PY
+  run bash "$REPO/uninstall.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+stop = d.get('hooks', {}).get('Stop', [])
+assert any('my-own-hook.sh' in str(h.get('command','')) for h in stop), stop
+assert not any('session-live.sh' in str(h.get('command','')) for h in stop), stop
+print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
 @test "uninstall keeps the index by default and --purge deletes it" {
   bash "$REPO/install.sh"
   # Fabricate an index + folder store.

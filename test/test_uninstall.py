@@ -31,6 +31,8 @@ def _claude(tmp_path):
     (claude / ".session-explorer.current").write_text("sid-123")
     (claude / ".session-explorer.help-seen").write_text("")
     (claude / "session-explorer.log").write_text("log line\n")
+    (claude / "session-explorer-live.json").write_text('{"sessions": {}}')
+    (claude / "session-explorer-live.json.lock").write_text("")
     (claude / "session-explorer-index.json").write_text('{"version": 2, "sessions": {}}')
     (claude / "session-explorer-index.json.lock").write_text("")
     (claude / "session-explorer-folders.json").write_text('{"version": 1, "projects": {}}')
@@ -76,7 +78,8 @@ def test_teardown_deletes_operational_sidecars(tmp_path):
     claude = _claude(tmp_path)
     uninstall.teardown(claude_dir=str(claude))
     for name in (".session-explorer.current", ".session-explorer.help-seen",
-                 "session-explorer.log"):
+                 "session-explorer.log",
+                 "session-explorer-live.json", "session-explorer-live.json.lock"):
         assert not (claude / name).exists(), name
 
 
@@ -160,5 +163,13 @@ def test_uninstall_sh_reverses_install_sh(tmp_path):
     assert not link.is_symlink()
     settings = json.loads(settings_path.read_text())
     assert settings["cleanupPeriodDays"] == 30                     # restored from backup
-    assert settings["hooks"]["SessionStart"] == []                 # our hook removed
+    # All session-explorer hooks removed; emptied events are dropped entirely.
+    hooks = settings.get("hooks", {})
+    for evt in ("SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd"):
+        entries = hooks.get(evt, [])
+        assert not any(
+            "session-start.sh" in str(h.get("command", ""))
+            or "session-live.sh" in str(h.get("command", ""))
+            for h in entries
+        ), (evt, entries)
     assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
