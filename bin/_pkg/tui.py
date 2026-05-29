@@ -893,29 +893,27 @@ class SessionExplorerApp(App):
     def _poll_live(self) -> None:
         """Refresh live-session state from the registry (called on a timer).
 
-        A change that alters row *visibility* — a live unnamed session appearing
-        or a surfaced one dying — needs a full repopulate (tree membership
-        changed); a pure state change only needs glyph relabeling.
+        Liveness changes update glyphs (or repopulate on a visibility change);
+        then, regardless, live sessions' metadata is refreshed off-thread so
+        first_prompt / msgs / tokens fill in and tick as the agent works.
         """
         from . import live as _live
         try:
             new_states = _live.poll(self._live_path())
         except Exception:
             return  # never let the indicator break the UI
-        if new_states == self._live_states:
-            return
-        old = self._live_states
-        self._live_states = new_states
-        if self._visibility_changed(old, new_states):
-            # A timer-driven repopulate clears and rebuilds the tree, which
-            # resets the cursor to the top. Capture the selected session first
-            # and restore it afterwards so the involuntary refresh doesn't yank
-            # the user's selection out from under them.
-            sid = self._selected_sid()
-            self._populate()
-            self._restore_cursor_to_sid(sid)
-        else:
-            self._relabel_live_rows()
+        if new_states != self._live_states:
+            old = self._live_states
+            self._live_states = new_states
+            if self._visibility_changed(old, new_states):
+                sid = self._selected_sid()
+                self._populate()
+                self._restore_cursor_to_sid(sid)
+            else:
+                self._relabel_live_rows()
+        # Always refresh live metadata (stats change even when liveness doesn't).
+        if self._live_states:
+            self._refresh_live_metadata()
 
     def _selected_sid(self) -> "str | None":
         """The sid of the currently-selected row, or None if on a non-session node."""
@@ -968,6 +966,50 @@ class SessionExplorerApp(App):
             data = leaf.data or {}
             glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
             leaf.set_label(_row_label(sid, data, depth, glyph))
+
+    def _do_live_metadata_refresh(self) -> None:
+        """Re-index each live session from its transcript so first_prompt / msgs /
+        tokens populate and tick as the agent works. Plain (no threading) so it's
+        unit-testable; the worker wraps it. Only touches live sessions; swallows
+        per-session errors (a transcript mid-write must never break the UI)."""
+        from . import live as _live
+        try:
+            live = _live.load(self._live_path()).get("sessions", {})
+            indexed = _index.load(self._index_path).get("sessions", {})
+        except Exception:
+            return
+        for sid in list(self._live_states):
+            entry = live.get(sid, {})
+            ie = indexed.get(sid, {})
+            tp = entry.get("transcript_path") or ie.get("transcript_path")
+            cwd = entry.get("cwd") or ie.get("project_path")
+            if not tp or not cwd:
+                continue  # can't refresh without transcript+cwd; F5 remains the catch-all
+            try:
+                _index.record_session(self._index_path, sid, tp, cwd)
+            except Exception:
+                continue
+
+    @work(thread=True, exclusive=True, group="live-meta")
+    def _refresh_live_metadata(self) -> None:
+        """Off-thread wrapper: refresh live metadata on disk, then update rows on
+        the UI thread. `exclusive` so a slow refresh can't stack across polls."""
+        self._do_live_metadata_refresh()
+        self.call_from_thread(self._apply_live_metadata)
+
+    def _apply_live_metadata(self) -> None:
+        """Reload the index and refresh only the live rows in place (update each
+        live leaf's stored `data` + relabel). No full repopulate, so cursor /
+        scroll / expansion are preserved."""
+        try:
+            data = _index.load(self._index_path).get("sessions", {})
+        except Exception:
+            return
+        for sid, (leaf, _depth) in self._row_nodes.items():
+            if sid in self._live_states and sid in data:
+                leaf.data = {"sid": sid, **data[sid]}
+        self._relabel_live_rows()
+        self._refresh_preview()
 
     def _tick_spinner(self) -> None:
         """Advance the spinner frame and relabel only the working rows."""
