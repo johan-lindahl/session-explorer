@@ -94,13 +94,34 @@ EOF
 
   echo '{"hook_event_name":"SessionStart","session_id":"s9","transcript_path":"/t/s9.jsonl","cwd":"/repo"}' \
     | "$REPO/hooks/session-live.sh"
-  # The CLI call is backgrounded; give it a moment to write.
-  sleep 0.5
+  # The CLI call is backgrounded; poll until it has written (generous for CI).
+  for _ in $(seq 1 200); do [ -s "$STUB" ] && break; sleep 0.05; done
 
   run cat "$STUB"
   [[ "$output" == *"live --event SessionStart"* ]]
   [[ "$output" == *"--sid s9"* ]]
+  [[ "$output" == *"--transcript /t/s9.jsonl"* ]]
+  [[ "$output" == *"--cwd /repo"* ]]
   [[ "$output" == *"--pid "* ]]
+}
+
+@test "session-live.sh does not send --pid for non-SessionStart events" {
+  STUB="$BATS_TEST_TMPDIR/cli-args"
+  cat > "$BATS_TEST_TMPDIR/session-explorer" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$STUB"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/session-explorer"
+  export PATH="$BATS_TEST_TMPDIR:$PATH"
+  unset CLAUDE_PLUGIN_ROOT
+
+  echo '{"hook_event_name":"Stop","session_id":"s9","transcript_path":"/t/s9.jsonl","cwd":"/repo"}' \
+    | "$REPO/hooks/session-live.sh"
+  for _ in $(seq 1 200); do [ -s "$STUB" ] && break; sleep 0.05; done
+
+  run cat "$STUB"
+  [[ "$output" == *"live --event Stop"* ]]
+  [[ "$output" != *"--pid"* ]]
 }
 
 @test "session-live.sh exits 0 even with empty stdin" {

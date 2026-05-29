@@ -2,6 +2,8 @@
 # Lifecycle dispatcher for session-explorer's live-session registry.
 # Reads JSON on stdin: {hook_event_name, session_id, transcript_path, cwd, ...}
 # Records the event via the CLI, fully non-blocking. Never blocks; exits 0.
+# Fires on every turn (Stop/UserPromptSubmit) as well as session start/end, so
+# the only synchronous cost is one python JSON parse; the CLI write is detached.
 
 set -u
 CLAUDE_DIR="${HOME}/.claude"
