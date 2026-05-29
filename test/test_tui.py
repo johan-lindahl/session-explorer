@@ -1263,3 +1263,11 @@ async def test_notes_dialog_cancel_returns_none(tmp_path):
         await pilot.press("escape")
         await pilot.pause()
         assert got["v"] is None
+
+
+def test_help_text_documents_live_sessions():
+    txt = _tui._help_text()
+    assert "Live sessions" in txt
+    assert "spinner" in txt.lower()
+    assert "○" in txt
+    assert "active" in txt.lower()
