@@ -1,7 +1,7 @@
 # Active-session indicator — design
 
 **Date:** 2026-05-29
-**Status:** Implemented on branch feat/active-session-indicator (PID-capture spike + manual smoke test pending).
+**Status:** Implemented on branch feat/active-session-indicator. PID-capture spike validated (2026-05-29, macOS). End-to-end TUI smoke test optional (timers/animation covered by run_test tests).
 **Affects:** `SPEC.md` (new feature — must be reflected there during implementation), `plugin.json`, `install.sh`/`uninstall.sh`, `hooks/`, `bin/_pkg/` (new `live.py`, `cli.py`, `tui.py`, `tree_model.py`), `test/`
 
 ## Goal
@@ -138,13 +138,16 @@ best-effort only. Ground truth for "still alive":
 - Dead entries are pruned from the registry during the poll, under flock. A stale registry
   left over from a reboot self-heals on the first poll.
 
-### Validation risk (resolve first during implementation)
+### Validation risk — RESOLVED (spike run 2026-05-29): PID path confirmed
 
-PID capture assumes `hooks/session-live.sh`'s parent process *is* the Claude process. If
-implementation reveals the hook runs under a transient wrapper shell (so the recorded pid
-dies immediately), fall back to **TTL-only** death detection. This must be verified
-empirically (inspect `$PPID` / process tree from inside a real hook invocation) **before**
-committing to the PID path. Document the outcome in `SPEC.md`.
+PID capture assumes `hooks/session-live.sh`'s parent process *is* the Claude process.
+**Spike outcome (2026-05-29, macOS):** confirmed. A throwaway probe hook registered on
+SessionStart + Stop logged `$PPID` and its ancestry across many real sessions; in *every*
+invocation `$PPID` was the `claude` process directly (no transient wrapper shell). The
+liveness model was also validated end-to-end: PIDs of closed sessions read DEAD under
+`kill -0`, currently-open sessions read ALIVE. The PID path is adopted; the TTL backstop
+remains as the PID-reuse guard. The TTL-only fallback (do not pass `--pid`) is retained in
+`live._alive` (handles `pid is None`) but is not needed on macOS.
 
 ## 5. Install / settings registration
 

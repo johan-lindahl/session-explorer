@@ -38,9 +38,10 @@ except Exception:
 [ -n "${EVENT}" ] && [ -n "${SID}" ] || exit 0
 
 # Run detached so a turn never waits on the registry write. Recorded only on
-# SessionStart. $PPID is ASSUMED to be the Claude process (pending the PID-capture
-# spike; if it's a transient wrapper shell, drop this --pid line — liveness then
-# falls back to TTL-only, which live._alive already handles for pid=None).
+# SessionStart. $PPID is the Claude process (confirmed by the 2026-05-29 spike:
+# the hook runs as a direct child of `claude`, no wrapper shell). If a future
+# platform proves otherwise, drop this --pid line — liveness then falls back to
+# TTL-only, which live._alive already handles for pid=None.
 ARGS=(live --event "${EVENT}" --sid "${SID}")
 [ -n "${TPATH}" ] && ARGS+=(--transcript "${TPATH}")
 [ -n "${CWD}" ] && ARGS+=(--cwd "${CWD}")

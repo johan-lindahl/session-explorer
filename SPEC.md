@@ -312,7 +312,7 @@ State stays `working` for the whole turn (between `UserPromptSubmit` and `Stop`)
 - **TTL backstop (default 24h):** prune even a `kill -0`-alive entry whose `last_seen` is older than the TTL, guarding against PID-reuse zombies. With no recorded pid, detection is TTL-only.
 - Dead entries are pruned during the poll, under flock. A stale registry left by a reboot self-heals on the first poll.
 
-> **Caveat — PID capture is pending empirical validation.** Recording `$PPID` assumes the hook's parent process *is* the Claude process. This has **not yet been verified by a spike** (inspecting `$PPID` / the process tree from inside a real hook invocation). If the hook turns out to run under a transient wrapper shell — so the recorded pid dies immediately — the documented fallback is **TTL-only** death detection. Treat the PID path as the intended design, not a confirmed fact, until that spike runs.
+> **PID capture — validated (spike, 2026-05-29, macOS).** Recording `$PPID` assumes the hook's parent process *is* the Claude process. A throwaway probe hook on SessionStart + Stop confirmed this across many real sessions: `$PPID` is always the `claude` process directly (no wrapper shell), and `kill -0` correctly reported open sessions ALIVE / closed sessions DEAD. The TTL-only fallback (omit `--pid` → `live._alive` handles `pid is None`) is retained for any future platform where this doesn't hold, but is not needed on macOS.
 
 ### TUI rendering
 
@@ -453,7 +453,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 | M3 | `--gc` (old unnamed sessions; auto-fired once/day by the hook + manual; empty-folder pruning deferred — see edge case #7); `session-explorer uninstall`; search across notes/prompts/summaries. |
 | M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
 | M5 | Submit to `anthropics/claude-plugins-community`. WSL launcher (shipped: `wt.exe` re-entry + fallback); native Windows out of scope. |
-| M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike and manual smoke test still pending (see the indicator section's caveat). |
+| M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike validated (2026-05-29, macOS); end-to-end TUI smoke test optional (timers/animation covered by `run_test` tests). |
 
 ## Open questions
 
