@@ -288,11 +288,6 @@ class MoveScreen(_PanelScreen):
             id="panel",
         )
 
-    def on_mount(self) -> None:
-        # Focus the path Input so typing a new path and pressing enter submits it
-        # (the OptionList remains reachable via Tab / arrow keys for picking).
-        self.query_one("#move-input", Input).focus()
-
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         opt_id = event.option.id
         self.dismiss("" if opt_id == "__none__" else opt_id)

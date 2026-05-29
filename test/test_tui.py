@@ -1188,7 +1188,10 @@ async def test_move_dialog_typed_path_on_enter(tmp_path):
         app.push_screen(_tui.MoveScreen("demo", ["team/planning"], ""),
                         lambda v: got.__setitem__("v", v))
         await pilot.pause()
-        app.screen.query_one("#move-input", _tui.Input).value = "team/new"
+        inp = app.screen.query_one("#move-input", _tui.Input)
+        inp.focus()
+        await pilot.pause()
+        inp.value = "team/new"
         await pilot.press("enter")
         await pilot.pause()
         assert got["v"] == "team/new"
