@@ -228,7 +228,7 @@ def _help_text() -> str:
 
 
 class _PanelScreen(ModalScreen):
-    """Base for the modal dialogs (rename, move, new folder, delete, notes): a centered rounded panel on a dimmed,
+    """Base for the modal dialogs (rename, move, new folder, delete, notes, rescan progress): a centered rounded panel on a dimmed,
     translucent backdrop so the session tree shows through (matches the help
     overlay). Subclasses wrap their widgets in `Vertical(..., id="panel")` with a
     bold `.dialog-title` Label first and a dim `.dialog-hint` Label last. Each
@@ -374,6 +374,38 @@ class NotesScreen(_PanelScreen):
         self.dismiss(self._ta.text)
 
 
+class RescanScreen(_PanelScreen):
+    """Progress panel for the F5 rescan. A centered _PanelScreen (matching the
+    other dialogs) holding an indeterminate-then-determinate bar and an X/N
+    status line. The app owns the scan worker and feeds this via
+    `update_progress`; it dismisses the screen when the scan finishes. No
+    bindings — the scan can't be cancelled, so Esc is intentionally inert."""
+
+    BINDINGS: list = []
+
+    DEFAULT_CSS = """
+    RescanScreen #scanbar { width: 60; margin-top: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        self._status = Label("Scanning ~/.claude/projects/…", classes="dialog-hint")
+        self._progress = ProgressBar(show_eta=False, id="scanbar")
+        yield Vertical(
+            Label("Rescanning", classes="dialog-title"),
+            self._progress,
+            self._status,
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        # Indeterminate until the worker's pre-count lands the first total.
+        self._progress.update(total=None, progress=0)
+
+    def update_progress(self, done: int, total: int) -> None:
+        self._status.update(f"Scanning ~/.claude/projects/…  {done}/{total}")
+        self._progress.update(total=total or None, progress=done)
+
+
 class HelpScreen(ModalScreen[None]):
     """Read-only help overlay. Any of Esc / q / h / Space closes it."""
 
@@ -393,7 +425,6 @@ class SessionExplorerApp(App):
     #treepane { width: 1fr; }
     #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
     #empty-state { padding: 2 2; color: $text-muted; }
-    #scanbar { margin: 0 2 1 2; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     HelpScreen { align: center middle; }
@@ -436,6 +467,8 @@ class SessionExplorerApp(App):
         # Flips after the first rescan so the empty-state can switch from
         # "press F5 to scan" to "no sessions found".
         self._scanned: bool = False
+        # The live rescan progress modal while a scan runs, else None.
+        self._rescan_screen: RescanScreen | None = None
         # Live-session state: sid -> "working"|"idle", refreshed by _poll_live.
         self._live_states: dict[str, str] = {}
         self._spinner_frame: int = 0
@@ -477,10 +510,8 @@ class SessionExplorerApp(App):
         self._preview.display = False
         self._empty = Static("", id="empty-state")
         self._empty.display = False
-        self._progress = ProgressBar(show_eta=False, id="scanbar")
-        self._progress.display = False
         yield Horizontal(
-            Vertical(self._colheader, self._tree, self._empty, self._progress, id="treepane"),
+            Vertical(self._colheader, self._tree, self._empty, id="treepane"),
             self._preview,
         )
         self._filter = Input(placeholder="filter…", id="filter")
@@ -596,10 +627,6 @@ class SessionExplorerApp(App):
         def visible_count(node):
             n = sum(1 for sid, s in node["_sessions"] if self._matches(sid, s))
             return n + sum(visible_count(c) for c in node["_folders"].values())
-
-        # The scan UI is transient — only action_rescan/_on_progress show it.
-        # _populate always runs after a scan completes, so clear it here.
-        self._progress.display = False
 
         visible = sum(visible_count(p) for p in tree.values())
         msg = _empty_state_text(
@@ -1035,26 +1062,26 @@ class SessionExplorerApp(App):
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread
-        # to keep the UI responsive on large histories. Show the scan UI now so
-        # there's no flash of the old tree before the first progress callback.
+        # to keep the UI responsive on large histories. Progress shows in a
+        # modal panel (consistent with the other dialogs) overlaid on the dimmed
+        # tree, rather than blanking the tree pane. The worker dismisses it.
         self.sub_title = "scanning ~/.claude/projects/…"
-        self._empty.update("Scanning ~/.claude/projects/…")
-        self._empty.display = True
-        self._tree.display = False
-        self._colheader.display = False
-        self._progress.update(total=None, progress=0)  # indeterminate until pre-count
-        self._progress.display = True
+        self._rescan_screen = RescanScreen()
+        self.push_screen(self._rescan_screen)
         self._rescan_worker()
 
     def _on_progress(self, done: int, total: int) -> None:
-        """Update the scan UI. Called on the main thread (marshalled from the
+        """Feed the rescan modal. Called on the main thread (marshalled from the
         worker via call_from_thread)."""
-        self._empty.update(f"Scanning ~/.claude/projects/…  {done}/{total}")
-        self._empty.display = True
-        self._tree.display = False
-        self._colheader.display = False
-        self._progress.update(total=total or None, progress=done)
-        self._progress.display = True
+        if self._rescan_screen is not None:
+            self._rescan_screen.update_progress(done, total)
+
+    def _finish_rescan(self) -> None:
+        """Dismiss the modal and repaint the tree. Main thread."""
+        if self._rescan_screen is not None:
+            self._rescan_screen.dismiss()
+            self._rescan_screen = None
+        self._populate()
 
     @work(thread=True, exclusive=True)
     def _rescan_worker(self) -> None:
@@ -1065,7 +1092,7 @@ class SessionExplorerApp(App):
                            progress=progress)
         finally:
             self._scanned = True
-            self.call_from_thread(self._populate)
+            self.call_from_thread(self._finish_rescan)
 
     def action_filter(self) -> None:
         self._filter.display = True
