@@ -160,3 +160,26 @@ def test_index_gc_dry_run_changes_nothing(tmp_path):
     assert "dry-run" in result.stdout.lower()
     assert jsonl.exists()
     assert "sid" in json.loads(idx.read_text())["sessions"]
+
+
+def test_cli_live_records_event(tmp_path, monkeypatch):
+    import json as _json
+    from _pkg import cli as _cli
+
+    live_path = tmp_path / "session-explorer-live.json"
+    monkeypatch.setenv("SESSION_EXPLORER_LIVE", str(live_path))
+    rc = _cli.main(["live", "--event", "SessionStart", "--sid", "abc",
+                    "--transcript", "/t/abc.jsonl", "--cwd", "/repo", "--pid", "5"])
+    assert rc == 0
+    data = _json.loads(live_path.read_text())
+    assert data["sessions"]["abc"]["state"] == "idle"
+    assert data["sessions"]["abc"]["pid"] == 5
+
+
+def test_cli_live_never_errors_on_bad_input(tmp_path, monkeypatch):
+    from _pkg import cli as _cli
+
+    monkeypatch.setenv("SESSION_EXPLORER_LIVE", str(tmp_path / "live.json"))
+    # Missing --sid still must not crash the hook caller.
+    rc = _cli.main(["live", "--event", "Stop", "--sid", ""])
+    assert rc == 0

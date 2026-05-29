@@ -21,6 +21,14 @@ def _index_path() -> str:
     return os.path.expanduser("~/.claude/session-explorer-index.json")
 
 
+def _live_path() -> str:
+    env_override = os.environ.get("SESSION_EXPLORER_LIVE")
+    if env_override:
+        return env_override
+    from . import live as _live
+    return _live.default_path_for(_index_path())
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="session-explorer")
     p.add_argument("--version", action="version", version=f"session-explorer {__version__}")
@@ -40,6 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
                          help="With --gc: report what would be removed, delete nothing.")
     index_p.add_argument("--retention-days", type=int, default=30, metavar="N",
                          help="With --gc: delete unnamed sessions idle longer than N days (default 30).")
+
+    live_p = sub.add_parser("live", help="Record a session lifecycle event (used by hooks).")
+    live_p.add_argument("--event", required=True,
+                        help="Hook event name (SessionStart/UserPromptSubmit/Stop/Notification/SessionEnd).")
+    live_p.add_argument("--sid", required=True, help="Session id.")
+    live_p.add_argument("--transcript", default=None)
+    live_p.add_argument("--cwd", default=None)
+    live_p.add_argument("--pid", type=int, default=None)
 
     uninstall_p = sub.add_parser(
         "uninstall",
@@ -129,6 +145,24 @@ def _cmd_index(args) -> int:
     return 2
 
 
+def _cmd_live(args) -> int:
+    # Hooks call this; it must never raise (would surface as a hook failure).
+    if not args.sid:
+        return 0
+    try:
+        from . import live as _live
+        _live.record_event(_live_path(), event=args.event, session_id=args.sid,
+                            transcript_path=args.transcript, cwd=args.cwd, pid=args.pid)
+    except Exception as e:
+        try:
+            log = os.path.expanduser("~/.claude/session-explorer.log")
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"warn: live --event {args.event} failed: {e}\n")
+        except Exception:
+            pass
+    return 0
+
+
 def _cmd_uninstall(args) -> int:
     from . import uninstall as _uninstall
     claude_dir = os.path.expanduser("~/.claude")
@@ -177,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "index":
         return _cmd_index(args)
+    if args.cmd == "live":
+        return _cmd_live(args)
     if args.cmd == "uninstall":
         return _cmd_uninstall(args)
     if args.cmd == "list":
