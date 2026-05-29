@@ -90,3 +90,45 @@ def test_row_label_prepends_glyph_without_disturbing_name():
     label = tui._row_label("sid12345", s, depth=2, glyph="[green]⠋[/] ")
     assert label.startswith("[green]⠋[/] ")
     assert "myname" in label
+
+
+async def test_poll_live_repopulate_preserves_cursor(tmp_path):
+    # One named (always visible) + one unnamed (visible only while live) session.
+    path = _write_index(tmp_path, {
+        "named": {
+            "name_cached": "kept", "project_label": "demo",
+            "project_path": "/tmp/demo", "last_active_at": None,
+            "tokens_estimate": 0, "tokens_window_pct": 0,
+            "message_count": 0, "first_prompt": "",
+        },
+        "stub": {
+            "name_cached": None, "project_label": "demo",
+            "project_path": "/tmp/demo", "last_active_at": None,
+            "tokens_estimate": 0, "tokens_window_pct": 0,
+            "message_count": 0, "first_prompt": "",
+        },
+    })
+    app = _app(path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The unnamed stub is live, so a repopulate surfaces it (visibility change).
+        app._live_states = {"stub": "working"}
+        app._populate()
+        await pilot.pause()
+        # Park the cursor on the named session's row.
+        named_leaf = app._row_nodes["named"][0]
+        app._tree.move_cursor(named_leaf)
+        assert app._selected_sid() == "named"
+
+        # The stub drops out of the live set -> next poll triggers a full
+        # repopulate (the stub's row disappears). Cursor must stay on "named".
+        from _pkg import live as _live
+        orig_poll = _live.poll
+        _live.poll = lambda *a, **k: {}
+        try:
+            app._poll_live()
+        finally:
+            _live.poll = orig_poll
+        await pilot.pause()
+
+        assert app._selected_sid() == "named"

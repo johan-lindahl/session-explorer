@@ -878,9 +878,43 @@ class SessionExplorerApp(App):
         old = self._live_states
         self._live_states = new_states
         if self._visibility_changed(old, new_states):
+            # A timer-driven repopulate clears and rebuilds the tree, which
+            # resets the cursor to the top. Capture the selected session first
+            # and restore it afterwards so the involuntary refresh doesn't yank
+            # the user's selection out from under them.
+            sid = self._selected_sid()
             self._populate()
+            self._restore_cursor_to_sid(sid)
         else:
             self._relabel_live_rows()
+
+    def _selected_sid(self) -> "str | None":
+        """The sid of the currently-selected row, or None if on a non-session node."""
+        node = self._tree.cursor_node
+        data = node.data if node and node.data else {}
+        return data.get("sid")
+
+    def _restore_cursor_to_sid(self, sid: "str | None") -> None:
+        """Move the tree cursor back to a session's row after a rebuild.
+
+        Safe no-op when sid is None (cursor was on a project/folder node) or
+        the session no longer has a row (it was hidden/deleted)."""
+        if not sid:
+            return
+        node = self._row_nodes.get(sid)
+        if node is None:
+            return
+        leaf = node[0]
+        try:
+            # A fresh _populate() clears the tree's line cache, leaving every
+            # TreeNode._line at -1 until the next layout pass. move_cursor reads
+            # leaf._line, so force the line cache to rebuild first; otherwise it
+            # would set cursor_line to -1 (top/reset). Accessing _tree_lines
+            # triggers _build(), which assigns _line to every node.
+            self._tree._tree_lines  # noqa: B018  (property access rebuilds the cache)
+            self._tree.move_cursor(leaf)
+        except Exception:
+            pass
 
     def _visibility_changed(self, old: dict, new: dict) -> bool:
         """True if any session whose membership depends on liveness flipped.
