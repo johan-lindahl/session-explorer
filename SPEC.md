@@ -2,6 +2,8 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
+**Status:** Shipped — **v1.2.0**, installable from the Claude Code marketplace. All milestones below (M1–M6) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
+
 ## Goals
 
 1. **Claude's name is the only metadata that matters.** `/rename <name>` (or `claude -n <name>` at startup) is the single source of truth for both the session's identity and its folder. The plugin never maintains a parallel "tag" field.
@@ -146,7 +148,7 @@ These are pure caches in the index. The `SessionStart` hook refreshes them on ev
 
 ### Rename and move
 
-Both write a rename event to the session's JSONL in the same shape Claude's own `/rename` writes. **M1 task:** reverse-engineer Claude's rename serialization from a real JSONL.
+Both write a rename event to the session's JSONL in the same shape Claude's own `/rename` writes (a `custom-title` event), reverse-engineered from a real renamed transcript.
 
 **Fallback** if Claude's format proves volatile or undocumented: store an authoritative `display_name` in the index that overrides whatever the JSONL says. v1 prefers writing to the JSONL so Claude's native picker reflects the new name.
 
@@ -179,7 +181,7 @@ Auto-detection logic, first match wins:
 - **WSL** — inside WSL `platform.system()` reports `Linux`, so the Linux probe runs first; when it finds no Linux GUI terminal (the common WSL case) and `_is_wsl()` is true, open a Windows Terminal window via `wt.exe wsl.exe -d <distro> -- bash -lc <cmd>` so the new window re-enters the same distro. Falls through to "print the command" when `wt.exe` is absent. Detection: `WSL_DISTRO_NAME` env or `microsoft` in `/proc/version`.
 - **Native Windows** (PowerShell/cmd, no WSL) — out of scope: the core relies on `fcntl` locking and a bash hook, neither of which exists there. Falls through to "print + clipboard".
 
-In v1, **macOS is the first-class target**. Linux launchers ship in M2 once dogfooding has shaken out the Textual UX. WSL lands in M5; native Windows stays out of scope.
+**macOS is the first-class target.** Linux launchers (`$TERMINAL` / known emulators) and the WSL launcher (`wt.exe` re-entry + print/clipboard fallback) are shipped; native Windows stays out of scope.
 
 ## Data model — `~/.claude/session-explorer-index.json`
 
@@ -448,6 +450,8 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
+All milestones below are **shipped** (current release: v1.2.0). The table is kept as a delivery record of what each one added.
+
 | M | Scope |
 |---|---|
 | M0 | Spec lands. (This file.) |
@@ -455,14 +459,16 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 | M2 | Textual TUI: tree view, all keybindings, rename/move/delete/notes, preview pane, **context-size stats columns**. Linux launchers. |
 | M3 | `--gc` (old unnamed sessions; auto-fired once/day by the hook + manual; empty-folder pruning deferred — see edge case #7); `session-explorer uninstall`; search across notes/prompts/summaries. |
 | M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
-| M5 | Submit to `anthropics/claude-plugins-community`. WSL launcher (shipped: `wt.exe` re-entry + fallback); native Windows out of scope. |
+| M5 | Community-marketplace distribution. WSL launcher (`wt.exe` re-entry + fallback); native Windows out of scope. |
 | M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike validated (2026-05-29, macOS); end-to-end TUI smoke test optional (timers/animation covered by `run_test` tests). |
 
-## Open questions
+## Design decisions (resolved)
 
-- **Claude's `/rename` JSONL format.** Decided during M1 by inspecting a real renamed transcript. Fallback: `display_name` override field in the index.
-- **Exact `message.usage` field path.** v1 reads `cache_read_input_tokens` from the latest assistant message; the precise JSON path is confirmed during M1 by inspecting a real transcript.
-- **Model-aware context window.** ✅ Resolved. `message.model` *is* present on every assistant line (the earlier "isn't in the JSONL" assumption was wrong). The denominator now reads the latest model id and maps it through `MODEL_WINDOWS` (default 200K), promoting to 1M when observed tokens exceed the standard window — the 1M-context tier isn't encoded in the model id, so it's inferred from usage. Remaining nuance: a 1M-context session that has used <200K is still measured against 200K until it grows past it; acceptable and self-correcting.
-- **In-place compaction.** Deferred past v1 (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.
-- **Preview-pane content.** Resolved in M2 dogfooding: headline is the full display name (the grid truncates it), followed by project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. The `summary` block was dropped — the field is never populated today. May still add "last assistant message" later if the layout has room.
-- **`session-explorer browse` as a standalone shell command.** Removed from this spec — the TUI is only reachable via the slash command's launcher. Easy to re-add as a thin CLI wrapper in M3 if users ask. Decision: ship without it; let usage tell us if it's needed.
+A log of decisions that were open during design and have since been settled. Two items remain deliberately deferred (in-place compaction, empty-folder pruning — see Non-goals and edge case #7).
+
+- **Claude's `/rename` JSONL format.** Reverse-engineered from a real renamed transcript: a `custom-title` event. The index can fall back to a `display_name` override only if the format ever proves volatile.
+- **Exact `message.usage` field path.** Confirmed against real transcripts: read `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active.
+- **Model-aware context window.** `message.model` *is* present on every assistant line. The denominator reads the latest model id and maps it through `MODEL_WINDOWS` (default 200K), promoting to 1M when observed tokens exceed the standard window (the 1M tier isn't encoded in the model id, so it's inferred from usage). Nuance: a 1M-context session that has used <200K is still measured against 200K until it grows past it; acceptable and self-correcting.
+- **In-place compaction.** *Still deferred* (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.
+- **Preview-pane content.** Settled: headline is the full display name (the grid truncates it), followed by project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. The `summary` block was dropped — the field is never populated today.
+- **`session-explorer browse` as a standalone shell command.** Not shipped — the TUI is only reachable via the slash command's launcher (and `session-explorer tui`/`launch`). Easy to add later as a thin CLI wrapper if users ask.

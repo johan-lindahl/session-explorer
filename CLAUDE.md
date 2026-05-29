@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Pre-implementation. The repo currently contains only `SPEC.md` (no commits, no code). **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
+Implemented and released (**v1.2.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
 
 ## What this project is
 
@@ -48,11 +48,13 @@ These are the constraints to preserve — violating any breaks the spec's contra
 
 ## Implementation order
 
-Follow the milestones in `SPEC.md` (M1 → M5). M1 ships the hook + manifest + index core + macOS launcher; M2 lands the Textual TUI; M3 adds `--gc` + uninstall + search; M4 tests + CI; M5 community-marketplace submission + Linux/Windows launchers.
+All milestones (M1–M6) are shipped as of v1.2.0; the `SPEC.md` milestone table records what each delivered. For new work, keep `SPEC.md` authoritative — update it in the same change rather than letting code and spec diverge.
 
-## Open questions that affect implementation
+## Resolved design decisions
 
-These are unresolved in the spec. Don't silently pick a side — verify or confirm with the user when a task forces the choice:
+Previously open; settled during implementation. See `SPEC.md` → "Design decisions (resolved)" for the full log.
 
-- **Claude's `/rename` JSONL format.** Decided during M1 by inspecting a real renamed transcript. If the format proves volatile, fall back to a `display_name` override field in the index.
-- **Preview pane content.** Notes + first prompt + summary + full path. Revisit in M2 once the layout is real.
+- **Claude's `/rename` JSONL format** was reverse-engineered from a real transcript: a `custom-title` event. The index falls back to a `display_name` override only if that format ever proves volatile.
+- **Preview pane content** is settled: name, project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path (the never-populated `summary` block was dropped).
+
+Two items remain deliberately deferred (see `SPEC.md`): in-place `/compact` and empty-folder pruning.
