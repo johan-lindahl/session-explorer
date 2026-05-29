@@ -1201,3 +1201,65 @@ def test_restyled_dialogs_use_panel_base():
     for cls in (_tui.MoveScreen, _tui.ConfirmScreen, _tui.NotesScreen,
                 _tui.RenameScreen, _tui.NewFolderScreen):
         assert issubclass(cls, _tui._PanelScreen), cls.__name__
+
+
+@pytest.mark.asyncio
+async def test_move_dialog_select_ungroup_returns_empty(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.MoveScreen("demo", ["team/planning"], "team/planning"),
+                        lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        ol = app.screen.query_one("#move-list", _tui.OptionList)
+        ol.focus()
+        ol.highlighted = 0  # the "(ungroup)" option is first
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert got["v"] == ""  # __none__ maps to "" (ungroup)
+
+
+@pytest.mark.asyncio
+async def test_move_dialog_select_existing_path_returns_it(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.MoveScreen("demo", ["team/planning"], ""),
+                        lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        ol = app.screen.query_one("#move-list", _tui.OptionList)
+        ol.focus()
+        ol.highlighted = 1  # first existing path after "(ungroup)"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert got["v"] == "team/planning"
+
+
+@pytest.mark.asyncio
+async def test_confirm_dialog_n_returns_false(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.ConfirmScreen("Delete?"), lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert got["v"] is False
+
+
+@pytest.mark.asyncio
+async def test_notes_dialog_cancel_returns_none(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.NotesScreen("orig"), lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert got["v"] is None

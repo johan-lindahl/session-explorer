@@ -235,6 +235,7 @@ class _PanelScreen(ModalScreen):
     _PanelScreen #panel Input,
     _PanelScreen #panel OptionList,
     _PanelScreen #panel TextArea { width: 60; }
+    _PanelScreen #panel TextArea { min-height: 8; }
     _PanelScreen .dialog-title { text-style: bold; }
     _PanelScreen .dialog-hint { color: $text-muted; }
     """
