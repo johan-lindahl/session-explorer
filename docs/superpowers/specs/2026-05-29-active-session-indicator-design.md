@@ -110,7 +110,10 @@ Today the TUI is static (refreshes only on F5). Add two `set_interval` timers:
   `session_id → TreeNode` map built during `_populate()`.
 - **Registry poll (~2 s, tunable):** re-reads `session-explorer-live.json`, runs
   death-detection (§4), recomputes each session's state (working / idle / inactive), and
-  re-renders only the rows whose state changed.
+  re-renders only the rows whose state changed. **Exception:** when a transition changes a
+  row's *visibility* — an unnamed session going live (must appear) or a surfaced live
+  unnamed session dying (must disappear) — the poll triggers a full `_populate()` rebuild
+  rather than an in-place label rewrite, since tree membership changed (see §6).
 
 Neither timer re-reads JSONLs or reindexes — that stays on F5. When no sessions are live the
 animation tick is effectively a cheap no-op.
@@ -155,11 +158,15 @@ committing to the PID path. Document the outcome in `SPEC.md`.
 
 ## 6. Edge cases
 
-- **Live but unnamed/hidden session.** Unnamed sessions are hidden by default. A live unnamed
-  session would otherwise be invisible. **Decision:** keep the default filter unchanged (don't
-  auto-surface — predictability), but show an active count in the subtitle, e.g. `● 2 active`,
-  and append `· N hidden` when some live sessions are currently filtered out, hinting the user
-  to press `u`. The active count reflects *all* live sessions regardless of visibility.
+- **Live but unnamed session — surfaced as an exception to the hide rule.** Unnamed sessions
+  are hidden by default, but an actively-running agent is exactly what the user wants to see.
+  **Decision:** any session that is currently **live (working or idle) is shown regardless of
+  the unnamed filter** — `build_nested_tree()`'s unnamed-filter gains an "OR is-live" escape
+  hatch. The subtitle shows the active count, e.g. `● 2 active`. When a live session ends and
+  it is unnamed, it reverts to hidden on the next poll (handled by the visibility-change
+  re-populate in §3). This is orthogonal to the `u` toggle: pressing `u` still reveals *all*
+  unnamed sessions; the exception only forces *live* unnamed ones to always be visible.
+  Liveness is "shown", not "named/kept" — it never writes a name and never affects retention.
 - **Stale registry after reboot/crash.** First poll prunes dead pids; self-heals.
 - **The session that launched the TUI** shows as `working` (it ran the slash command).
   Expected and harmless.
@@ -192,4 +199,3 @@ committing to the PID path. Document the outcome in `SPEC.md`.
 - Windows `kill -0` equivalent (defer to M5 Linux/Windows work).
 - Surfacing per-session activity history / timeline.
 - Any change to retention, `--gc`, or `cleanupPeriodDays`.
-- Auto-surfacing hidden live sessions (subtitle hint only).
