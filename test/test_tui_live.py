@@ -17,6 +17,16 @@ def test_glyph_working_cycles_spinner_frames():
     assert g0 != g1  # frame advanced -> different braille glyph
 
 
+def test_glyph_is_always_glyph_w_cells_wide():
+    # rich is vendored under _pkg._vendor; conftest only puts bin/ on the path,
+    # so the plain `rich` package isn't importable here.
+    from _pkg._vendor.rich.text import Text
+    for state in (None, "idle", "working"):
+        for frame in range(len(tui.SPINNER_FRAMES)):
+            width = Text.from_markup(tui._glyph(state, frame)).cell_len
+            assert width == tui.GLYPH_W, f"{state!r} frame {frame} -> {width} cells"
+
+
 def test_row_label_prepends_glyph_without_disturbing_name():
     s = {"name_cached": "myname", "last_active_at": None, "tokens_estimate": 0,
          "tokens_window_pct": 0, "message_count": 0, "first_prompt": ""}
