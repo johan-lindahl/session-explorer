@@ -204,3 +204,18 @@ async def test_apply_live_metadata_updates_row_without_repopulate(tmp_path):
         leaf, _ = app._row_nodes["live1"]
         assert leaf.data.get("first_prompt") == "the real first prompt"
         assert app._tree.cursor_line == before_line
+
+
+@pytest.mark.asyncio
+async def test_refresh_live_metadata_worker_updates_row(tmp_path):
+    """End-to-end: the @work(thread=True) wrapper refreshes the index off-thread
+    and pushes the new metadata onto the live row."""
+    app = _app_with_live_empty_session(tmp_path)
+    app._live_states = {"live1": "working"}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh_live_metadata()              # the @work(thread=True) wrapper
+        await app.workers.wait_for_complete()     # let the worker thread finish
+        await pilot.pause()
+        leaf, _ = app._row_nodes["live1"]
+        assert leaf.data.get("first_prompt") == "the real first prompt"

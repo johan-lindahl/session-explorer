@@ -127,12 +127,18 @@ def _project_label(cwd: str) -> str:
 
 
 def record_session(index_path: str, session_id: str, transcript_path: str,
-                   cwd: str, folder_store_path: "str | None" = None) -> dict:
+                   cwd: str, folder_store_path: "str | None" = None,
+                   skip_git: bool = False) -> dict:
     """Idempotent upsert. Preserves 'notes' and any other user-edited fields.
 
     If the session's cached name contains `/`, the leading folder path is added
     (idempotently) to the per-project folder store. `folder_store_path` defaults
     to a sibling of `index_path`.
+
+    `skip_git=True` avoids forking `git` to recompute the branch and instead
+    reuses the branch already stored on the existing entry (None if absent). The
+    branch is static for a session, so the live-metadata refresh sets this to
+    avoid forking git every poll.
     """
     from . import folder_store as _fs
     from .tree_model import split_path
@@ -157,7 +163,7 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
             "tokens_window_pct": min(100, int(tokens * 100 / window)),
             "project_path": cwd,
             "project_label": _project_label(cwd),
-            "branch": _git_branch(cwd),
+            "branch": existing.get("branch") if skip_git else _git_branch(cwd),
             "last_active_at": _jsonl.last_active_at(transcript_path) or datetime.now(timezone.utc).isoformat(),
             "transcript_path": transcript_path,
         }

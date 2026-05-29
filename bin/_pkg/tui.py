@@ -986,7 +986,8 @@ class SessionExplorerApp(App):
             if not tp or not cwd:
                 continue  # can't refresh without transcript+cwd; F5 remains the catch-all
             try:
-                _index.record_session(self._index_path, sid, tp, cwd)
+                # skip_git: the branch is static for a live session — avoid forking git every 2s.
+                _index.record_session(self._index_path, sid, tp, cwd, skip_git=True)
             except Exception:
                 continue
 
