@@ -1112,6 +1112,33 @@ async def test_rename_dialog_cancels_on_escape(tmp_path):
         assert result["v"] == ""
 
 
+@pytest.mark.asyncio
+async def test_new_folder_dialog_returns_path_on_enter(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result = {}
+        app.push_screen(_tui.NewFolderScreen("demo", "team/"), lambda v: result.__setitem__("v", v))
+        await pilot.pause()
+        app.screen.query_one("#newfolder-input", _tui.Input).value = "team/sprint"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert result["v"] == "team/sprint"
+
+
+@pytest.mark.asyncio
+async def test_new_folder_dialog_cancels_on_escape(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result = {}
+        app.push_screen(_tui.NewFolderScreen("demo", "team/"), lambda v: result.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert result["v"] == ""
+
+
 def test_panelscreen_css_defines_centered_dimmed_panel():
     css = _tui._PanelScreen.DEFAULT_CSS
     assert "align: center middle" in css

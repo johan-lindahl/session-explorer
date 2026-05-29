@@ -220,7 +220,7 @@ def _help_text() -> str:
 
 
 class _PanelScreen(ModalScreen):
-    """Base for input/confirm dialogs: a centered rounded panel on a dimmed,
+    """Base for the modal dialogs (rename, move, new folder, delete, notes): a centered rounded panel on a dimmed,
     translucent backdrop so the session tree shows through (matches the help
     overlay). Subclasses wrap their widgets in `Vertical(..., id="panel")` with a
     bold `.dialog-title` Label first and a dim `.dialog-hint` Label last. Each
