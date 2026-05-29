@@ -22,6 +22,8 @@ _OPERATIONAL_SIDECARS = (
     ".session-explorer.retention-declined",
     ".session-explorer.gc",
     "session-explorer.log",
+    "session-explorer-live.json",
+    "session-explorer-live.json.lock",
 )
 _DATA_FILES = (
     "session-explorer-index.json",
