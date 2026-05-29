@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from _pkg import live
 
@@ -83,3 +83,45 @@ def test_load_corrupt_file_falls_back_to_v1_default(tmp_path):
     lp = tmp_path / "live.json"
     lp.write_text("{ this is not valid json")
     assert live.load(str(lp)) == {"version": 1, "sessions": {}}
+
+
+def _seed(tmp_path, **entry):
+    lp = str(tmp_path / "live.json")
+    live.mutate(lp, lambda d: {**d, "sessions": {**d.get("sessions", {}), "s1": entry}})
+    return lp
+
+
+def test_poll_keeps_alive_pid_and_returns_state(tmp_path):
+    lp = _seed(tmp_path, state="working", pid=os.getpid(),
+               last_seen=T0.isoformat())
+    states = live.poll(lp, now=T0)
+    assert states == {"s1": "working"}
+
+
+def test_poll_prunes_dead_pid(tmp_path):
+    # An almost-certainly-dead high pid.
+    dead_pid = 2 ** 22
+    lp = _seed(tmp_path, state="idle", pid=dead_pid, last_seen=T0.isoformat())
+    states = live.poll(lp, now=T0)
+    assert states == {}
+    assert "s1" not in live.load(lp)["sessions"]  # pruned from disk
+
+
+def test_poll_ttl_backstop_prunes_alive_pid_when_stale(tmp_path):
+    lp = _seed(tmp_path, state="idle", pid=os.getpid(), last_seen=T0.isoformat())
+    later = T0 + timedelta(seconds=live.DEFAULT_TTL_SECONDS + 1)
+    assert live.poll(lp, now=later) == {}
+
+
+def test_poll_no_pid_uses_ttl_only(tmp_path):
+    lp = _seed(tmp_path, state="idle", pid=None, last_seen=T0.isoformat())
+    assert live.poll(lp, now=T0) == {"s1": "idle"}
+    later = T0 + timedelta(seconds=live.DEFAULT_TTL_SECONDS + 1)
+    assert live.poll(lp, now=later) == {}
+
+
+def test_poll_does_not_write_when_nothing_dead(tmp_path):
+    lp = _seed(tmp_path, state="idle", pid=os.getpid(), last_seen=T0.isoformat())
+    before = os.path.getmtime(lp)
+    live.poll(lp, now=T0)
+    assert os.path.getmtime(lp) == before  # no needless rewrite
