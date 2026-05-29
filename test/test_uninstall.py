@@ -160,5 +160,13 @@ def test_uninstall_sh_reverses_install_sh(tmp_path):
     assert not link.is_symlink()
     settings = json.loads(settings_path.read_text())
     assert settings["cleanupPeriodDays"] == 30                     # restored from backup
-    assert settings["hooks"]["SessionStart"] == []                 # our hook removed
+    # All session-explorer hooks removed; emptied events are dropped entirely.
+    hooks = settings.get("hooks", {})
+    for evt in ("SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd"):
+        entries = hooks.get(evt, [])
+        assert not any(
+            "session-start.sh" in str(h.get("command", ""))
+            or "session-live.sh" in str(h.get("command", ""))
+            for h in entries
+        ), (evt, entries)
     assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()

@@ -48,6 +48,43 @@ print('ok')
   [ "$output" = "ok" ]
 }
 
+@test "install registers the live-session hooks in settings.json" {
+  run bash "$REPO/install.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json,os;d=json.load(open(os.environ['HOME']+'/.claude/settings.json'));h=d.get('hooks',{});print('Stop' in h, 'UserPromptSubmit' in h, 'SessionEnd' in h, 'Notification' in h)"
+  [[ "$output" == "True True True True" ]]
+}
+
+@test "install keeps both SessionStart commands (start + live)" {
+  run bash "$REPO/install.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+ss = d['hooks']['SessionStart']
+cmds = ' '.join(str(h.get('command','')) for h in ss)
+assert 'session-start.sh' in cmds, ss
+assert 'session-live.sh' in cmds, ss
+print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "install Notification hook carries the idle_prompt matcher" {
+  run bash "$REPO/install.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+n = d['hooks']['Notification']
+assert any('idle_prompt' in str(h.get('matcher','')) or 'idle_prompt' in str(h.get('matchers','')) for h in n), n
+print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
 @test "install is idempotent — second run keeps exactly one hook entry" {
   mkdir -p "$HOME/.claude"
   echo '{"cleanupPeriodDays": 14}' > "$HOME/.claude/settings.json"
@@ -61,4 +98,19 @@ n = sum(1 for h in d['hooks']['SessionStart'] if 'session-start.sh' in str(h.get
 print(n)
 "
   [ "$output" = "1" ]
+}
+
+@test "install is idempotent — live hooks aren't duplicated on re-run" {
+  bash "$REPO/install.sh"
+  bash "$REPO/install.sh"
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+h = d['hooks']
+def count(evt):
+    return sum(c.count('session-live.sh') for entry in h.get(evt, [])
+               for c in [str(x.get('command','')) for x in entry.get('hooks', [])] or [str(entry.get('command',''))])
+print(count('SessionStart'), count('UserPromptSubmit'), count('Stop'), count('Notification'), count('SessionEnd'))
+"
+  [ "$output" = "1 1 1 1 1" ]
 }

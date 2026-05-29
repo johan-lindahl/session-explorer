@@ -31,21 +31,42 @@ except FileNotFoundError:
     data = {}
 
 hooks = data.setdefault("hooks", {})
-ss = hooks.setdefault("SessionStart", [])
 
-hook_cmd = os.path.join(repo, "hooks", "session-start.sh")
-# Idempotent: remove any prior session-explorer hook entry
-ss = [h for h in ss if not (isinstance(h, dict) and (
-    "session-explorer" in str(h.get("command", "")) or
-    "session-start.sh" in str(h.get("command", ""))
-))]
-ss.append({"matchers": [], "command": hook_cmd})
+start_cmd = os.path.join(repo, "hooks", "session-start.sh")
+live_cmd = os.path.join(repo, "hooks", "session-live.sh")
+
+# Idempotent: a hook entry is "ours" if its command points at one of our scripts.
+_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh")
+
+def _is_ours(h):
+    return isinstance(h, dict) and any(
+        m in str(h.get("command", "")) for m in _MARKERS
+    )
+
+def _strip_ours(evt):
+    return [h for h in hooks.get(evt, []) if not _is_ours(h)]
+
+# SessionStart: keep any user hooks, re-add session-start.sh + session-live.sh.
+ss = _strip_ours("SessionStart")
+ss.append({"matchers": [], "command": start_cmd})
+ss.append({"matchers": [], "command": live_cmd})
 hooks["SessionStart"] = ss
+
+# The live dispatcher on the other lifecycle events. Notification carries the
+# idle_prompt matcher; the rest match everything.
+hooks["UserPromptSubmit"] = _strip_ours("UserPromptSubmit") + [
+    {"matchers": [], "command": live_cmd}]
+hooks["Stop"] = _strip_ours("Stop") + [
+    {"matchers": [], "command": live_cmd}]
+hooks["Notification"] = _strip_ours("Notification") + [
+    {"matchers": ["idle_prompt"], "command": live_cmd}]
+hooks["SessionEnd"] = _strip_ours("SessionEnd") + [
+    {"matchers": [], "command": live_cmd}]
 
 with open(settings_path, "w") as f:
     json.dump(data, f, indent=2)
 
-print(f"Updated {settings_path}: registered SessionStart hook -> {hook_cmd}")
+print(f"Updated {settings_path}: registered SessionStart + live-session hooks")
 PY
 
 chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/bin/session-explorer"

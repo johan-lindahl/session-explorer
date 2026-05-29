@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 import os
 
-_HOOK_MARKERS = ("session-explorer", "session-start.sh")
+_HOOK_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh")
+# Lifecycle events the plugin registers the live dispatcher on (plus SessionStart).
+_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "Notification",
+                "SessionEnd")
 _OPERATIONAL_SIDECARS = (
     ".session-explorer.current",
     ".session-explorer.help-seen",
@@ -62,15 +65,23 @@ def teardown(*, claude_dir: str, settings_path: "str | None" = None,
         os.unlink(backup_path)
         actions.append("removed .session-explorer.backup")
 
-    # 2. Strip our SessionStart hook entry (no-op on marketplace installs, where
-    #    the hook lives in plugin.json and /plugin uninstall removes it).
+    # 2. Strip our hook entries across every lifecycle event (no-op on marketplace
+    #    installs, where the hooks live in plugin.json and /plugin uninstall removes
+    #    them). Unrelated user hooks are preserved; events left empty are dropped.
     if settings is not None:
-        starts = (settings.get("hooks") or {}).get("SessionStart")
-        if isinstance(starts, list):
-            kept = [h for h in starts if not _is_our_hook(h)]
-            if len(kept) != len(starts):
-                settings["hooks"]["SessionStart"] = kept
-                actions.append("removed SessionStart hook entry")
+        hooks = settings.get("hooks")
+        if isinstance(hooks, dict):
+            for evt in _HOOK_EVENTS:
+                entries = hooks.get(evt)
+                if not isinstance(entries, list):
+                    continue
+                kept = [h for h in entries if not _is_our_hook(h)]
+                if len(kept) != len(entries):
+                    actions.append(f"removed {evt} hook entry")
+                if kept:
+                    hooks[evt] = kept
+                elif evt in hooks:
+                    del hooks[evt]
 
     if settings is not None and actions:
         # Only rewrite if we touched it.

@@ -33,11 +33,20 @@ def test_install_creates_symlink_and_settings(tmp_path):
     assert "cleanupPeriodDays" not in settings
     assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
 
-    # SessionStart hook entry registered with the absolute repo path
-    hooks = settings["hooks"]["SessionStart"]
-    assert len(hooks) == 1
-    assert hooks[0]["matchers"] == []
-    assert hooks[0]["command"].endswith("hooks/session-start.sh")
+    # SessionStart hook entries registered with the absolute repo path:
+    # session-start.sh (indexing) + session-live.sh (live-session dispatcher).
+    hooks = settings["hooks"]
+    ss_cmds = [h["command"] for h in hooks["SessionStart"]]
+    assert any(c.endswith("hooks/session-start.sh") for c in ss_cmds), ss_cmds
+    assert any(c.endswith("hooks/session-live.sh") for c in ss_cmds), ss_cmds
+    assert all(h["matchers"] == [] for h in hooks["SessionStart"])
+
+    # The live dispatcher is registered on the other lifecycle events too.
+    for evt in ("UserPromptSubmit", "Stop", "Notification", "SessionEnd"):
+        cmds = [h["command"] for h in hooks[evt]]
+        assert any(c.endswith("hooks/session-live.sh") for c in cmds), (evt, cmds)
+    # Notification carries the idle_prompt matcher.
+    assert hooks["Notification"][0]["matchers"] == ["idle_prompt"]
 
 
 def test_install_idempotent(tmp_path):
@@ -47,7 +56,13 @@ def test_install_idempotent(tmp_path):
     assert proc2.returncode == 0
 
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-    assert len(settings["hooks"]["SessionStart"]) == 1
+    hooks = settings["hooks"]
+    # SessionStart keeps exactly the two session-explorer commands; the four
+    # standalone events keep exactly one live entry each (no duplication).
+    assert len(hooks["SessionStart"]) == 2
+    for evt in ("UserPromptSubmit", "Stop", "Notification", "SessionEnd"):
+        live = [h for h in hooks[evt] if h["command"].endswith("session-live.sh")]
+        assert len(live) == 1, (evt, hooks[evt])
     assert "cleanupPeriodDays" not in settings
 
 
@@ -67,10 +82,13 @@ def test_install_preserves_existing_unrelated_settings(tmp_path):
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert settings["theme"] == "dark"
     assert settings["cleanupPeriodDays"] == 60  # untouched — retention is opt-in
-    # Other hooks are preserved
+    # The user's unrelated SessionEnd hook is preserved alongside our live hook.
     assert "SessionEnd" in settings["hooks"]
-    # session-explorer hook is added to SessionStart
-    assert len(settings["hooks"]["SessionStart"]) == 1
+    se_cmds = [h["command"] for h in settings["hooks"]["SessionEnd"]]
+    assert "/some/other" in se_cmds, se_cmds
+    assert any(c.endswith("session-live.sh") for c in se_cmds), se_cmds
+    # session-explorer hooks are added to SessionStart (start + live)
+    assert len(settings["hooks"]["SessionStart"]) == 2
     # No backup written by install (only the opt-in prompt writes one)
     assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
 
@@ -87,12 +105,13 @@ def test_install_removes_old_session_explorer_hook_on_rerun(tmp_path):
         "matchers": [], "command": "/old/path/session-explorer/hooks/session-start.sh"
     })
     settings_path.write_text(json.dumps(data))
-    assert len(json.loads(settings_path.read_text())["hooks"]["SessionStart"]) == 2
+    # start.sh + live.sh + the injected stale entry = 3
+    assert len(json.loads(settings_path.read_text())["hooks"]["SessionStart"]) == 3
 
-    # Re-install: should dedupe to a single entry pointing at the current repo
+    # Re-install: should dedupe to the current repo's start.sh + live.sh.
     proc = _run_install(tmp_path)
     assert proc.returncode == 0
 
-    final = json.loads(settings_path.read_text())
-    assert len(final["hooks"]["SessionStart"]) == 1
-    assert "/old/path" not in final["hooks"]["SessionStart"][0]["command"]
+    final = json.loads(settings_path.read_text())["hooks"]["SessionStart"]
+    assert len(final) == 2
+    assert all("/old/path" not in h["command"] for h in final), final
