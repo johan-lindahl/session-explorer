@@ -261,7 +261,7 @@ class RenameScreen(_PanelScreen):
         self.dismiss(event.value.strip())
 
 
-class MoveScreen(ModalScreen[str]):
+class MoveScreen(_PanelScreen):
     """Pick or type a folder path (e.g. 'planning/sprint14').
 
     Returns "" to ungroup, the chosen/typed path string, or None on cancel.
@@ -280,13 +280,18 @@ class MoveScreen(ModalScreen[str]):
             Option(p, id=p) for p in self._existing
         ]
         yield Vertical(
-            Label(
-                f"Move within '{self._project}' (current: {self._current or '(none)'})."
-                " Pick or type a path (use / for nesting):"
-            ),
+            Label(f"Move within '{self._project}'  (current: {self._current or '(none)'})",
+                  classes="dialog-title"),
             OptionList(*opts, id="move-list"),
             Input(placeholder="…or type a new path (e.g. team/planning)", id="move-input"),
+            Label("enter / select to move · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
+
+    def on_mount(self) -> None:
+        # Focus the path Input so typing a new path and pressing enter submits it
+        # (the OptionList remains reachable via Tab / arrow keys for picking).
+        self.query_one("#move-input", Input).focus()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         opt_id = event.option.id
@@ -319,7 +324,7 @@ class NewFolderScreen(_PanelScreen):
         self.dismiss(event.value.strip())
 
 
-class ConfirmScreen(ModalScreen[bool]):
+class ConfirmScreen(_PanelScreen):
     """Yes/no confirmation modal. Returns True iff the user confirmed."""
 
     BINDINGS = [
@@ -334,12 +339,13 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label(self._prompt),
-            Label("[y] yes   [n / esc] cancel"),
+            Label(self._prompt, classes="dialog-title"),
+            Label("y yes · n / esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
 
-class NotesScreen(ModalScreen[str]):
+class NotesScreen(_PanelScreen):
     """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
 
     BINDINGS = [
@@ -354,8 +360,10 @@ class NotesScreen(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         self._ta = TextArea(self._current)
         yield Vertical(
-            Label("Notes (Ctrl+S to save, Esc to cancel):"),
+            Label("Notes", classes="dialog-title"),
             self._ta,
+            Label("ctrl-s save · esc cancel", classes="dialog-hint"),
+            id="panel",
         )
 
     def action_save(self) -> None:

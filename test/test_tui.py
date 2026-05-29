@@ -1146,3 +1146,55 @@ def test_panelscreen_css_defines_centered_dimmed_panel():
     assert "border: round $accent" in css
     assert "background: $surface" in css
     assert "%" in css  # translucent backdrop
+
+
+@pytest.mark.asyncio
+async def test_confirm_dialog_yes_no_escape(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.ConfirmScreen("Delete?"), lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert got["v"] is True
+        app.push_screen(_tui.ConfirmScreen("Delete?"), lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert got["v"] is False
+
+
+@pytest.mark.asyncio
+async def test_notes_dialog_saves_on_ctrl_s(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.NotesScreen("orig"), lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert got["v"] == "orig"
+
+
+@pytest.mark.asyncio
+async def test_move_dialog_typed_path_on_enter(tmp_path):
+    app = _make_app_with_one_named_session(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        got = {}
+        app.push_screen(_tui.MoveScreen("demo", ["team/planning"], ""),
+                        lambda v: got.__setitem__("v", v))
+        await pilot.pause()
+        app.screen.query_one("#move-input", _tui.Input).value = "team/new"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert got["v"] == "team/new"
+
+
+def test_restyled_dialogs_use_panel_base():
+    for cls in (_tui.MoveScreen, _tui.ConfirmScreen, _tui.NotesScreen,
+                _tui.RenameScreen, _tui.NewFolderScreen):
+        assert issubclass(cls, _tui._PanelScreen), cls.__name__
