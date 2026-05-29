@@ -1,7 +1,7 @@
 # Active-session indicator — design
 
 **Date:** 2026-05-29
-**Status:** Approved (brainstorm); pending implementation plan
+**Status:** Implemented on branch feat/active-session-indicator (PID-capture spike + manual smoke test pending).
 **Affects:** `SPEC.md` (new feature — must be reflected there during implementation), `plugin.json`, `install.sh`/`uninstall.sh`, `hooks/`, `bin/_pkg/` (new `live.py`, `cli.py`, `tui.py`, `tree_model.py`), `test/`
 
 ## Goal

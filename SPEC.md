@@ -267,6 +267,75 @@ The hook (bash) reads stdin (`session_id`, `transcript_path`, `cwd`, `source`) a
 
 The hook never blocks startup; failures log to `~/.claude/session-explorer.log` and exit 0.
 
+## Live-session indicator
+
+The TUI shows which Claude Code sessions are **currently live** on the machine, so a user running 2–3 agents at once can tell at a glance which are **actively working** versus **open but idle**. The signal comes from Claude Code lifecycle hooks maintaining a volatile registry; the TUI polls it. Full design rationale (why `flock`/`mtime`/`.current` were rejected) lives in `docs/superpowers/specs/2026-05-29-active-session-indicator-design.md`.
+
+### Live registry — `~/.claude/session-explorer-live.json`
+
+A new sidecar, **separate from the index and folder store**. Volatile runtime state only: never merged into the index, never read by retention / `--gc`. Written with the same flock + temp-file-rename atomic pattern as the index (`bin/_pkg/live.py`).
+
+```jsonc
+{
+  "version": 1,
+  "sessions": {
+    "<session_id>": {
+      "state": "working",            // "working" | "idle"
+      "pid": 12345,                   // Claude process pid, recorded at SessionStart only
+      "last_seen": "2026-05-29T07:08:00Z",
+      "transcript_path": "/Users/.../<uuid>.jsonl",
+      "cwd": "/Volumes/Projects/ClaudeSessionExplorer"
+    }
+  }
+}
+```
+
+### Hooks → registry
+
+A dispatcher script `hooks/session-live.sh` reads the hook payload on stdin and calls `session-explorer live --event <name> --sid <id> [...]`, which does the flock'd registry mutate. It runs detached / non-blocking and never adds turn latency; failures log and exit 0. The events are registered at **install time** — in `.claude-plugin/plugin.json` (marketplace) and in `install.sh` (plain path) — which is independent of retention: hook registration has always been the installer's job and never touches `cleanupPeriodDays`, the backup file, or the opt-in flow.
+
+| Hook event | Matcher | Registry action |
+|---|---|---|
+| `SessionStart` | — | upsert entry; `state=idle`; record `pid` (from `$PPID`); `last_seen=now` |
+| `UserPromptSubmit` | — | `state=working`; `last_seen=now` |
+| `Stop` | — | `state=idle`; `last_seen=now` |
+| `Notification` | `idle_prompt` | `state=idle`; `last_seen=now` |
+| `SessionEnd` | — | remove entry (best-effort) |
+
+State stays `working` for the whole turn (between `UserPromptSubmit` and `Stop`), so a long-running tool call with no JSONL writes is still correctly "working". `--pid` is recorded only on SessionStart.
+
+### Death detection
+
+`SessionEnd` is unreliable — SIGKILL, terminal-close, and crash all bypass it — so entry removal is best-effort and **PID liveness is the ground truth**. On each registry poll (`live.poll`):
+
+- An entry is **alive iff `os.kill(pid, 0)` succeeds**; this catches the deaths `SessionEnd` misses and keeps an idle session shown for as long as its process lives.
+- **TTL backstop (default 24h):** prune even a `kill -0`-alive entry whose `last_seen` is older than the TTL, guarding against PID-reuse zombies. With no recorded pid, detection is TTL-only.
+- Dead entries are pruned during the poll, under flock. A stale registry left by a reboot self-heals on the first poll.
+
+> **Caveat — PID capture is pending empirical validation.** Recording `$PPID` assumes the hook's parent process *is* the Claude process. This has **not yet been verified by a spike** (inspecting `$PPID` / the process tree from inside a real hook invocation). If the hook turns out to run under a transient wrapper shell — so the recorded pid dies immediately — the documented fallback is **TTL-only** death detection. Treat the PID path as the intended design, not a confirmed fact, until that spike runs.
+
+### TUI rendering
+
+Two `set_interval` timers, neither of which re-reads JSONLs or reindexes (that stays on F5):
+
+- **Spinner tick (~200ms):** advances the animated green braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) for every `working` row, rewriting only those rows' labels in place.
+- **Registry poll (~2s):** re-reads the registry, runs death detection, recomputes each session's state, and re-renders only changed rows.
+
+Glyphs: **working** → animated green spinner; **open but idle** → steady dim `○`; **inactive** → nothing. The subtitle shows the active count, e.g. `· ● N active`.
+
+**Live sessions surface even when unnamed.** Unnamed sessions are hidden by default, but a currently-live one (working *or* idle) is shown regardless of the unnamed filter — `build_nested_tree()` takes a `live_ids` escape hatch. When a live unnamed session dies it reverts to hidden on the next poll; that visibility change drives a full repopulate (rather than an in-place label rewrite) which preserves the cursor. This is orthogonal to the `u` toggle and to "kept": liveness is "shown", never "named", and never affects retention.
+
+### Tunables (defaults)
+
+| Knob | Default | Notes |
+|---|---|---|
+| Spinner tick | 200 ms | animation smoothness vs. CPU |
+| Registry poll | 2 s | freshness vs. flock churn |
+| Death TTL backstop | 24 h | guards PID reuse; the `kill -0` check does the real work |
+| Spinner frames | `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` | braille |
+
+**Uninstall** (`uninstall.sh` / `session-explorer uninstall`) removes all the new hook events; the registry file is volatile and can be left or cleaned.
+
 ## Disabling native auto-cleanup
 
 **Opt-in.** Modifying the user's `settings.json` without consent is a marketplace-review concern, so the plugin does NOT neutralise native cleanup automatically. The TUI asks on first launch (`tui.on_mount` → `retention.enable`/`retention.decline`); neither the `SessionStart` hook nor `install.sh` ever touches `settings.json`. Only when the user agrees is `cleanupPeriodDays` in `~/.claude/settings.json` set to `36500` (100 years) — with the prior value backed up — so Claude's expiry never touches user sessions and the plugin's `session-explorer index --gc` does deletion instead:
@@ -384,6 +453,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 | M3 | `--gc` (old unnamed sessions; auto-fired once/day by the hook + manual; empty-folder pruning deferred — see edge case #7); `session-explorer uninstall`; search across notes/prompts/summaries. |
 | M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
 | M5 | Submit to `anthropics/claude-plugins-community`. WSL launcher (shipped: `wt.exe` re-entry + fallback); native Windows out of scope. |
+| M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike and manual smoke test still pending (see the indicator section's caveat). |
 
 ## Open questions
 
