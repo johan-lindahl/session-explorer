@@ -3,6 +3,27 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.1.0
+
+### Added
+- **Live-session indicator.** The TUI now shows which sessions are running:
+  an animated green spinner for sessions actively working, a dim `○` for
+  sessions open but idle, and nothing for inactive ones; the subtitle shows
+  `● N active`. Scales to multiple concurrent sessions.
+- New lifecycle hooks (`UserPromptSubmit`, `Stop`, `Notification`/`idle_prompt`,
+  `SessionEnd`, plus a second `SessionStart` command) feed a volatile registry
+  at `~/.claude/session-explorer-live.json` via `session-explorer live`.
+- Liveness is crash-safe: a session is live iff its recorded Claude PID is
+  alive (`kill -0`), with a 24h TTL backstop; dead sessions are pruned on poll.
+  `SessionEnd` removal is best-effort only.
+- Live sessions are surfaced in the tree even when unnamed (an exception to the
+  hide-unnamed default), so a running agent you haven't named is still visible.
+
+### Changed
+- `install.sh`/`uninstall.sh` now register/remove the new lifecycle hooks. This
+  is install-time only and independent of retention — `cleanupPeriodDays` is
+  untouched.
+
 ## 1.0.0
 
 First release prepared for the community marketplace.

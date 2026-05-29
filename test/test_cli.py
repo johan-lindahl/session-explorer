@@ -11,9 +11,10 @@ _FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
 def test_version_flag_prints_version():
+    from _pkg import __version__
     result = subprocess.run([_BIN, "--version"], capture_output=True, text=True)
     assert result.returncode == 0
-    assert "session-explorer 1.0.0" in result.stdout
+    assert f"session-explorer {__version__}" in result.stdout
 
 
 def test_help_when_no_args():
