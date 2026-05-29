@@ -1,4 +1,61 @@
+import json
+
 from _pkg import tui
+
+
+def _write_index(tmp_path, sessions):
+    """Write a minimal index file and silence the first-run modals so the App
+    can be constructed without a running event loop interfering."""
+    path = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "folders": [], "sessions": sessions}, open(path, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    return path
+
+
+def _app(index_path):
+    # __init__ only sets attributes; no event loop is needed to call the pure-ish
+    # _visibility_changed (which just reads the index off disk).
+    return tui.SessionExplorerApp(index_path=index_path)
+
+
+def test_visibility_changed_unnamed_entering_live_returns_true(tmp_path):
+    path = _write_index(tmp_path, {
+        "named": {"name_cached": "kept", "project_label": "demo"},
+        "stub": {"name_cached": None, "project_label": "demo"},
+    })
+    app = _app(path)
+    # The unnamed "stub" appears in the live set -> its tree membership changes.
+    assert app._visibility_changed({}, {"stub": "working"}) is True
+    # And leaving the set is equally a membership change.
+    assert app._visibility_changed({"stub": "idle"}, {}) is True
+
+
+def test_visibility_changed_named_entering_live_returns_false(tmp_path):
+    path = _write_index(tmp_path, {
+        "named": {"name_cached": "kept", "project_label": "demo"},
+    })
+    app = _app(path)
+    # A named session is always shown, so its liveness never alters membership.
+    assert app._visibility_changed({}, {"named": "working"}) is False
+
+
+def test_visibility_changed_when_showing_unnamed_returns_false(tmp_path):
+    path = _write_index(tmp_path, {
+        "stub": {"name_cached": None, "project_label": "demo"},
+    })
+    app = _app(path)
+    app._show_unnamed = True  # all unnamed already visible -> liveness is moot
+    assert app._visibility_changed({}, {"stub": "working"}) is False
+
+
+def test_visibility_changed_unknown_sid_returns_false(tmp_path):
+    # A live sid the index has never heard of can't change tree membership.
+    path = _write_index(tmp_path, {
+        "named": {"name_cached": "kept", "project_label": "demo"},
+    })
+    app = _app(path)
+    assert app._visibility_changed({}, {"ghost": "working"}) is False
 
 
 def test_glyph_inactive_is_two_blank_cells():

@@ -399,6 +399,12 @@ class SessionExplorerApp(App):
         # Flips after the first rescan so the empty-state can switch from
         # "press F5 to scan" to "no sessions found".
         self._scanned: bool = False
+        # Live-session state: sid -> "working"|"idle", refreshed by _poll_live.
+        self._live_states: dict[str, str] = {}
+        self._spinner_frame: int = 0
+        # sid -> (TreeNode, child_depth) for in-place glyph updates without a
+        # full rebuild. Rebuilt by _populate.
+        self._row_nodes: dict[str, tuple] = {}
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -449,6 +455,10 @@ class SessionExplorerApp(App):
     def _claude_dir(self) -> str:
         return os.path.dirname(os.path.abspath(self._index_path))
 
+    def _live_path(self) -> str:
+        from . import live as _live
+        return os.environ.get("SESSION_EXPLORER_LIVE") or _live.default_path_for(self._index_path)
+
     def on_mount(self) -> None:
         self.title = "session-explorer"
         self._populate()
@@ -478,6 +488,10 @@ class SessionExplorerApp(App):
             )
         else:
             self._maybe_open_help()
+        # Live-session indicator: poll the registry, then animate working rows.
+        self._poll_live()
+        self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
+        self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
 
     def _maybe_open_help(self) -> None:
         # First run only: pop the help overlay so newcomers learn the slash-
@@ -515,9 +529,11 @@ class SessionExplorerApp(App):
     def _populate(self) -> None:
         from . import folder_store as _fs
         self._tree.clear()
+        self._row_nodes = {}
         data = _index.load(self._index_path)
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
-        tree = build_nested_tree(data, fs_data, include_unnamed=self._show_unnamed)
+        tree = build_nested_tree(data, fs_data, include_unnamed=self._show_unnamed,
+                                 live_ids=set(self._live_states))
         unnamed_hidden = 0
         if not self._show_unnamed:
             unnamed_hidden = sum(
@@ -530,10 +546,13 @@ class SessionExplorerApp(App):
             return len(node["_sessions"]) + sum(count(c) for c in node["_folders"].values())
 
         total = sum(count(p) for p in tree.values())
+        active = len(self._live_states)
+        active_suffix = f" · ● {active} active" if active else ""
         if unnamed_hidden:
-            self.sub_title = f"{total} sessions across {len(tree)} projects · {unnamed_hidden} unnamed hidden (u)"
+            self.sub_title = (f"{total} sessions across {len(tree)} projects · "
+                              f"{unnamed_hidden} unnamed hidden (u){active_suffix}")
         else:
-            self.sub_title = f"{total} sessions across {len(tree)} projects"
+            self.sub_title = f"{total} sessions across {len(tree)} projects{active_suffix}"
 
         # Empty-state: when no session rows would render (after the filter),
         # show an actionable message in place of the tree instead of blank space.
@@ -582,7 +601,10 @@ class SessionExplorerApp(App):
         def render(parent, project_label, segments, node, child_depth):
             for sid, s in node["_sessions"]:
                 if self._matches(sid, s):
-                    parent.add_leaf(_row_label(sid, s, child_depth), data={"sid": sid, **s})
+                    glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
+                    leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph),
+                                           data={"sid": sid, **s})
+                    self._row_nodes[sid] = (leaf, child_depth)
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
                 child_segs = segments + [name]
@@ -838,6 +860,64 @@ class SessionExplorerApp(App):
     def action_toggle_unnamed(self) -> None:
         self._show_unnamed = not self._show_unnamed
         self._populate()
+
+    def _poll_live(self) -> None:
+        """Refresh live-session state from the registry (called on a timer).
+
+        A change that alters row *visibility* — a live unnamed session appearing
+        or a surfaced one dying — needs a full repopulate (tree membership
+        changed); a pure state change only needs glyph relabeling.
+        """
+        from . import live as _live
+        try:
+            new_states = _live.poll(self._live_path())
+        except Exception:
+            return  # never let the indicator break the UI
+        if new_states == self._live_states:
+            return
+        old = self._live_states
+        self._live_states = new_states
+        if self._visibility_changed(old, new_states):
+            self._populate()
+        else:
+            self._relabel_live_rows()
+
+    def _visibility_changed(self, old: dict, new: dict) -> bool:
+        """True if any session whose membership depends on liveness flipped.
+
+        Only unnamed sessions are conditionally visible, and only while not
+        showing all unnamed. A named session is always present regardless of
+        live state, so its appearance never forces a repopulate."""
+        if self._show_unnamed:
+            return False
+        data = _index.load(self._index_path)
+        sessions = data.get("sessions", {})
+        flipped = set(old) ^ set(new)  # sids that entered or left the live set
+        for sid in flipped:
+            s = sessions.get(sid)
+            if s is not None and not s.get("name_cached"):
+                return True  # an unnamed session entered/left -> membership change
+        return False
+
+    def _relabel_live_rows(self) -> None:
+        """Rewrite glyphs for all rows currently tracked, without rebuilding."""
+        for sid, (leaf, depth) in self._row_nodes.items():
+            data = leaf.data or {}
+            glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
+            leaf.set_label(_row_label(sid, data, depth, glyph))
+
+    def _tick_spinner(self) -> None:
+        """Advance the spinner frame and relabel only the working rows."""
+        if not any(st == "working" for st in self._live_states.values()):
+            return  # nothing animating -> cheap no-op
+        self._spinner_frame += 1
+        for sid, state in self._live_states.items():
+            node = self._row_nodes.get(sid)
+            if node is None or state != "working":
+                continue
+            leaf, depth = node
+            leaf.set_label(_row_label(sid, leaf.data or {}, depth,
+                                      _glyph(state, self._spinner_frame)))
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread
