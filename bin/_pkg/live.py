@@ -1,8 +1,9 @@
 """Volatile live-session registry for session-explorer.
 
 Schema (v1): {"version": 1, "sessions": {session_id: entry}}
-  entry = {"state": "working"|"idle", "pid": int|None,
-           "last_seen": iso8601, "transcript_path": str, "cwd": str}
+  entry = {"state": "working"|"idle", "last_seen": iso8601,
+           "transcript_path": str, "cwd": str, "pid": int (optional)}
+  "pid" is present only when known (recorded at SessionStart).
 
 This file is runtime-only: it is never merged into the index and never read by
 retention/--gc. It reuses the index's atomic write (index.save) but keeps its
@@ -16,7 +17,7 @@ import fcntl
 import json
 import os
 from datetime import datetime, timezone
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 from .index import save as _save  # generic atomic temp-rename writer
 
@@ -33,13 +34,16 @@ def default_path_for(index_path: str) -> str:
 
 def load(path: str) -> dict:
     if not os.path.exists(path):
-        return {"version": 1, "sessions": {}}
-    with open(path, "r", encoding="utf-8") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-        try:
-            return json.load(f)
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return {**_DEFAULT, "sessions": {}}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except (json.JSONDecodeError, OSError):
+        return {**_DEFAULT, "sessions": {}}
 
 
 def mutate(path: str, fn: Callable[[dict], dict]) -> dict:
@@ -80,7 +84,6 @@ def record_event(path: str, *, event: str, session_id: str,
             entry["state"] = WORKING
         elif event in ("Stop", "Notification"):
             entry["state"] = IDLE
-        entry.setdefault("pid", entry.get("pid"))
         entry["last_seen"] = ts
         sessions[session_id] = entry
         return data

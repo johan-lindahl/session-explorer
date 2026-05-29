@@ -64,3 +64,22 @@ def test_event_for_unknown_session_creates_entry(tmp_path):
     lp = str(tmp_path / "live.json")
     live.record_event(lp, event="UserPromptSubmit", session_id="ghost", now=T0)
     assert live.load(lp)["sessions"]["ghost"]["state"] == "working"
+
+
+def test_session_end_on_missing_session_is_safe(tmp_path):
+    lp = str(tmp_path / "live.json")
+    live.record_event(lp, event="SessionEnd", session_id="never-existed", now=T0)
+    assert live.load(lp)["sessions"] == {}
+
+
+def test_version_preserved_when_recording_into_existing_file(tmp_path):
+    lp = str(tmp_path / "live.json")
+    live.record_event(lp, event="SessionStart", session_id="s1", pid=1, now=T0)
+    live.record_event(lp, event="Stop", session_id="s1", now=T0)
+    assert live.load(lp)["version"] == 1
+
+
+def test_load_corrupt_file_falls_back_to_v1_default(tmp_path):
+    lp = tmp_path / "live.json"
+    lp.write_text("{ this is not valid json")
+    assert live.load(str(lp)) == {"version": 1, "sessions": {}}
