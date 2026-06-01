@@ -122,9 +122,9 @@ session-explorer tui       # run the TUI in the current terminal
 | `←` `→` | Collapse / expand the current folder or project |
 | `Enter` | Resume the selected session (`exec claude --resume <id>`) |
 | `Space` | Toggle the preview pane (full name, project, folder, branch, age, created, messages, context, session id, notes, first prompt, path) |
-| `r` | Rename — also moves the session between folders |
+| `r` | Rename a session (also moves it between folders), or rename a folder's last segment in place — folder renames cascade across the whole subtree |
 | `n` | Create an empty folder |
-| `m` | Move the selected session to a folder |
+| `m` | Move a session to a folder, or re-parent a whole folder under another path (`(ungroup)` for top level) |
 | `d` | Delete the selected session (confirms; removes the JSONL too), or an empty folder (refuses if it still contains sessions) |
 | `e` | Edit notes (Ctrl+S to save) |
 | `u` | Toggle visibility of unnamed sessions (hidden by default) |
@@ -216,10 +216,11 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.3.0.** Released and installable from the Claude Code marketplace. Textual
+**v1.4.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
-(including the rescan progress); rename/move/folders/delete/notes; preview pane;
+(including the rescan progress); rename/move on both sessions and whole folders
+(folder ops cascade across the subtree); folders/delete/notes; preview pane;
 live filtering; rescan (`F5`);
 opt-in `--gc` retention with a once-daily auto-trigger; `session-explorer
 uninstall`; model-aware context sizing; macOS/Linux/WSL launchers (native

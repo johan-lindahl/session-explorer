@@ -1,4 +1,4 @@
-from _pkg.tree_model import split_path, build_nested_tree
+from _pkg.tree_model import split_path, build_nested_tree, replace_folder_prefix
 
 
 def _idx(sessions):
@@ -53,6 +53,64 @@ def test_split_path_preserves_dashes_in_segments():
     """Dashes are no longer separators — they're literal characters in segments."""
     assert split_path("bugfix-watch/v2") == (["bugfix-watch"], "v2")
     assert split_path("bugfix-watch-lockup") == ([], "bugfix-watch-lockup")
+
+
+# ---------------------------------------------------------------------------
+# replace_folder_prefix tests
+# ---------------------------------------------------------------------------
+
+def test_replace_folder_prefix_session_directly_in_folder():
+    # team/planning/sprint14 lives in folder ["team","planning"], display sprint14.
+    assert replace_folder_prefix(
+        "team/planning/sprint14", ["team", "planning"], ["team", "strategy"]
+    ) == "team/strategy/sprint14"
+
+
+def test_replace_folder_prefix_session_in_subfolder_preserves_tail():
+    assert replace_folder_prefix(
+        "team/planning/q1/sprint14", ["team", "planning"], ["team", "strategy"]
+    ) == "team/strategy/q1/sprint14"
+
+
+def test_replace_folder_prefix_reparent_to_new_root():
+    # Moving folder ["team","planning"] under ["archive"] → ["archive","planning"].
+    assert replace_folder_prefix(
+        "team/planning/sprint14", ["team", "planning"], ["archive", "planning"]
+    ) == "archive/planning/sprint14"
+
+
+def test_replace_folder_prefix_reparent_to_top_level():
+    # Ungrouping folder ["team","planning"] → ["planning"].
+    assert replace_folder_prefix(
+        "team/planning/sprint14", ["team", "planning"], ["planning"]
+    ) == "planning/sprint14"
+
+
+def test_replace_folder_prefix_not_under_folder_returns_none():
+    # A sibling folder that merely shares a string prefix must NOT match.
+    assert replace_folder_prefix(
+        "team/planning-extra/a", ["team", "planning"], ["team", "strategy"]
+    ) is None
+
+
+def test_replace_folder_prefix_shallower_name_returns_none():
+    # A top-level session named "team" is not inside folder ["team","planning"].
+    assert replace_folder_prefix(
+        "team", ["team", "planning"], ["team", "strategy"]
+    ) is None
+
+
+def test_replace_folder_prefix_unrelated_returns_none():
+    assert replace_folder_prefix(
+        "other/thing", ["team", "planning"], ["team", "strategy"]
+    ) is None
+
+
+def test_replace_folder_prefix_handles_messy_input_name():
+    # Leading/trailing/double slashes in the stored name are normalised first.
+    assert replace_folder_prefix(
+        "/team//planning/sprint14/", ["team", "planning"], ["team", "strategy"]
+    ) == "team/strategy/sprint14"
 
 
 # ---------------------------------------------------------------------------

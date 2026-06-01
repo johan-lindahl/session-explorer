@@ -37,6 +37,29 @@ def split_path(name: "str | None") -> Tuple[List[str], str]:
     return (segments[:-1], segments[-1])
 
 
+def replace_folder_prefix(
+    name: "str | None", old_segments: List[str], new_segments: List[str]
+) -> "str | None":
+    """Rewrite a session `name` when it lives under the folder `old_segments`.
+
+    Folder membership is compared segment-wise (not as a raw string prefix), so
+    folder ["team","planning"] never captures a session named
+    "team/planning-extra/x" — "planning" and "planning-extra" are distinct
+    segments. A session whose folder path *equals* `old_segments` (the session
+    sits directly in the folder, its leaf being the display name) is included.
+
+    Returns the rewritten name with `old_segments` swapped for `new_segments`
+    and the display name + any deeper sub-segments preserved, or None when the
+    session is not under the folder.
+    """
+    segments, display = split_path(name)
+    n = len(old_segments)
+    if len(segments) < n or segments[:n] != list(old_segments):
+        return None
+    rebuilt = list(new_segments) + segments[n:] + [display]
+    return "/".join(rebuilt)
+
+
 def _empty_node() -> dict:
     return {"_sessions": [], "_folders": {}}
 

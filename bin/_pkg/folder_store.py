@@ -108,6 +108,36 @@ def remove_subtree(path: str, project: str, folder: str) -> None:
     mutate(path, mutator)
 
 
+def rename_subtree(path: str, project: str, old_path: str, new_path: str) -> None:
+    """Re-prefix `old_path` and every descendant (`old_path/...`) to `new_path`
+    in `project`'s list. Used when a folder is renamed or re-parented; the whole
+    subtree moves together. Entries that merely share a string prefix but are a
+    different segment (e.g. `old_path` + "-extra") are left untouched. Resulting
+    duplicates (renaming into an existing target) collapse to one entry. No-op
+    for a missing project or when `old_path == new_path`."""
+    if old_path == new_path:
+        return
+    prefix = old_path + "/"
+
+    def mutator(data: dict) -> dict:
+        projects = data.get("projects", {})
+        if project not in projects:
+            return data
+        out: List[str] = []
+        seen = set()
+        for f in projects[project]:
+            if f == old_path:
+                f = new_path
+            elif f.startswith(prefix):
+                f = new_path + f[len(old_path):]
+            if f not in seen:
+                seen.add(f)
+                out.append(f)
+        projects[project] = out
+        return data
+    mutate(path, mutator)
+
+
 def list_paths(path: str, project: str) -> List[str]:
     """Return a sorted copy of `project`'s stored folder paths (may be empty)."""
     data = load(path)

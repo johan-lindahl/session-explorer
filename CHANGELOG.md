@@ -3,6 +3,21 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.4.0
+
+### Added
+- `r` (rename) and `m` (move) now work on **folder** nodes, not just sessions.
+  Renaming a folder renames its last segment in place; moving re-parents the
+  whole subtree under a chosen path (or `(ungroup)` to top level). Because a
+  folder is just the prefix shared by the session names under it, both cascade:
+  every contained session is rewritten (a `custom-title` event appended to each
+  JSONL, all `name_cached` updates in one index write) and matching folder-store
+  entries are re-prefixed in one pass, so empty subfolders move too. The cascade
+  is gated behind a confirmation that names the affected session count.
+  Segment-wise prefix matching means renaming `team/planning` never touches a
+  sibling `team/planning-extra`; re-parenting a folder into its own subtree is
+  rejected; renaming/moving onto an existing path merges into it.
+
 ## 1.3.0
 
 ### Changed

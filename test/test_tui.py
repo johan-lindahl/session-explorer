@@ -573,6 +573,149 @@ async def test_move_to_new_path_adds_to_folder_store(index_path, tmp_path):
     assert json.load(open(index_path))["sessions"]["sid-1"]["name_cached"] == "team/new-folder/sprint14"
 
 
+def _find_node_by_segments(root, project, segments):
+    """Locate the folder node whose attached data matches (project, segments)."""
+    def walk(node):
+        d = node.data or {}
+        if (d.get("project") == project and d.get("segments") == segments
+                and "sid" not in d):
+            return node
+        for c in node.children:
+            got = walk(c)
+            if got:
+                return got
+        return None
+    return walk(root)
+
+
+def _folder_index(tmp_path):
+    """Index + transcripts modelling a populated folder subtree:
+
+        team/planning/sprint14          (sid-a)
+        team/planning/q1/notes          (sid-b, deeper)
+        team/planning-extra/keep        (sid-c, sibling sharing a string prefix)
+        other/elsewhere                 (sid-d, unrelated)
+
+    Plus a store-only empty subfolder team/planning/archive.
+    """
+    import json
+    from _pkg import folder_store
+    path = str(tmp_path / "se-index.json")
+    sessions = {}
+    for sid, name in [
+        ("sid-a", "team/planning/sprint14"),
+        ("sid-b", "team/planning/q1/notes"),
+        ("sid-c", "team/planning-extra/keep"),
+        ("sid-d", "other/elsewhere"),
+    ]:
+        tr = tmp_path / f"{sid}.jsonl"
+        tr.write_text('{"type":"user"}\n')
+        sessions[sid] = {
+            "project_label": "demo", "project_path": "/tmp/demo",
+            "name_cached": name, "last_active_at": "2026-05-27T10:00:00Z",
+            "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+            "transcript_path": str(tr),
+        }
+    json.dump({"version": 1, "sessions": sessions}, open(path, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    folder_store.add(folder_store.default_path_for(path), "demo", "team/planning/archive")
+    return path
+
+
+async def test_rename_folder_cascades_to_sessions_and_store(tmp_path):
+    """`r` on a folder renames its last segment in place and rewrites every
+    contained session (and store subtree); prefix-only siblings stay put."""
+    import json
+    from _pkg.tui import SessionExplorerApp, RenameScreen
+    from _pkg import folder_store
+    index_path = _folder_index(tmp_path)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        node = _find_node_by_segments(app._tree.root, "demo", ["team", "planning"])
+        assert node is not None
+        app._tree.select_node(node); app._tree.cursor_line = node.line
+        await pilot.pause()
+        await pilot.press("r"); await pilot.pause()
+        assert isinstance(app.screen, RenameScreen)
+        # Prefilled with the leaf only (rename-in-place).
+        assert app.screen._current == "planning"
+        app.screen.dismiss("strategy")
+        await pilot.pause()
+        # A confirmation naming the affected count gates the cascade.
+        await pilot.press("y"); await pilot.pause()
+
+    sessions = json.load(open(index_path))["sessions"]
+    assert sessions["sid-a"]["name_cached"] == "team/strategy/sprint14"
+    assert sessions["sid-b"]["name_cached"] == "team/strategy/q1/notes"
+    assert sessions["sid-c"]["name_cached"] == "team/planning-extra/keep"  # untouched
+    assert sessions["sid-d"]["name_cached"] == "other/elsewhere"           # untouched
+    fs_path = folder_store.default_path_for(index_path)
+    paths = folder_store.list_paths(fs_path, "demo")
+    assert "team/strategy/archive" in paths
+    assert "team/planning/archive" not in paths
+
+
+async def test_move_folder_reparents_subtree(tmp_path):
+    """`m` on a folder keeps its leaf and re-parents it under the chosen path."""
+    import json
+    from _pkg.tui import SessionExplorerApp, MoveScreen
+    index_path = _folder_index(tmp_path)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        node = _find_node_by_segments(app._tree.root, "demo", ["team", "planning"])
+        app._tree.select_node(node); app._tree.cursor_line = node.line
+        await pilot.pause()
+        await pilot.press("m"); await pilot.pause()
+        assert isinstance(app.screen, MoveScreen)
+        app.screen.dismiss("archive")  # new parent
+        await pilot.pause()
+        await pilot.press("y"); await pilot.pause()
+
+    sessions = json.load(open(index_path))["sessions"]
+    assert sessions["sid-a"]["name_cached"] == "archive/planning/sprint14"
+    assert sessions["sid-b"]["name_cached"] == "archive/planning/q1/notes"
+    assert sessions["sid-c"]["name_cached"] == "team/planning-extra/keep"
+
+
+async def test_move_folder_into_own_descendant_is_rejected(tmp_path):
+    """Re-parenting a folder beneath itself would be nonsensical; reject it."""
+    import json
+    from _pkg.tui import SessionExplorerApp, MoveScreen
+    index_path = _folder_index(tmp_path)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        node = _find_node_by_segments(app._tree.root, "demo", ["team", "planning"])
+        app._tree.select_node(node); app._tree.cursor_line = node.line
+        await pilot.pause()
+        await pilot.press("m"); await pilot.pause()
+        assert isinstance(app.screen, MoveScreen)
+        app.screen.dismiss("team/planning/q1")  # a descendant — illegal target
+        await pilot.pause()
+        # No confirmation should appear and nothing should change.
+        assert not isinstance(app.screen, MoveScreen)
+
+    sessions = json.load(open(index_path))["sessions"]
+    assert sessions["sid-a"]["name_cached"] == "team/planning/sprint14"
+
+
+async def test_rename_project_node_is_rejected(tmp_path):
+    """`r` on a project node (no folder segments) must not start a folder rename."""
+    from _pkg.tui import SessionExplorerApp, RenameScreen
+    index_path = _folder_index(tmp_path)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        app._tree.select_node(proj); app._tree.cursor_line = proj.line
+        await pilot.pause()
+        await pilot.press("r"); await pilot.pause()
+        assert not isinstance(app.screen, RenameScreen)
+
+
 def test_help_text_explains_naming_visibility_and_credit():
     from _pkg.tui import _help_text
     text = _help_text()

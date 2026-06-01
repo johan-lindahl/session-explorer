@@ -208,8 +208,8 @@ def _help_text() -> str:
         key("← →", "Collapse / expand a folder or project"),
         key("Enter", "Resume the selected session"),
         key("Space", "Toggle the preview pane"),
-        key("r", "Rename (also re-files into a different folder)"),
-        key("m", "Move the selected session to a folder"),
+        key("r", "Rename a session (re-files it) or a folder (renames its subtree)"),
+        key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
         key("d", "Delete the selected session, or an empty folder (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
@@ -254,13 +254,14 @@ class RenameScreen(_PanelScreen):
 
     BINDINGS = [Binding("escape", "dismiss('')", "Cancel")]
 
-    def __init__(self, current: str) -> None:
+    def __init__(self, current: str, title: str = "Rename session") -> None:
         super().__init__()
         self._current = current
+        self._title = title
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label("Rename session", classes="dialog-title"),
+            Label(self._title, classes="dialog-title"),
             Input(value=self._current, id="rename-input"),
             Label("enter save · esc cancel", classes="dialog-hint"),
             id="panel",
@@ -729,14 +730,62 @@ class SessionExplorerApp(App):
         else:
             proceed()
 
+    def _folder_node_target(self) -> "tuple[str, list[str]] | None":
+        """If the cursor sits on a folder node (project + segments, no sid),
+        return (project, segments). Project nodes (empty segments) and session
+        leaves return None."""
+        node = self._tree.cursor_node
+        data = node.data if (node and node.data) else {}
+        if "sid" in data:
+            return None
+        segments = data.get("segments") or []
+        project = data.get("project")
+        if project and segments:
+            return (project, list(segments))
+        return None
+
+    def _folder_paths(self, project: str) -> "set[str]":
+        """All folder paths in `project`: the store ∪ folders implied by indexed
+        session names. Shared by session-move and folder-move candidate lists."""
+        from . import folder_store as _fs
+        paths = set(_fs.list_paths(_fs.default_path_for(self._index_path), project))
+        data = _index.load(self._index_path)
+        for s in data.get("sessions", {}).values():
+            if s.get("project_label") != project:
+                continue
+            segs, _ = split_path(s.get("name_cached"))
+            for i in range(1, len(segs) + 1):
+                paths.add("/".join(segs[:i]))
+        return paths
+
     def action_rename(self) -> None:
         node = self._tree.cursor_node
-        if not node or not node.data or "sid" not in node.data:
-            self.bell()
+        data = node.data if (node and node.data) else {}
+
+        # Folder node: rename its last segment in place, cascading to contents.
+        if "sid" not in data:
+            target = self._folder_node_target()
+            if target is None:
+                self.bell()
+                return
+            project, segments = target
+            parent, leaf = segments[:-1], segments[-1]
+
+            def after_folder(new_leaf: "str | None") -> None:
+                typed = [seg for seg in (new_leaf or "").split("/") if seg.strip()]
+                if not typed:
+                    return
+                new_segs = parent + typed
+                if new_segs == segments:
+                    return
+                self._relabel_folder(project, segments, new_segs, verb="Rename")
+
+            self.push_screen(RenameScreen(leaf, title="Rename folder"), after_folder)
             return
-        sid = node.data["sid"]
-        current = node.data.get("name_cached") or ""
-        transcript = node.data.get("transcript_path")
+
+        sid = data["sid"]
+        current = data.get("name_cached") or ""
+        transcript = data.get("transcript_path")
 
         def after(new_name: str | None) -> None:
             if not new_name or new_name == current or not transcript:
@@ -753,30 +802,78 @@ class SessionExplorerApp(App):
 
         self.push_screen(RenameScreen(current), after)
 
+    def _relabel_folder(self, project: str, old_segs: "list[str]",
+                        new_segs: "list[str]", verb: str) -> None:
+        """Cascade a folder rename/move: rewrite every session whose name lives
+        under `old_segs` (appending a custom-title event to its JSONL), re-prefix
+        the folder store subtree, and refresh the tree — all behind a single
+        confirmation that names the affected session count."""
+        from . import folder_store as _fs
+        from .rename import append_custom_title
+        from .tree_model import replace_folder_prefix
+
+        old_path, new_path = "/".join(old_segs), "/".join(new_segs)
+        data = _index.load(self._index_path)
+        affected = []  # (sid, transcript_path, new_name)
+        for sid, s in data.get("sessions", {}).items():
+            if s.get("project_label") != project:
+                continue
+            new_name = replace_folder_prefix(s.get("name_cached"), old_segs, new_segs)
+            if new_name is not None:
+                affected.append((sid, s.get("transcript_path"), new_name))
+
+        def do() -> None:
+            for sid, transcript, new_name in affected:
+                if transcript:
+                    append_custom_title(transcript, session_id=sid, new_name=new_name)
+
+            def _mut(d: dict) -> dict:
+                for sid, _t, new_name in affected:
+                    d["sessions"].setdefault(sid, {})["name_cached"] = new_name
+                return d
+            _index.mutate(self._index_path, _mut)
+            # An empty folder lives only in the store; populated ones are implied
+            # by their (now-rewritten) session names. rename_subtree handles both
+            # by moving any store entries under the old path.
+            _fs.rename_subtree(_fs.default_path_for(self._index_path),
+                               project, old_path, new_path)
+            self._populate()
+
+        n = len(affected)
+        plural = "session" if n == 1 else "sessions"
+        msg = f"{verb} folder '{old_path}' → '{new_path}'?\nUpdates {n} {plural}."
+
+        def after(ok: bool) -> None:
+            if ok:
+                do()
+
+        self.push_screen(ConfirmScreen(msg), after)
+
     def action_move(self) -> None:
         from . import folder_store as _fs
         node = self._tree.cursor_node
-        if not node or not node.data or "sid" not in node.data:
-            self.bell(); return
-        sid = node.data["sid"]
-        name = node.data.get("name_cached") or ""
-        transcript = node.data.get("transcript_path")
-        project = node.data.get("project_label")
+        data = node.data if (node and node.data) else {}
+
+        # Folder node: re-parent the whole subtree, keeping its leaf name.
+        if "sid" not in data:
+            target = self._folder_node_target()
+            if target is None:
+                self.bell(); return
+            project, segments = target
+            self._move_folder(project, segments)
+            return
+
+        sid = data["sid"]
+        name = data.get("name_cached") or ""
+        transcript = data.get("transcript_path")
+        project = data.get("project_label")
         if not project:
             self.bell(); return
         segments, display = split_path(name)
         current_folder = "/".join(segments)
 
         fs_path = _fs.default_path_for(self._index_path)
-        # Folder list = store ∪ folders implied by indexed session names in this project.
-        paths = set(_fs.list_paths(fs_path, project))
-        data = _index.load(self._index_path)
-        for s in data.get("sessions", {}).values():
-            if s.get("project_label") != project:
-                continue
-            segs, _ = split_path(s.get("name_cached"))
-            for i in range(1, len(segs) + 1):
-                paths.add("/".join(segs[:i]))
+        paths = self._folder_paths(project)
 
         def after(target: "str | None") -> None:
             if target is None or not transcript:
@@ -799,6 +896,35 @@ class SessionExplorerApp(App):
             self._populate()
 
         self.push_screen(MoveScreen(project, sorted(paths), current_folder), after)
+
+    def _move_folder(self, project: str, segments: "list[str]") -> None:
+        """Re-parent folder `segments` (keeping its leaf) under a chosen path.
+        Candidate parents exclude the folder itself and its descendants, so a
+        folder can't be moved inside its own subtree."""
+        leaf = segments[-1]
+        old_path = "/".join(segments)
+        current_parent = "/".join(segments[:-1])
+        parents = sorted(
+            p for p in self._folder_paths(project)
+            if p != old_path and not p.startswith(old_path + "/")
+        )
+
+        def after(target: "str | None") -> None:
+            if target is None:
+                return
+            parent_segs = [seg for seg in target.split("/") if seg.strip()]
+            new_segs = parent_segs + [leaf]
+            if new_segs == segments:  # same parent → no-op
+                return
+            # Guard against re-parenting into self/a descendant.
+            if parent_segs[:len(segments)] == segments:
+                self.notify(
+                    f"Cannot move '{old_path}' into itself.", severity="warning",
+                )
+                return
+            self._relabel_folder(project, segments, new_segs, verb="Move")
+
+        self.push_screen(MoveScreen(project, parents, current_parent), after)
 
     def action_new_folder(self) -> None:
         from . import folder_store as _fs
