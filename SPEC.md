@@ -118,9 +118,9 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `←` `→` | Collapse / expand the current folder or project |
 | `Enter` | Resume the selected session — see *Resume flow* |
 | `Space` | Toggle the preview pane. Headline is the session's full (un-truncated) name; body shows project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. `Esc` also closes it. |
-| `r` | Rename (= retag = move to a different folder). Prompts for the new name. |
+| `r` | Rename. On a **session**: rename (= retag = move to a different folder), prompts for the new name. On a **folder**: rename its last segment in place, prompts prefilled with that segment — cascades to every session and subfolder under it (see *Folder rename and move*). |
 | `n` | New folder (prompts for path under the current project; cursor on a folder pre-fills the prefix). Created empty; persisted in the folder store. |
-| `m` | Move the selected session within its project (lists existing paths in the project; type a new path to create it). |
+| `m` | Move. On a **session**: move within its project (lists existing paths; type a new path to create it). On a **folder**: re-parent the whole subtree under a chosen path (or `(ungroup)` → top level), keeping its leaf name. Candidate parents exclude the folder and its own descendants. |
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
 | `u` | Toggle visibility of unnamed sessions (hidden by default). |
@@ -151,6 +151,17 @@ These are pure caches in the index. The `SessionStart` hook refreshes them on ev
 Both write a rename event to the session's JSONL in the same shape Claude's own `/rename` writes (a `custom-title` event), reverse-engineered from a real renamed transcript.
 
 **Fallback** if Claude's format proves volatile or undocumented: store an authoritative `display_name` in the index that overrides whatever the JSONL says. v1 prefers writing to the JSONL so Claude's native picker reflects the new name.
+
+#### Folder rename and move
+
+A folder has no record of its own — its identity is the segment-prefix shared by the session names under it plus any folder-store entry. So renaming or moving a folder is a **cascade**, not a single write:
+
+- The new folder segments are computed from the action — `r` swaps the folder's last segment in place (`team/planning` → `team/strategy`); `m` keeps the leaf and swaps the parent (`team/planning` → `archive/planning`, or top-level via `(ungroup)`).
+- Every session in the project whose folder path has the old segments as a **segment-wise prefix** is rewritten: the old prefix is replaced with the new one and the display name plus any deeper sub-segments are preserved. Each rewrite appends a `custom-title` event to that session's JSONL; all `name_cached` updates land in a single index write. Segment-wise matching means `planning` never captures a sibling named `planning-extra`.
+- Folder-store entries equal to or under the old path are re-prefixed in one `folder_store.rename_subtree` call, so empty (store-only) subfolders move too.
+- The whole cascade is gated behind one confirmation that names the affected session count. Re-parenting a folder into itself or a descendant is rejected; renaming/moving onto an existing target path merges into it (duplicate store entries collapse).
+
+`tree_model.replace_folder_prefix` (pure name rewrite) and `folder_store.rename_subtree` (store re-prefix) carry the logic; `tui._relabel_folder` orchestrates the I/O.
 
 ### Resume flow
 
@@ -442,7 +453,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 3. **Two machines, one `~/.claude/`** (via dotfile sync). The index is keyed by session UUID; naïve last-writer-wins on the JSON file loses at most a notes edit. Not solved in v1.
 4. **`/rename` inside Claude Code.** The next `SessionStart` hook fire refreshes `name_cached`. Mid-session renames are visible after closing/reopening the TUI or running `session-explorer index --refresh`.
 5. **Concurrent index writes** (two `claude` sessions starting at once). Every index write uses `flock` + temp-file-rename.
-6. **Folder collisions.** Renaming `plans/sprint14` to `plans/sprint15` moves the session within the folder. Renaming to `sprint14` (no slash) drops it to ungrouped. Deleting a session leaves its folder behind only if the folder also appears in the folder store; otherwise the folder evaporates with the last session.
+6. **Folder collisions.** Renaming `plans/sprint14` to `plans/sprint15` moves the session within the folder. Renaming to `sprint14` (no slash) drops it to ungrouped. Deleting a session leaves its folder behind only if the folder also appears in the folder store; otherwise the folder evaporates with the last session. **Folder-level** rename/move (`r`/`m` on a folder node) cascades the same prefix swap across every contained session and store entry at once (see *Folder rename and move*); renaming/moving onto an existing folder path merges the two, and re-parenting a folder into its own subtree is rejected.
 7. **Empty-folder accumulation.** *Deferred (still open).* The intent is for `--gc` to also prune folder-store entries that have remained empty for >90 days, but the folder store records no per-folder timestamps today, so "empty for 90 days" isn't computable without a schema change. v1 ships session GC only; empty-folder pruning needs an `empty_since` field (folders.json schema bump) before it can be implemented. Empty folders persist until then.
 8. **Launcher fallback.** No terminal detected → CLI prints the absolute command + copies to clipboard; the slash command's response shows "Run: …".
 9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. A fresh install creates the index at `version: 1` (no `folders[]` since the field is never written to a new file); the one-shot v1→v2 migration runs at every CLI entry point and bumps `version` to `2` (moving any legacy `folders[]` to the folder store under `(unfiled)`). The migration is idempotent — once `version >= 2`, it short-circuits. Readers tolerate either version.
