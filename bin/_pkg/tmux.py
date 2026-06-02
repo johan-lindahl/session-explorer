@@ -99,6 +99,8 @@ def build_undock(pane_id: str, sid: str) -> List[str]:
 
 
 def build_list_panes() -> List[str]:
+    """Pane ids in the explorer window — its own pane plus the docked claude
+    pane (target is hard-coded; the explorer is the only multi-pane window)."""
     return build_base() + [
         "list-panes", "-t", EXPLORER_WINDOW, "-F", "#{pane_id}"]
 

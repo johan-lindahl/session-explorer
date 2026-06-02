@@ -146,8 +146,9 @@ def test_build_dock_joins_session_into_explorer_on_the_right():
 
 
 def test_build_dock_respects_custom_pct():
-    assert tmux.build_dock("sid-1", pct=50)[-6:] == [
-        "-p", "50", "-s", "sid-1", "-t", "explorer"]
+    assert tmux.build_dock("sid-1", pct=50) == [
+        "tmux", "-L", "session-explorer",
+        "join-pane", "-h", "-p", "50", "-s", "sid-1", "-t", "explorer"]
 
 
 def test_build_undock_breaks_pane_back_to_named_background_window():
