@@ -360,6 +360,50 @@ class NewFolderScreen(_PanelScreen):
         self.dismiss(event.value.strip())
 
 
+class NewSessionScreen(_PanelScreen):
+    """Create a new Claude session. Returns
+    {name, cwd, worktree: bool, worktree_name: str} or None on cancel.
+
+    The name Input prefills with the folder prefix (ends in '/') so the session
+    nests in the current folder; a slash-path is folder placement exactly like
+    rename/move. Enter from any Input gathers all fields and submits."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, project: str, name_prefix: str = "", cwd: str = "") -> None:
+        super().__init__()
+        self._project = project
+        self._name_prefix = name_prefix
+        self._cwd = cwd
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(f"New session in '{self._project}' (use / to nest)",
+                  classes="dialog-title"),
+            Input(value=self._name_prefix, placeholder="session name", id="ns-name"),
+            Input(value=self._cwd, placeholder="working directory", id="ns-cwd"),
+            Checkbox("Create git worktree (-w)", id="ns-wt"),
+            Input(placeholder="worktree name (optional)", id="ns-wtname"),
+            Label("enter create · esc cancel", classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        inp = self.query_one("#ns-name", Input)
+        inp.cursor_position = len(inp.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(self._result())
+
+    def _result(self) -> dict:
+        return {
+            "name": self.query_one("#ns-name", Input).value.strip(),
+            "cwd": self.query_one("#ns-cwd", Input).value.strip(),
+            "worktree": self.query_one("#ns-wt", Checkbox).value,
+            "worktree_name": self.query_one("#ns-wtname", Input).value.strip(),
+        }
+
+
 class ConfirmScreen(_PanelScreen):
     """Yes/no confirmation modal. Returns True iff the user confirmed."""
 

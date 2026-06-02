@@ -1689,3 +1689,48 @@ def test_derive_project_cwd_picks_most_recent_and_strips_worktree():
 def test_derive_project_cwd_returns_none_when_no_match():
     from _pkg.tui import _derive_project_cwd
     assert _derive_project_cwd({}, "demo") is None
+
+
+async def test_new_session_dialog_returns_dict(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(
+            NewSessionScreen("demo", "planning/", "/tmp/demo-project"),
+            lambda r: captured.update(r or {}),
+        )
+        await pilot.pause()
+        for ch in "sprint15":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured["name"] == "planning/sprint15"
+    assert captured["cwd"] == "/tmp/demo-project"
+    assert captured["worktree"] is False
+    assert captured["worktree_name"] == ""
+
+
+async def test_new_session_dialog_captures_worktree(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    from textual.widgets import Checkbox, Input
+    app = SessionExplorerApp(index_path=index_path)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(
+            NewSessionScreen("demo", "", "/tmp/demo-project"),
+            lambda r: captured.update(r or {}),
+        )
+        await pilot.pause()
+        for ch in "feature":
+            await pilot.press(ch)
+        app.screen.query_one("#ns-wt", Checkbox).value = True
+        app.screen.query_one("#ns-wtname", Input).value = "wt1"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured["name"] == "feature"
+    assert captured["worktree"] is True
+    assert captured["worktree_name"] == "wt1"
