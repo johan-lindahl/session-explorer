@@ -1521,3 +1521,25 @@ async def test_mount_does_not_crash_without_tmux(index_path):
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._tmux_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_offer_shown_once_then_marked(tmp_path, monkeypatch):
+    import json
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    # Fresh index dir WITHOUT the tmux-declined marker; retention already decided,
+    # help already seen, so the tmux offer is the only modal.
+    path = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "folders": [], "sessions": {}}, open(path, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    monkeypatch.delenv("SESSION_EXPLORER_TMUX", raising=False)   # plain launch
+    # Force "tmux not installed" regardless of the test machine, so the offer fires.
+    monkeypatch.setattr(tuimod._tmux, "available", lambda which=None: False)
+    app = SessionExplorerApp(index_path=path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("n")           # decline the offer
+        await pilot.pause()
+    assert (tmp_path / ".session-explorer.tmux-declined").exists()

@@ -595,7 +595,34 @@ class SessionExplorerApp(App):
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
         self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
 
+    def _tmux_decline_marker(self) -> str:
+        return os.path.join(self._claude_dir(), ".session-explorer.tmux-declined")
+
+    def _maybe_offer_tmux(self) -> None:
+        # Only when NOT tmux-hosted (tmux was absent at /open) and not already
+        # declined. Mirrors the retention one-time prompt.
+        if self._tmux_enabled or os.path.exists(self._tmux_decline_marker()):
+            return
+        if _tmux.available():       # present now but launch wasn't wrapped; skip
+            return
+
+        def after(ok: bool) -> None:
+            if not ok:
+                open(self._tmux_decline_marker(), "a").close()
+            else:
+                import platform
+                from . import tmux_install
+                cmd = tmux_install.install_command(platform.system()) \
+                    or "see https://github.com/tmux/tmux/wiki/Installing"
+                self.push_screen(ConfirmScreen(
+                    f"Run this, then re-open the explorer:\n\n  {cmd}\n\n(y/esc)"))
+        self.push_screen(ConfirmScreen(
+            "Run multiple sessions and monitor them live inside the explorer?\n"
+            "This needs tmux, which isn't installed. Set it up? (y = how, n = no)"),
+            after)
+
     def _maybe_open_help(self) -> None:
+        self._maybe_offer_tmux()
         # First run only: pop the help overlay so newcomers learn the slash-
         # folder naming and the named-only default. The marker is written up
         # front so a crash mid-session still counts as "seen".
