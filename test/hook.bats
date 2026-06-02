@@ -149,7 +149,7 @@ EOF
   export SESSION_EXPLORER_PROBE=1
   printf '%s' '{"hook_event_name":"SessionStart","session_id":"p2","transcript_path":"/t/p2.jsonl","cwd":"/repo"}' \
     | bash "$REPO/hooks/session-live.sh"
-  sleep 0.1
+  sleep 0.3
   [ ! -f "$STUB" ]
   unset SESSION_EXPLORER_PROBE
 }

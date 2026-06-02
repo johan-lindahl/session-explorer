@@ -128,6 +128,7 @@ session-explorer tui       # run the TUI in the current terminal
 | `d` | Delete the selected session (confirms; removes the JSONL too), or an empty folder (refuses if it still contains sessions) |
 | `e` | Edit notes (Ctrl+S to save) |
 | `u` | Toggle visibility of unnamed sessions (hidden by default) |
+| `g` | Toggle a live subscription-usage bar (current 5-hour limit) in the tmux status line — off by default, tmux-hosted only; toggling off then on is the manual force-refresh |
 | `F5` | Rescan `~/.claude/projects/` — import sessions not yet tracked (shows a progress bar) |
 | `/` | Live filter across name, notes, first prompt, summary |
 | `h` | Show help (auto-opens once on first launch) |
@@ -216,17 +217,18 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.5.0.** Released and installable from the Claude Code marketplace. Textual
+**v1.8.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders
 (folder ops cascade across the subtree); folders/delete/notes; preview pane;
-live filtering; rescan (`F5`);
-opt-in `--gc` retention with a once-daily auto-trigger; `session-explorer
-uninstall`; model-aware context sizing; macOS/Linux/WSL launchers (native
-Windows out of scope); tmux-backed multi-session interaction (background windows,
-live preview snapshots, context-aware Enter, quit-guard). Tested by pytest + bats
-in CI on ubuntu + macOS across Python 3.11–3.13.
+live filtering; rescan (`F5`); opt-in `--gc` retention with a once-daily
+auto-trigger; `session-explorer uninstall`; model-aware context sizing;
+macOS/Linux/WSL launchers (native Windows out of scope); tmux-backed
+multi-session interaction (background windows, live preview snapshots,
+context-aware Enter, quit-guard); opt-in subscription-usage bar in the tmux
+status line (`g` toggle, 5-min refresh, `SESSION_EXPLORER_PROBE` hook bail-out).
+Tested by pytest + bats in CI on ubuntu + macOS across Python 3.11–3.13.
 
 ### Running the tests
 
