@@ -18,6 +18,7 @@ from textual.widgets.option_list import Option
 
 from . import __version__
 from . import index as _index
+from . import tmux as _tmux
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path
 
@@ -476,6 +477,9 @@ class SessionExplorerApp(App):
         # sid -> (TreeNode, child_depth) for in-place glyph updates without a
         # full rebuild. Rebuilt by _populate.
         self._row_nodes: dict[str, tuple] = {}
+        # tmux-hosted interaction layer (spec §1). The launcher sets this env
+        # var only when it wrapped the explorer in our dedicated tmux server.
+        self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -708,25 +712,47 @@ class SessionExplorerApp(App):
         sid = node.data["sid"]
         project_path = node.data.get("project_path")
 
+        # No tmux → today's behaviour: exit and execvp claude (handled in run()).
+        if not self._tmux_enabled:
+            self._exit_to_resume(sid, project_path)
+            return
+
+        running = _tmux.session_windows()
+        if sid in running:
+            _tmux.select_window(sid)                 # flip in to interact
+            return
+        if sid in self._live_states:
+            # Live in another terminal, not one of our windows: never start a
+            # second claude on the same transcript (spec §5).
+            self.push_screen(ConfirmScreen(
+                "This session is already running in another terminal.\n"
+                "Showing its progress here; press space to peek. (y/esc)"))
+            return
+        # Stopped → start in a background tmux window, stay in the explorer.
+        cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
+        if _dead_worktree_repo(project_path):
+            def after(ok: bool) -> None:
+                if ok:
+                    _tmux.start_window(sid, _resolve_resume_cwd(project_path) or cwd)
+                    self._poll_live()
+            self.push_screen(ConfirmScreen(
+                "This session is from a deleted git worktree.\n"
+                "Resume anyway? This re-creates an empty directory:\n"
+                f"{project_path}"), after)
+        else:
+            _tmux.start_window(sid, cwd)
+            self._poll_live()
+
+    def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:
         def proceed() -> None:
             self._resume_target = sid
             self._resume_cwd = project_path
             self.exit()
-
-        # If the session's git worktree was deleted, resuming has to recreate
-        # that directory (claude --resume is cwd-scoped). Warn before doing so.
         if _dead_worktree_repo(project_path):
-            def after(ok: bool) -> None:
-                if ok:
-                    proceed()
-            self.push_screen(
-                ConfirmScreen(
-                    "This session is from a deleted git worktree.\n"
-                    "Resume anyway? This re-creates an empty directory:\n"
-                    f"{project_path}"
-                ),
-                after,
-            )
+            self.push_screen(ConfirmScreen(
+                "This session is from a deleted git worktree.\n"
+                "Resume anyway? This re-creates an empty directory:\n"
+                f"{project_path}"), lambda ok: proceed() if ok else None)
         else:
             proceed()
 

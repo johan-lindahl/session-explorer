@@ -1421,3 +1421,42 @@ def test_help_text_documents_live_sessions():
     assert "spinner" in txt.lower()
     assert "○" in txt
     assert "active" in txt.lower()
+
+
+async def test_enter_starts_background_window_when_stopped(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # nothing running
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd: calls.setdefault("start", (sid, cwd)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")            # project node
+        await pilot.press("down")            # folder node
+        await pilot.press("down")            # session leaf (sid-1)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert calls["start"][0] == "sid-1"      # started in the background
+    assert app._resume_target is None        # did NOT exit-to-resume
+
+
+async def test_enter_flips_into_running_window(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "select_window",
+                        lambda t: calls.setdefault("select", t) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")            # project node
+        await pilot.press("down")            # folder node
+        await pilot.press("down")            # session leaf (sid-1)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert calls["select"] == "sid-1"
