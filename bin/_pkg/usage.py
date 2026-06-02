@@ -82,3 +82,85 @@ def has_usage_panel(text: str) -> bool:
 
 def looks_like_trust_prompt(text: str) -> bool:
     return "trust the files in this folder" in (text or "").lower()
+
+
+import glob
+import time
+
+from . import tmux as _tmux
+
+READY_TIMEOUT = 20.0   # seconds to wait for claude's prompt / trust dialog
+PANEL_TIMEOUT = 10.0   # seconds to wait for the /usage panel to render
+POLL_STEP = 0.5
+
+
+def _wait_for(target: str, predicate, timeout: float,
+              *, on_trust=None) -> bool:
+    """Poll capture-pane until `predicate(text)` is true or timeout. If a trust
+    prompt appears meanwhile, call `on_trust` once to dismiss it."""
+    deadline = time.monotonic() + timeout
+    trusted = False
+    while time.monotonic() < deadline:
+        text = _tmux.capture_plain(target)
+        if not trusted and on_trust is not None and looks_like_trust_prompt(text):
+            on_trust()
+            trusted = True
+            time.sleep(POLL_STEP)
+            continue
+        if predicate(text):
+            return True
+        time.sleep(POLL_STEP)
+    return False
+
+
+def cleanup_probe_transcripts(claude_dir: str) -> None:
+    """Delete the JSONLs the throwaway probe claude wrote. Globbing by the probe
+    dirname is robust to however Claude mangles the cwd into a project folder."""
+    pattern = os.path.join(
+        claude_dir, "projects", "*" + PROBE_DIRNAME + "*", "*.jsonl")
+    for path in glob.glob(pattern):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def scrape_usage(claude_dir: str, window: str = None) -> Optional[UsageInfo]:
+    """Spawn a hidden probe claude, run /usage, capture+parse the panel, then tear
+    everything down. Returns None on any failure; never raises."""
+    window = window or _tmux.PROBE_WINDOW
+    cwd = probe_cwd(claude_dir)
+    info: Optional[UsageInfo] = None
+    try:
+        os.makedirs(cwd, exist_ok=True)
+        if _tmux.start_probe_window(cwd, window) != 0:
+            return None
+        # Wait for the input prompt; dismiss the first-run trust dialog if shown.
+        ready = _wait_for(
+            window,
+            lambda t: not looks_like_trust_prompt(t) and len(t.strip()) > 0,
+            READY_TIMEOUT,
+            on_trust=lambda: _tmux.send_keys(window, "Enter"),
+        )
+        if not ready:
+            return None
+        _tmux.send_keys(window, "/usage", "Enter")
+        if _wait_for(window, has_usage_panel, PANEL_TIMEOUT):
+            info = parse_usage(_tmux.capture_plain(window))
+        return info
+    except Exception:
+        return None
+    finally:
+        # /usage opens a modal Settings screen ("Esc to cancel"), so dismiss it
+        # with Escape rather than typing /exit at a prompt; kill-window is the
+        # hard backstop that terminates the throwaway claude either way.
+        try:
+            _tmux.send_keys(window, "Escape")
+            time.sleep(0.2)
+        except Exception:
+            pass
+        try:
+            _tmux.kill_window(window)
+        except Exception:
+            pass
+        cleanup_probe_transcripts(claude_dir)
