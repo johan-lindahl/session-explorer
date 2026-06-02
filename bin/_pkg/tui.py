@@ -878,6 +878,19 @@ class SessionExplorerApp(App):
             _tmux.undock(pane, self._docked_sid)
         self._docked_sid = None
 
+    def _join_docked(self, sid: str) -> None:
+        """Join `sid` into the explorer as the right pane, recording it as the
+        dock **only** when join-pane succeeds. A failed join must not leave a
+        phantom `_docked_sid` — that would lie to the refocus path (Enter on
+        the "docked" row would select a pane that isn't there) and hide the
+        failure. The session still runs as a background window, so surface the
+        problem and leave it re-dockable on the next Enter."""
+        if _tmux.dock(sid) == 0:
+            self._docked_sid = sid
+        else:
+            self.notify("Could not dock the session (tmux join-pane failed); "
+                        "it's running in the background.", severity="warning")
+
     def _dock(self, sid: str, cwd: "str | None", label: "str | None",
               *, already_running: bool) -> None:
         """Make `sid` the docked right pane. If it is already docked, just
@@ -891,8 +904,7 @@ class SessionExplorerApp(App):
         self._undock_current()
         if not already_running:
             _tmux.start_window(sid, cwd, label)    # background window first
-        _tmux.dock(sid)                            # join into the explorer
-        self._docked_sid = sid
+        self._join_docked(sid)                     # join into the explorer
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node
@@ -1211,8 +1223,7 @@ class SessionExplorerApp(App):
         uses start_new_session_window (a new session, not a resume)."""
         self._undock_current()
         _tmux.start_new_session_window(sid, cwd, name, worktree, label)
-        _tmux.dock(sid)
-        self._docked_sid = sid
+        self._join_docked(sid)
         self._populate()           # show the newly-named session immediately
         self._poll_live()
 

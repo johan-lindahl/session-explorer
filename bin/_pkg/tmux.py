@@ -249,7 +249,12 @@ def docked_pane(self_pane: "str | None",
                 _list: Callable[[], List[str]] = list_panes) -> "str | None":
     """The id of the docked claude pane: the one pane in the explorer window
     that is NOT the explorer's own pane (`self_pane`, from $TMUX_PANE).
-    Returns None when nothing is docked."""
+    Returns None when nothing is docked, or when `self_pane` is unknown — we
+    can't tell our pane from claude's, so reporting None is safer than
+    returning the first pane (which could be the explorer's own, and a caller
+    would then break-pane/refocus the wrong one)."""
+    if self_pane is None:
+        return None
     for p in _list():
         if p != self_pane:
             return p

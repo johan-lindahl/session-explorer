@@ -220,3 +220,9 @@ def test_docked_pane_returns_the_pane_that_is_not_the_explorer():
 def test_docked_pane_returns_none_when_only_explorer_pane():
     panes = lambda: ["%0"]
     assert tmux.docked_pane("%0", _list=panes) is None
+
+
+def test_docked_pane_none_self_pane_returns_none():
+    # Defensive: with no $TMUX_PANE we can't tell our own pane from claude's,
+    # so report nothing docked rather than risk break-pane'ing the explorer.
+    assert tmux.docked_pane(None, _list=lambda: ["%0", "%3"]) is None
