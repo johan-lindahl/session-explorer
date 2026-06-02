@@ -120,7 +120,7 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `Space` | Toggle the preview pane. Headline is the session's full (un-truncated) name; body shows project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. `Esc` also closes it. |
 | `r` | Rename. On a **session**: rename (= retag = move to a different folder), prompts for the new name. On a **folder**: rename its last segment in place, prompts prefilled with that segment — cascades to every session and subfolder under it (see *Folder rename and move*). |
 | `n` | New folder (prompts for path under the current project; cursor on a folder pre-fills the prefix). Created empty; persisted in the folder store. |
-| `c` | New session. On a **project** or **folder** node (or a session leaf, treated as its container): opens a dialog to name a new Claude session, pick its working directory, and optionally create a git worktree. Launches `claude -n <name> --session-id <uuid> [-w [<wt>]]` as a sibling tmux window (or via `execvp` without tmux). |
+| `c` | New session. On a **project** or **folder** node (or a session leaf, treated as its container): opens a dialog to name a new Claude session, pick its working directory, and optionally create a git worktree. Launches `claude --session-id <uuid> -n <name> [-w [<wt>]]` as a sibling tmux window (or via `execvp` without tmux). |
 | `m` | Move. On a **session**: move within its project (lists existing paths; type a new path to create it). On a **folder**: re-parent the whole subtree under a chosen path (or `(ungroup)` → top level), keeping its leaf name. Candidate parents exclude the folder and its own descendants. |
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
@@ -174,7 +174,7 @@ editable), and an optional **git worktree** (a checkbox plus an optional worktre
 name).
 
 The explorer generates the session UUID up front and launches
-`claude -n <name> --session-id <uuid>` (plus `-w` / `-w <name>` when requested).
+`claude --session-id <uuid> -n <name>` (plus `-w` / `-w <name>` when requested).
 Claude itself writes the `custom-title` (via `-n`) and owns all worktree/branch
 creation (via `-w`) — the plugin writes neither. The UUID is the tmux window name,
 so the new window reconciles through the same live-registry / `list-windows`
