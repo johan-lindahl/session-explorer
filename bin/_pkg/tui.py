@@ -1198,12 +1198,21 @@ class SessionExplorerApp(App):
 
             _, display = split_path(name)
             label = display or sid[:8]
-            _tmux.start_new_session_window(sid, cwd, name, worktree, label)
-            _tmux.select_window(sid)   # land straight in the new session
-            self._populate()           # show the newly-named session immediately
-            self._poll_live()
+            self._do_new_session(sid, cwd, name, worktree, label)
 
         self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)
+
+    def _do_new_session(self, sid: str, cwd: str, name: str,
+                        worktree: "str | None", label: "str | None") -> None:
+        """Start a fresh claude session as a background window and dock it as
+        the right pane, swapping out whatever was docked. Mirrors _dock but
+        uses start_new_session_window (a new session, not a resume)."""
+        self._undock_current()
+        _tmux.start_new_session_window(sid, cwd, name, worktree, label)
+        _tmux.dock(sid)
+        self._docked_sid = sid
+        self._populate()           # show the newly-named session immediately
+        self._poll_live()
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project_label, prefix). prefix ends in '/' when the cursor sits

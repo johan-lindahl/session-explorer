@@ -1817,8 +1817,8 @@ async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     monkeypatch.setattr(
         tmux_mod, "start_new_session_window",
         lambda *a, **k: calls.setdefault("start", (a, k)))
-    monkeypatch.setattr(
-        tmux_mod, "select_window", lambda t: calls.setdefault("select", t))
+    monkeypatch.setattr(tmux_mod, "dock", lambda sid: calls.setdefault("dock", sid))
+    monkeypatch.setattr(tmux_mod, "docked_pane", lambda self_pane: None)
 
     app = tui_mod.SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
@@ -1840,7 +1840,7 @@ async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     assert args[1] == "/tmp/demo-project"
     assert args[2] == "planning/sprint15"   # folder prefix auto-applied
     assert args[3] is None                  # no worktree
-    assert calls["select"] == "fixed-sid"
+    assert calls["dock"] == "fixed-sid"
 
     # The name is seeded into the index immediately so the new session shows
     # named (not under (unnamed)) before claude writes its first transcript.
@@ -1848,6 +1848,25 @@ async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     seeded = _json.load(open(index_path))["sessions"]["fixed-sid"]
     assert seeded["name_cached"] == "planning/sprint15"
     assert seeded["project_path"] == "/tmp/demo-project"
+
+
+async def test_new_session_docks_into_the_split(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "start_new_session_window",
+                        lambda sid, cwd, name, worktree, label=None:
+                            calls.append(("new", sid, name)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.append(("dock", sid)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._do_new_session("sid-new", "/proj", "feat/x", None, "feat/x")
+    assert calls == [("new", "sid-new", "feat/x"), ("dock", "sid-new")]
+    assert app._docked_sid == "sid-new"
 
 
 async def test_new_session_no_tmux_seeds_name(index_path, monkeypatch):
