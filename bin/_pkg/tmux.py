@@ -131,41 +131,40 @@ def build_detach() -> List[str]:
     return build_base() + ["detach-client"]
 
 
-def build_config(*, persist_flag_path: str, back_key: str = "F12",
-                 socket: str = SOCKET) -> str:
+def build_config(*, persist_flag_path: str, switch_key: str = "F9",
+                 zoom_key: str = "F12", socket: str = SOCKET) -> str:
     """tmux config for the dedicated server. Self-contained; never touches the
-    user's ~/.tmux.conf. The client-detached hook implements Option C: an abrupt
-    window close (no persist-flag) kills the server; a deliberate detach that
-    first touched the flag is left to persist (spec §5)."""
+    user's ~/.tmux.conf. The split-pane layout (spec
+    2026-06-02-split-pane-explorer-claude): the explorer is the left pane and the
+    active claude session is docked as a right pane. `switch_key` flips focus
+    between the two panes; `zoom_key` toggles the focused pane fullscreen. The
+    client-detached hook implements Option C: an abrupt window close (no
+    persist-flag) kills the server; a deliberate detach that first touched the
+    flag is left to persist."""
     detach_hook = (
         f"set-hook -g client-detached "
         f"'run-shell -b \"if [ ! -f {persist_flag_path} ]; then "
         f"tmux -L {socket} kill-server; fi\"'"
     )
-    # Show the human label (@se_label) in the status bar, falling back to the
-    # window name (#W) for the explorer window which has none. Without this the
-    # bar shows raw session-id UUIDs.
-    win_fmt = " #I:#{?#{@se_label},#{@se_label},#W} "
-    # Right side: a "back to explorer" hint, shown only while the active window
-    # is a session (suppressed in the explorer window itself, where it's moot).
-    hint = f"#[fg=black,bg=green] {back_key} → explorer #[default]"
-    status_right = (
-        "#{?#{==:#{window_name},__EXPLORER__},,__HINT__}"
-        .replace("__EXPLORER__", EXPLORER_WINDOW)
-        .replace("__HINT__", hint)
-    )
+    # Hints live in the status line so they survive the zoomed-fullscreen case
+    # (where the Textual footer is hidden). Always shown — there is effectively
+    # one window now, so no per-window suppression.
+    hint = (f"#[fg=black,bg=green] {switch_key} ⇄ switch "
+            f"· {zoom_key} ⤢ full #[default]")
     return "\n".join([
         "set -g mouse on",
         "set -g status on",
-        'set -g status-left ""',          # drop the redundant [explorer] session label
-        f'set -g window-status-format "{win_fmt}"',
-        f'set -g window-status-current-format "{win_fmt}"',
-        f'set -g status-right "{status_right}"',
-        "set -g status-right-length 32",
-        # No `remain-on-exit`: when claude exits, its window closes and tmux
-        # drops the user back into the explorer (window 0). Avoids dead [exited]
-        # panes lingering and being mistaken for running sessions.
-        f"bind -n {back_key} select-window -t {EXPLORER_WINDOW}",
+        'set -g status-left ""',
+        # No window-tab list: sessions are panes/background windows, not
+        # user-facing window tabs. The explorer tree is the only switcher.
+        'set -g window-status-format ""',
+        'set -g window-status-current-format ""',
+        f'set -g status-right "{hint}"',
+        "set -g status-right-length 40",
+        # No `remain-on-exit`: when claude exits its pane closes and the
+        # explorer reclaims the full width.
+        f"bind -n {switch_key} select-pane -t :.+",
+        f"bind -n {zoom_key} resize-pane -Z",
         detach_hook,
         "",
     ])
