@@ -909,23 +909,25 @@ class SessionExplorerApp(App):
             return
 
         running = _tmux.session_windows()
-        if sid in running:
-            _tmux.select_window(sid)                 # flip in to interact
+        # Already docked, or a running background window → (re)dock it. _dock
+        # refocuses if it is the current dock, else undocks-current and joins.
+        if sid == self._docked_sid or sid in running:
+            self._dock(sid, None, label, already_running=True)
+            self._poll_live()
             return
         if sid in self._live_states:
-            # Live in another terminal, not one of our windows: never start a
-            # second claude on the same transcript (spec §5).
+            # Live in another terminal, not one of ours: never start a second
+            # claude on the same transcript (spec §5).
             self.push_screen(ConfirmScreen(
                 "This session is already running in another terminal.\n"
                 "Showing its progress here; press space to peek. (y/esc)"))
             return
-        # Stopped → start the session in a tmux window and switch straight into it.
+        # Stopped → start it as a background window and dock it beside the tree.
         if _dead_worktree_repo(project_path):
             def after(ok: bool) -> None:
                 if ok:
                     cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
-                    _tmux.start_window(sid, cwd, label)
-                    _tmux.select_window(sid)   # auto-switch into the new session
+                    self._dock(sid, cwd, label, already_running=False)
                     self._poll_live()
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
@@ -933,8 +935,7 @@ class SessionExplorerApp(App):
                 f"{project_path}"), after)
         else:
             cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
-            _tmux.start_window(sid, cwd, label)
-            _tmux.select_window(sid)   # auto-switch into the new session
+            self._dock(sid, cwd, label, already_running=False)
             self._poll_live()
 
     def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:

@@ -1449,16 +1449,17 @@ def test_help_text_documents_live_sessions():
     assert "active" in txt.lower()
 
 
-async def test_enter_starts_and_switches_when_stopped(index_path, monkeypatch):
+async def test_enter_starts_and_docks_when_stopped(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp
     calls = {}
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # nothing running
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", (sid, cwd, label)) or 0)
-    monkeypatch.setattr(tuimod._tmux, "select_window",
-                        lambda t: calls.setdefault("select", t) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.setdefault("dock", sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1467,42 +1468,42 @@ async def test_enter_starts_and_switches_when_stopped(index_path, monkeypatch):
         await pilot.press("down")            # session leaf (sid-1)
         await pilot.press("enter")
         await pilot.pause()
-    assert calls["start"][0] == "sid-1"      # started the session
-    assert calls["start"][2] == "sprint14"   # human label, not the sid (name_cached planning/sprint14)
-    assert calls["select"] == "sid-1"        # auto-switched into it (no second Enter)
+    assert calls["start"][0] == "sid-1"      # started the session as a window
+    assert calls["start"][2] == "sprint14"   # human label (name_cached planning/sprint14)
+    assert calls["dock"] == "sid-1"          # docked it beside the tree
+    assert app._docked_sid == "sid-1"
     assert app._resume_target is None        # did NOT exit-to-resume
 
 
-async def test_double_click_resumes_like_enter(index_path, monkeypatch):
+async def test_double_click_docks_like_enter(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp
     calls = {}
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
-    monkeypatch.setattr(tuimod._tmux, "select_window",
-                        lambda t: calls.setdefault("select", t) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.setdefault("dock", sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("down")            # project node
-        await pilot.press("down")            # folder node
+        await pilot.press("down")
+        await pilot.press("down")
         await pilot.press("down")            # session leaf (sid-1)
 
         class _Click:
             widget = app._tree
             chain = 2
-        # single click on the tree must NOT resume
         class _Single(_Click):
             chain = 1
         app.on_click(_Single())
-        assert "start" not in calls
-        # double click resumes the cursored session, same as Enter
-        app.on_click(_Click())
+        assert "start" not in calls          # single click does NOT resume
+        app.on_click(_Click())               # double click docks, like Enter
         await pilot.pause()
     assert calls.get("start") == "sid-1"
-    assert calls.get("select") == "sid-1"
+    assert calls.get("dock") == "sid-1"
 
 
 def test_glyph_distinguishes_ownership():
@@ -1520,23 +1521,28 @@ def test_glyph_distinguishes_ownership():
     assert _glyph(None, 0, True).strip() == ""
 
 
-async def test_enter_flips_into_running_window(index_path, monkeypatch):
+async def test_enter_docks_a_running_background_session(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp
     calls = {}
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
-    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
-    monkeypatch.setattr(tuimod._tmux, "select_window",
-                        lambda t: calls.setdefault("select", t) or 0)
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])  # already a window
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.setdefault("dock", sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("down")            # project node
-        await pilot.press("down")            # folder node
+        await pilot.press("down")
+        await pilot.press("down")
         await pilot.press("down")            # session leaf (sid-1)
         await pilot.press("enter")
         await pilot.pause()
-    assert calls["select"] == "sid-1"
+    assert "start" not in calls              # already running → no re-start
+    assert calls["dock"] == "sid-1"          # docked the existing window
+    assert app._docked_sid == "sid-1"
 
 
 async def test_preview_shows_snapshot_for_live_session(index_path, monkeypatch):
