@@ -49,3 +49,16 @@ def parse_usage(captured_text: str) -> Optional[UsageInfo]:
     percent = max(0, min(100, int(pm.group(1))))
     reset_label = re.sub(r"\s+", "", tm.group(1)).lower()
     return UsageInfo(percent=percent, reset_label=reset_label)
+
+
+FILL = "█"
+EMPTY = "░"
+CELLS = 12
+
+
+def render_bar(info: UsageInfo, cells: int = CELLS) -> str:
+    """A compact ` [████░░░░] 18% ↺1:29am ` string for tmux status-left. Single
+    colour (v1) so the visible length is predictable for status-left-length."""
+    n = max(0, min(cells, round(info.percent / 100 * cells)))
+    bar = FILL * n + EMPTY * (cells - n)
+    return f" [{bar}] {info.percent}% ↺{info.reset_label}"

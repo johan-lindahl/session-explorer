@@ -29,3 +29,22 @@ def test_parse_usage_returns_none_when_no_percent():
 
 def test_parse_usage_returns_none_on_empty():
     assert usage.parse_usage("") is None
+
+
+def test_render_bar_fills_proportionally():
+    info = usage.UsageInfo(percent=50, reset_label="1:29am")
+    # 50% of 12 cells = 6 filled
+    assert usage.render_bar(info, cells=12) == " [██████░░░░░░] 50% ↺1:29am"
+
+
+def test_render_bar_zero_and_full():
+    assert usage.render_bar(usage.UsageInfo(0, "9:00am"), cells=10) == \
+        " [░░░░░░░░░░] 0% ↺9:00am"
+    assert usage.render_bar(usage.UsageInfo(100, "9:00am"), cells=10) == \
+        " [██████████] 100% ↺9:00am"
+
+
+def test_render_bar_clamps_rounding():
+    # 99% of 10 cells rounds to 10 filled but must not exceed cells
+    s = usage.render_bar(usage.UsageInfo(99, "9:00am"), cells=10)
+    assert s.count("█") <= 10
