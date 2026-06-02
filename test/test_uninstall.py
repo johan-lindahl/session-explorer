@@ -173,3 +173,17 @@ def test_uninstall_sh_reverses_install_sh(tmp_path):
             for h in entries
         ), (evt, entries)
     assert not (tmp_path / ".claude" / ".session-explorer.backup").exists()
+
+
+def test_teardown_removes_tmux_artifacts(tmp_path):
+    from _pkg import uninstall
+    claude = tmp_path
+    for name in (".session-explorer.tmux.conf",
+                 ".session-explorer.tmux-persist",
+                 ".session-explorer.tmux-declined"):
+        (claude / name).write_text("x")
+    uninstall.teardown(claude_dir=str(claude), purge_data=False)
+    for name in (".session-explorer.tmux.conf",
+                 ".session-explorer.tmux-persist",
+                 ".session-explorer.tmux-declined"):
+        assert not (claude / name).exists()
