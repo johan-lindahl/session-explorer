@@ -133,11 +133,19 @@ exceptions. This mirrors the project's "hooks never block startup" contract.
 ## Enablement & teardown
 
 - **Off by default.** A marker file `~/.claude/.session-explorer.usage-bar`
-  signals "enabled."
+  signals "enabled" (persists across launches). Nothing polls while off and
+  `status-left` stays empty.
 - A single new **TUI toggle key** flips it (respecting the project's
   no-case-variant-keybindings rule — one distinct key, e.g. `g` for "gauge",
   subject to availability check against existing bindings).
-- When disabled or on quit, clear `status-left` so no stale bar remains.
+- **Enable (`g`):** write the marker, **fire one probe immediately** so the bar
+  appears within a few seconds, then start the 5-min `set_interval`.
+- **Disable (`g` again):** remove the marker, cancel the interval, clear
+  `status-left`.
+- **Force-refresh is implicit:** because enabling always does an immediate probe,
+  toggling `g` off-then-on is the manual "check now" path — no separate refresh
+  key is needed.
+- On quit, clear `status-left` so no stale bar remains.
 - Feature is inert when not tmux-hosted.
 
 ## Scope boundaries (YAGNI)
