@@ -384,7 +384,7 @@ class NewSessionScreen(_PanelScreen):
             Input(value=self._name_prefix, placeholder="session name", id="ns-name"),
             Input(value=self._cwd, placeholder="working directory", id="ns-cwd"),
             Checkbox("Create git worktree (-w)", id="ns-wt"),
-            Input(placeholder="worktree name (optional)", id="ns-wtname"),
+            Input(placeholder="worktree name (optional)", id="ns-wtname", disabled=True),
             Label("enter create · esc cancel", classes="dialog-hint"),
             id="panel",
         )
@@ -395,6 +395,10 @@ class NewSessionScreen(_PanelScreen):
         # the end so typing appends rather than overwrites.
         inp = self.query_one("#ns-name", Input)
         inp.cursor_position = len(inp.value)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id == "ns-wt":
+            self.query_one("#ns-wtname", Input).disabled = not event.value
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(self._result())

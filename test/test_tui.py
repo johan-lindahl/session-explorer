@@ -1753,6 +1753,27 @@ async def test_new_session_dialog_cancels_on_escape(index_path):
     assert result["value"] is None
 
 
+async def test_new_session_dialog_wtname_disabled_until_checkbox(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    from textual.widgets import Checkbox, Input
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(NewSessionScreen("demo", "", "/tmp/demo-project"))
+        await pilot.pause()
+        wtname = app.screen.query_one("#ns-wtname", Input)
+        # Disabled while the worktree box is unchecked.
+        assert wtname.disabled is True
+        # Checking the box enables it.
+        app.screen.query_one("#ns-wt", Checkbox).value = True
+        await pilot.pause()
+        assert wtname.disabled is False
+        # Unchecking disables it again.
+        app.screen.query_one("#ns-wt", Checkbox).value = False
+        await pilot.pause()
+        assert wtname.disabled is True
+
+
 async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     import _pkg.tui as tui_mod
     import _pkg.tmux as tmux_mod
