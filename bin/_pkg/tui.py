@@ -353,6 +353,32 @@ class ConfirmScreen(_PanelScreen):
         )
 
 
+class QuitScreen(_PanelScreen):
+    """Exit guard when sessions are still running. Returns 'shutdown',
+    'background', or None (cancel)."""
+
+    BINDINGS = [
+        Binding("s", "dismiss('shutdown')", "Shut down all", show=False),
+        Binding("b", "dismiss('background')", "Leave running", show=False),
+        Binding("escape", "dismiss(None)", "Cancel"),
+        Binding("c", "dismiss(None)", "Cancel", show=False),
+    ]
+
+    def __init__(self, names: list) -> None:
+        super().__init__()
+        self._names = names
+
+    def compose(self) -> ComposeResult:
+        listing = "\n".join(f"  • {n}" for n in self._names)
+        yield Vertical(
+            Label(f"{len(self._names)} Claude session(s) still running:\n{listing}",
+                  classes="dialog-title"),
+            Label("s shut down all · b leave running · esc/c cancel",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+
 class NotesScreen(_PanelScreen):
     """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
 
@@ -487,7 +513,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -1075,6 +1101,27 @@ class SessionExplorerApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def action_quit(self) -> None:
+        if not self._tmux_enabled:
+            self.exit()
+            return
+        running = _tmux.session_windows()
+        if not running:
+            self.exit()
+            return
+
+        def after(choice) -> None:
+            if choice == "shutdown":
+                _tmux.kill_server()
+                self.exit()
+            elif choice == "background":
+                flag = os.path.join(self._claude_dir(),
+                                    ".session-explorer.tmux-persist")
+                _tmux.set_persist_flag(flag)   # Option C: this detach is deliberate
+                _tmux.detach_client()
+            # None → cancel: stay in the explorer.
+        self.push_screen(QuitScreen(running), after)
 
     def action_toggle_unnamed(self) -> None:
         self._show_unnamed = not self._show_unnamed

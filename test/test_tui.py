@@ -1479,3 +1479,45 @@ async def test_preview_shows_snapshot_for_live_session(index_path, monkeypatch):
     # made it into the body.
     bodies = " ".join(r.plain for r in group.renderables if hasattr(r, "plain"))
     assert "LIVE FRAME for sid-1" in bodies
+
+
+@pytest.mark.asyncio
+async def test_quit_with_live_sessions_shuts_down(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "kill_server", lambda: calls.setdefault("kill", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit()                    # live sessions → guard modal
+        await pilot.pause()
+        await pilot.press("s")               # shut down all
+        await pilot.pause()
+    assert calls.get("kill") is True
+
+
+@pytest.mark.asyncio
+async def test_quit_without_sessions_exits_directly(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit()                    # no sessions → no modal, just exit
+        await pilot.pause()
+    # Reaching here without a hanging modal means it exited cleanly.
+
+
+@pytest.mark.asyncio
+async def test_mount_does_not_crash_without_tmux(index_path):
+    # Sanity: mount path must be safe when not tmux-hosted (no env var).
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._tmux_enabled is False
