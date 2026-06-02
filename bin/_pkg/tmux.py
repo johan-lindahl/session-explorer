@@ -19,6 +19,7 @@ SOCKET = "session-explorer"
 VERSION_FLOOR = (3, 1)  # 3.1 adds `-l <n>%` sizing for join-pane (split dock)
 EXPLORER_WINDOW = "explorer"
 DOCK_PCT = 65  # claude pane width when docked beside the explorer tree
+PROBE_WINDOW = "se-usage-probe"  # hidden window for the usage-bar scrape
 
 
 def parse_version(text: str) -> Optional[tuple]:
@@ -120,6 +121,28 @@ def build_capture(target: str) -> List[str]:
     return build_base() + ["capture-pane", "-ep", "-t", target]
 
 
+def build_probe_window(cwd: str, window: str = PROBE_WINDOW) -> List[str]:
+    """Detached hidden window running a throwaway claude for the /usage scrape.
+    SESSION_EXPLORER_PROBE=1 is set on the claude process so the SessionStart /
+    lifecycle hooks bail out and leave no index/registry trace."""
+    return build_base() + [
+        "new-window", "-d", "-n", window, "-c", cwd,
+        "SESSION_EXPLORER_PROBE=1 exec claude"]
+
+
+def build_send_keys(target: str, *keys: str) -> List[str]:
+    return build_base() + ["send-keys", "-t", target, *keys]
+
+
+def build_capture_plain(target: str) -> List[str]:
+    """Plain (no -e) capture: easier to regex than colour-escaped output."""
+    return build_base() + ["capture-pane", "-p", "-t", target]
+
+
+def build_set_status_left(text: str) -> List[str]:
+    return build_base() + ["set-option", "-g", "status-left", text]
+
+
 def build_list_windows() -> List[str]:
     return build_base() + ["list-windows", "-F", "#{window_name}"]
 
@@ -160,6 +183,7 @@ def build_config(*, persist_flag_path: str, switch_key: str = "F9",
         "set -g mouse on",
         "set -g status on",
         'set -g status-left ""',
+        "set -g status-left-length 40",
         # No window-tab list: sessions are panes/background windows, not
         # user-facing window tabs. The explorer tree is the only switcher.
         'set -g window-status-format ""',
@@ -271,6 +295,22 @@ def select_pane(pane_id: str) -> int:
 
 def capture_pane(target: str) -> str:
     return _capture(build_capture(target))
+
+
+def start_probe_window(cwd: str, window: str = PROBE_WINDOW) -> int:
+    return _call(build_probe_window(cwd, window))
+
+
+def send_keys(target: str, *keys: str) -> int:
+    return _call(build_send_keys(target, *keys))
+
+
+def capture_plain(target: str) -> str:
+    return _capture(build_capture_plain(target))
+
+
+def set_status_left(text: str) -> int:
+    return _call(build_set_status_left(text))
 
 
 def list_windows() -> List[str]:
