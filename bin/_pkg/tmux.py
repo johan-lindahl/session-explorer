@@ -88,7 +88,9 @@ def build_config(*, persist_flag_path: str, back_key: str = "F12",
     return "\n".join([
         "set -g mouse on",
         "set -g status on",
-        "set -g remain-on-exit on",
+        # No `remain-on-exit`: when claude exits, its window closes and tmux
+        # drops the user back into the explorer (window 0). Avoids dead [exited]
+        # panes lingering and being mistaken for running sessions.
         f"bind -n {back_key} select-window -t {EXPLORER_WINDOW}",
         detach_hook,
         "",

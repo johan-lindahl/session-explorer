@@ -405,21 +405,21 @@ No new mechanism. A session started via `tmux new-window 'claude --resume …'` 
 - **[b] leave running in the background** — sets the persist-flag (marker file) then detaches. The server and sessions stay alive headless.
 - **[c] cancel** — no action.
 
-No silent default. With zero live sessions, `q` quits cleanly with no prompt. Exited corpse windows are killed silently on quit regardless.
+No silent default. With zero live sessions, `q` quits cleanly with no prompt.
 
 **Abrupt window-close (red button / `Cmd+W`) — Option C sentinel.** An OS window close SIGHUPs the tmux *client*, which detaches without killing the server, by default leaving every claude session running headless. Resolution: a `client-detached` hook in the generated config runs server-side on any detach — `if persist-flag absent → tmux kill-server; else → persist`. Only the deliberate **[b] leave running** path sets the persist-flag before detaching; it is cleared on the next attach. Net: **red-button close shuts all sessions down**; **[b] persists** them. Killing the server SIGHUPs the claude processes, but transcripts are JSONL-streamed continuously so nothing is lost.
 
 Fallback if the `client-detached` self-kill proves flaky: `destroy-unattached on` (drops [b] persistence but never lingers).
 
-**Finished session** — the generated config sets `remain-on-exit on`. A session whose `claude` exits keeps its final frame; its tab is marked `exited`; dismissing it (or an explorer action) closes the window with `tmux kill-window`.
+**Finished session** — `remain-on-exit` is deliberately NOT set, so when a session's `claude` exits its window closes automatically and tmux drops the user back into the explorer (window 0). The tree row reverts to a normal stopped session (no live dot); pressing Enter starts a fresh background window. No dead `[exited]` panes linger, and the transcript stays on disk (resumable, shown via the transcript-tail snapshot), so nothing is lost.
 
 ### Generated tmux config
 
-A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), passed via `-f`, so the dedicated server is self-contained. Contents: status bar with window tabs, mouse on (clickable tabs + flip), `bind -n F12 select-window -t explorer`, `remain-on-exit on`, `set-hook -g client-detached` (kill-server unless persist-flag). The status bar stays on so the clickable window tabs are always available (an empty explorer simply shows `[0 explorer]`). No rebinding of any user key outside this server.
+A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), passed via `-f`, so the dedicated server is self-contained. Contents: status bar with window tabs, mouse on (clickable tabs + flip), `bind -n F12 select-window -t explorer`, `set-hook -g client-detached` (kill-server unless persist-flag). `remain-on-exit` is intentionally left off so exited sessions auto-close. The status bar stays on so the clickable window tabs are always available (an empty explorer simply shows `[0 explorer]`). No rebinding of any user key outside this server.
 
 ### tmux dependency — optional and consented
 
-- **Detect** at launch: `tmux -V`, require ~3.0+ (for `capture-pane -e`, root bindings, `remain-on-exit`, status styling). `tmux.py` owns detection and version parsing.
+- **Detect** at launch: `tmux -V`, require ~3.0+ (for `capture-pane -e`, root bindings, status styling). `tmux.py` owns detection and version parsing.
 - **Missing** → a one-time yes/no consent prompt mirroring the retention pattern. **Yes** shows the install command for the detected package manager (`brew install tmux` on macOS; `sudo apt-get install -y tmux` / `dnf` / `pacman` / `zypper` / `apk` on Linux) for the user to run, then re-open. **No** writes a declined-marker (`~/.claude/.session-explorer.tmux-declined`) so the user is not re-nagged. The plugin only *shows* the command — it never runs the install itself (no silent sudo).
 - **No bundled binary.** Auto-install is package-manager-based only, never silent, never sudo-without-asking. Vendoring a static tmux binary is rejected — against the "one vendored dep" ethos.
 - **Declined or unavailable** → `execvp` fallback (§ *Process model*). The explorer remains fully functional; only background monitoring and interaction are disabled.
@@ -436,7 +436,7 @@ A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), pas
 | Snapshot poll | 1 s | freshness vs. capture-pane churn |
 | tmux server socket | `session-explorer` | dedicated, isolated |
 | Back-to-explorer key | F12 | configurable; tab bar is primary |
-| tmux version floor | ~3.0 | `capture-pane -e`, root bindings, `remain-on-exit` |
+| tmux version floor | ~3.0 | `capture-pane -e`, root bindings, status styling |
 
 ## Disabling native auto-cleanup
 
@@ -558,7 +558,7 @@ All milestones below are **shipped** (current release: v1.5.0). The table is kep
 | M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
 | M5 | Community-marketplace distribution. WSL launcher (`wt.exe` re-entry + fallback); native Windows out of scope. |
 | M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike validated (2026-05-29, macOS); end-to-end TUI smoke test optional (timers/animation covered by `run_test` tests). |
-| M7 | **tmux interaction layer** — `tmux.py` + `snapshot.py`; context-aware Enter (stop→background-window, running→flip-in, live-elsewhere→refuse); generated tmux config (tabs/F12/`remain-on-exit`/`client-detached` sentinel); quit-guard; snapshot preview for selected live session; optional consented tmux install with declined-marker; `execvp` fallback without tmux. |
+| M7 | **tmux interaction layer** — `tmux.py` + `snapshot.py`; context-aware Enter (stop→background-window, running→flip-in, live-elsewhere→refuse); generated tmux config (tabs/F12/`client-detached` sentinel); quit-guard; snapshot preview for selected live session; optional consented tmux install with declined-marker; `execvp` fallback without tmux. |
 
 ## Design decisions (resolved)
 
