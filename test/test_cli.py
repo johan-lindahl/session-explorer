@@ -108,12 +108,13 @@ def test_list_renders_slash_path_as_nested(tmp_path):
     assert out.index("planning/") < out.index("sprint14")
 
 
-def test_launch_invokes_osascript_on_mac(monkeypatch):
+def test_launch_invokes_osascript_on_mac(tmp_path, monkeypatch):
     """Smoke test: `session-explorer launch` should attempt to spawn a new terminal."""
     # We run the binary in a subprocess where we can intercept by setting
     # SESSION_EXPLORER_DRY_RUN=1, which makes launcher.launch print the would-be
     # command and exit 0 without actually shelling out.
-    env = {**os.environ, "SESSION_EXPLORER_DRY_RUN": "1"}
+    # Redirect HOME so any tmux conf / persist-flag writes land in tmp_path, not ~/.claude.
+    env = {**os.environ, "SESSION_EXPLORER_DRY_RUN": "1", "HOME": str(tmp_path)}
     result = subprocess.run([_BIN, "launch"], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert "session-explorer" in result.stdout
