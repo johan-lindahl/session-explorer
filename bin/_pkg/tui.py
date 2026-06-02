@@ -1400,21 +1400,22 @@ class SessionExplorerApp(App):
         return sids
 
     def action_quit(self) -> None:
-        if self._tmux_enabled:
-            _tmux.set_status_left("")
         if not self._tmux_enabled:
             self.exit()
             return
         running = self._running_sids()
         if not running:
+            _tmux.set_status_left("")
             self.exit()
             return
 
         def after(choice) -> None:
             if choice == "shutdown":
+                _tmux.set_status_left("")
                 _tmux.kill_server()
                 self.exit()
             elif choice == "background":
+                _tmux.set_status_left("")
                 flag = os.path.join(self._claude_dir(),
                                     ".session-explorer.tmux-persist")
                 _tmux.set_persist_flag(flag)   # Option C: this detach is deliberate
