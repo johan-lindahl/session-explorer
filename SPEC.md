@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.6.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
+**Status:** Shipped — **v1.7.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
 
 ## Goals
 
@@ -388,9 +388,9 @@ Glyphs: **working** → animated green spinner; **open but idle** → steady dim
 
 ## tmux interaction layer
 
-The tmux interaction layer makes resume **non-destructive**: instead of `exec`-replacing the explorer process, the explorer stays alive as tmux window 0 and each resumed session runs as a sibling window. This enables multi-session background monitoring, live previews, and fluid in/out navigation — without an embedded terminal widget.
+The tmux interaction layer makes resume **non-destructive**: instead of `exec`-replacing the explorer process, the explorer stays alive as the **left pane** of the `explorer` window and the active session **docks as the right pane** beside it. Inactive sessions remain as background windows (so multi-session monitoring, live previews, and liveness still work), and the docked claude can be zoomed fullscreen to hide the tree. The user sees tree + active session side by side, navigating in and out without an embedded terminal widget.
 
-Full design rationale, spike results, and build order live in `docs/superpowers/specs/2026-06-02-tmux-session-interaction-design.md`.
+Full design rationale, spike results, and build order live in `docs/superpowers/specs/2026-06-02-split-pane-explorer-claude-design.md`.
 
 ### Process model and launch
 
@@ -402,7 +402,7 @@ tmux -L session-explorer -f <generated.conf> new-session -A -s explorer 'exec se
 
 - **`-L session-explorer`** — fully isolated from the user's personal tmux server, config, and keybindings. The plugin never reads or writes `~/.tmux.conf`.
 - **`-A` (attach-or-create)** — relaunching `/open` reattaches to an existing server. Sessions started in a previous explorer window **survive closing and reopening** the explorer; `new-session -A` is also the reconciliation mechanism: on mount, the explorer calls `tmux list-windows` to rediscover any still-running session windows.
-- The explorer is **window 0**; each resumed session is a sibling window named by its session id (`tmux new-window -n <sid>`). The `session_id → window` mapping is the window name — no separate registry.
+- The explorer is the **left pane** of the `explorer` window (window name `explorer`, constant `EXPLORER_WINDOW`). The active session is **joined as the right pane** (`join-pane -h -l 65% -s <sid> -t explorer`, `DOCK_PCT=65`; size is `-l <n>%`, since `join-pane` has no `-p` flag). Inactive sessions are **background windows** named by their session id (`tmux new-window -d -n <sid>`). For a background session the `session_id → window` mapping is the window name — no separate registry; the docked claude pane is identified relative to the explorer's own pane (`$TMUX_PANE` → `_self_pane`; `docked_pane(self_pane)` returns the other pane in the explorer window, or `None` when `$TMUX_PANE` is unknown — never the explorer's own pane). The currently-docked sid is tracked in `_docked_sid`, recorded by `_join_docked` **only on a successful `join-pane`**: a failed dock leaves no phantom state (a warning is surfaced; the session keeps running as a background window, re-dockable on the next Enter).
 - `launcher.py` wraps the existing `target_command` in the tmux invocation when `tmux.available()` is true; otherwise passes the command through unchanged.
 
 **No-tmux fallback:** when tmux is absent or declined, `tui.py:run` does `os.execvp("claude", …)` (today's behaviour). The feature is purely additive.
@@ -411,20 +411,22 @@ tmux -L session-explorer -f <generated.conf> new-session -A -s explorer 'exec se
 
 | Key | Stopped session | Running session |
 |---|---|---|
-| **Enter** | start it (`tmux new-window -d -n <sid> …`) **and switch straight into it** (`select-window`) — one keypress, no double-Enter | `tmux select-window -t <sid>` — flip in to interact |
+| **Enter** | start it as a background window (`tmux new-window -d -n <sid> …`) then **dock it** as the right pane (`join-pane`) — one keypress | already docked → refocus the claude pane (`select-pane`); running background window → undock the current dock then dock this one |
 | **space** | static metadata preview (unchanged) | live snapshot in preview pane; stay in tree |
 
-Enter always lands you *in* the session. To start several and watch them, jump in, press F12/click `[0 explorer]` to come back (the session keeps running), move to the next, Enter again; `space` peeks at any of them without switching. **Double-clicking** a session row is equivalent to Enter (mouse is on via the tmux config).
+Enter always lands you focused *in* the docked claude pane. Entering a different session **swaps the dock** — the previous claude breaks back out to a background window (`break-pane -d -s <pane_id> -n <sid>`) and keeps running, while the new one joins in. `space` peeks at any session without changing the dock. **Double-clicking** a session row is equivalent to Enter (mouse is on via the tmux config). New-session creation (`c`) docks the same way (undock-current → start → dock).
+
+- **Cursor-follow sync (`_sync_dock_to_cursor`).** While you navigate the tree (focus in the explorer pane), the docked pane **follows the cursor**: landing on a running, dockable session of ours docks it; landing on a stopped session, a peek-only session live in another terminal, or a folder/project node **closes the pane** (undock-current; the explorer reclaims the full width). It is driven off `Tree.NodeHighlighted` (so keyboard *and* mouse moves trigger it) and **debounced** (`DOCK_SYNC_DEBOUNCE`, ~0.2 s) so holding an arrow to scroll past several running sessions coalesces to where the cursor settles rather than re-parenting the live claude pane on every keypress. Two properties keep it from getting in the way: it **never starts a stopped session** (that stays an explicit Enter), and it **never steals focus** — the join uses `join-pane -d` (`dock(..., focus=False)`) so focus stays in the tree. Because moving the cursor requires focus in the explorer, the pane never changes under you while you're typing in claude (the tree cursor isn't moving then).
 
 - **Already live elsewhere** — if the selected session is live in the registry but is not one of our tmux windows (running in another terminal), Enter refuses with a warning and offers peek-only via transcript tail. Two `claude --resume` processes on one JSONL corrupts it.
-- **Switching back:** clickable status-bar tabs are the primary path (the generated config enables a tmux status bar with `[0 explorer] [1 feat/auth ●] …`). **F12** is the keyboard fallback — a no-prefix root binding `bind -n F12 select-window -t explorer`; configurable. While inside a session, the status bar's right side shows a `F12 → explorer` hint (suppressed in the explorer window itself).
-- cwd/worktree handling carries over from the current `action_resume`: `tmux new-window -c <resolved cwd>` using `_resolve_resume_cwd`, dead-worktree warning fires before spawning.
+- **Switching focus and zoom:** there are no window tabs — the explorer tree is the only session switcher. **F9** toggles focus between the two panes (`bind -n F9 select-pane -t :.+`; configurable via `switch_key`; a mouse-click on either pane also focuses it). **F12** zooms the focused pane fullscreen and back (`bind -n F12 resize-pane -Z`; configurable via `zoom_key`) — this is how you get a fullscreen claude (tree hidden) and restore the split. The status bar's right side shows a persistent `F9 ⇄ switch · F12 ⤢ full` hint, kept in the tmux status line so it survives the zoomed-fullscreen case where the Textual footer is hidden.
+- cwd/worktree handling carries over from `action_resume`: a background window is created via `tmux new-window -c <resolved cwd>` (using `_resolve_resume_cwd`) before the `join-pane`, and the dead-worktree warning fires before spawning.
 
 ### Snapshot rendering
 
 For a live session the preview shows the **full metadata block** (identical to a stopped session) followed by a `── live ──` divider and the snapshot (capped to the last `LIVE_PREVIEW_LINES` rows so the metadata stays visible). A `set_interval` timer (~1 s, tunable) refreshes it via `snapshot.py`:
 
-- **Explorer-launched (tmux) window** → `tmux capture-pane -ep -t <sid>`. tmux maintains every background pane's screen buffer; the current claude frame is captured without flipping to it. `-e` preserves colour; rendered via `rich.text.Text.from_ansi`.
+- **Explorer-launched (tmux) window** → `tmux capture-pane -ep -t <sid>`. tmux maintains every background window's/pane's screen buffer; the current claude frame is captured without docking it. `-e` preserves colour; rendered via `rich.text.Text.from_ansi`.
 - **Live-elsewhere session** (in `live.py` but not a tmux window) → **transcript tail**: parse the last few JSONL events via `jsonl.py` into latest prompt / latest assistant text / last tool call / working-vs-idle.
 - **Stopped session** → today's static metadata preview, unchanged.
 
@@ -434,11 +436,11 @@ Only the selected session is polled for a full snapshot. Tree-wide liveness uses
 
 No new liveness mechanism. A session started via `tmux new-window 'claude --resume …'` is an ordinary Claude session; the existing `session-live.sh` hook registers it in `session-explorer-live.json` and the TUI's existing poll renders the working/idle glyph.
 
-When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *our* tmux windows (you can flip into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our windows (`session_windows()`); `_glyph(state, frame, ours)` keeps all live glyphs **green** (visible) and uses the **shape** to distinguish: **accessible** → solid green `●` (idle) / green spinner (working); **elsewhere** → hollow green `○` (idle) / green spinner (working). Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
+When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *ours* (you can dock/focus into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our sessions (`_running_sids()` — background windows plus the docked pane, so the docked row shows accessible `●` rather than peek-only `○`); `_glyph(state, frame, ours)` keeps all live glyphs **green** (visible) and uses the **shape** to distinguish: **accessible** → solid green `●` (idle) / green spinner (working); **elsewhere** → hollow green `○` (idle) / green spinner (working). Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
 
 ### Lifecycle and quit-guard
 
-**Quit (`q`) with live sessions** opens a guarded prompt listing running windows and offering:
+**Quit (`q`) with live sessions** opens a guarded prompt listing the running set and offering (the running set is `_running_sids()` = background windows **plus** the docked session, since the docked claude is a pane, not a window, and `session_windows()` alone would miss it — otherwise a lone docked session would let `q` exit silently and kill it):
 - **[s] shut down all and quit** — `tmux kill-server` → terminal closes cleanly.
 - **[b] leave running in the background** — sets the persist-flag (marker file) then detaches. The server and sessions stay alive headless.
 - **[c] cancel** — no action.
@@ -449,22 +451,22 @@ No silent default. With zero live sessions, `q` quits cleanly with no prompt.
 
 Fallback if the `client-detached` self-kill proves flaky: `destroy-unattached on` (drops [b] persistence but never lingers).
 
-**Finished session** — `remain-on-exit` is deliberately NOT set, so when a session's `claude` exits its window closes automatically and tmux drops the user back into the explorer (window 0). The tree row reverts to a normal stopped session (no live dot); pressing Enter starts a fresh background window. No dead `[exited]` panes linger, and the transcript stays on disk (resumable, shown via the transcript-tail snapshot), so nothing is lost.
+**Finished session** — `remain-on-exit` is deliberately NOT set, so when a session's `claude` exits its pane (or window) closes automatically. When the **docked** claude exits, its pane closes and the explorer **reclaims the full width**; a background session that exits just closes its window. The tree row reverts to a normal stopped session (no live dot); pressing Enter starts a fresh background window and docks it. No dead `[exited]` panes linger, and the transcript stays on disk (resumable, shown via the transcript-tail snapshot), so nothing is lost.
 
 ### Generated tmux config
 
-A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), passed via `-f`, so the dedicated server is self-contained. Contents: status bar with window tabs, mouse on (clickable tabs + flip), `bind -n F12 select-window -t explorer`, `set-hook -g client-detached` (kill-server unless persist-flag). `remain-on-exit` is intentionally left off so exited sessions auto-close. The status bar stays on so the clickable window tabs are always available (an empty explorer simply shows `[0 explorer]`). No rebinding of any user key outside this server.
+A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), passed via `-f`, so the dedicated server is self-contained. `build_config(*, persist_flag_path, switch_key="F9", zoom_key="F12", socket=SOCKET)`. Contents: status bar on but with **no window tabs** (`window-status-format ""` / `window-status-current-format ""` — the explorer tree is the only switcher), mouse on (click-to-focus a pane), `bind -n F9 select-pane -t :.+` (pane-switch), `bind -n F12 resize-pane -Z` (fullscreen-zoom), `set-hook -g client-detached` (kill-server unless persist-flag), and a `status-right` hint `F9 ⇄ switch · F12 ⤢ full`. `remain-on-exit` is intentionally left off so exited panes auto-close. No rebinding of any user key outside this server.
 
 ### tmux dependency — optional and consented
 
-- **Detect** at launch: `tmux -V`, require ~3.0+ (for `capture-pane -e`, root bindings, status styling). `tmux.py` owns detection and version parsing.
+- **Detect** at launch: `tmux -V`, require 3.1+ (for `join-pane -l <n>%` percentage dock sizing, plus `capture-pane -e`, root bindings, status styling). `tmux.py` owns detection and version parsing.
 - **Missing** → a one-time yes/no consent prompt mirroring the retention pattern. **Yes** shows the install command for the detected package manager (`brew install tmux` on macOS; `sudo apt-get install -y tmux` / `dnf` / `pacman` / `zypper` / `apk` on Linux) for the user to run, then re-open. **No** writes a declined-marker (`~/.claude/.session-explorer.tmux-declined`) so the user is not re-nagged. The plugin only *shows* the command — it never runs the install itself (no silent sudo).
 - **No bundled binary.** Auto-install is package-manager-based only, never silent, never sudo-without-asking. Vendoring a static tmux binary is rejected — against the "one vendored dep" ethos.
 - **Declined or unavailable** → `execvp` fallback (§ *Process model*). The explorer remains fully functional; only background monitoring and interaction are disabled.
 
 ### New files
 
-- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/`detected_version()`, pure `build_*` argv builders + `build_config()`, persist-flag helpers (`set`/`clear`/`persist_flag_set`), and thin executing wrappers (`start_window`, `select_window`, `capture_pane`, `list_windows`, `session_windows`, `kill_window`, `kill_server`, `detach_client`). The dedicated server is created with `new-session -A` (attach-or-create), so there is no explicit ensure-server step. Pure logic is unit-tested; wrappers are covered by mocked TUI tests + the spikes.
+- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/`detected_version()`, pure `build_*` argv builders + `build_config(*, persist_flag_path, switch_key, zoom_key, socket)`, persist-flag helpers (`set`/`clear`/`persist_flag_set`), and thin executing wrappers. Split-pane wrappers: `dock`/`undock` (`build_dock` = `join-pane -h -l 65%`, `build_undock` = `break-pane -d`), `list_panes`, `docked_pane` (the pane in the explorer window that is not `$TMUX_PANE`), `select_pane`. Plus the background-window wrappers (`start_window`, `start_new_session_window`, `capture_pane`, `list_windows`, `session_windows`, `kill_window`, `kill_server`, `detach_client`). `build_select_window`/`select_window` and `build_set_label`/`set_label` still exist but are no longer on the resume/new-session paths (the label is metadata-only — there are no window tabs). The dedicated server is created with `new-session -A` (attach-or-create), so there is no explicit ensure-server step. Pure logic is unit-tested; wrappers are covered by mocked TUI tests + the spikes.
 - **`bin/_pkg/snapshot.py`** — `snapshot(sid) -> renderable`: capture-pane path for tmux windows, transcript-tail path otherwise. Pure; testable with fixtures.
 
 ### Tunables (defaults)
@@ -473,8 +475,10 @@ A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), pas
 |---|---|---|
 | Snapshot poll | 1 s | freshness vs. capture-pane churn |
 | tmux server socket | `session-explorer` | dedicated, isolated |
-| Back-to-explorer key | F12 | configurable; tab bar is primary |
-| tmux version floor | ~3.0 | `capture-pane -e`, root bindings, status styling |
+| Pane-switch key | F9 | configurable (`switch_key`); mouse-click also focuses |
+| Fullscreen-zoom key | F12 | configurable (`zoom_key`) |
+| Dock width | 65% | claude pane width when docked (`DOCK_PCT`) |
+| tmux version floor | 3.1 | `join-pane -l <n>%` dock sizing, `capture-pane -e`, root bindings, status styling |
 
 ## Disabling native auto-cleanup
 

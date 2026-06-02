@@ -16,8 +16,9 @@ import subprocess
 from typing import Callable, List, Optional
 
 SOCKET = "session-explorer"
-VERSION_FLOOR = (3, 0)
+VERSION_FLOOR = (3, 1)  # 3.1 adds `-l <n>%` sizing for join-pane (split dock)
 EXPLORER_WINDOW = "explorer"
+DOCK_PCT = 65  # claude pane width when docked beside the explorer tree
 
 
 def parse_version(text: str) -> Optional[tuple]:
@@ -71,14 +72,46 @@ def build_new_session_window(sid: str, cwd: str, name: str,
 
 
 def build_set_label(sid: str, label: str) -> List[str]:
-    """Store a human-readable label on the window (window name stays the sid for
-    unique targeting). The status bar renders `@se_label` instead of the raw
-    sid — see build_config's window-status-format."""
+    """Store a human-readable label on the window as a custom option
+    (`@se_label`); the window name stays the sid for unique targeting. Kept as
+    session metadata — the split-pane layout no longer renders window tabs, so
+    it is not shown in the status bar."""
     return build_base() + ["set-option", "-w", "-t", sid, "@se_label", label]
 
 
 def build_select_window(target: str) -> List[str]:
     return build_base() + ["select-window", "-t", target]
+
+
+def build_dock(sid: str, pct: int = DOCK_PCT, focus: bool = True) -> List[str]:
+    """Join the background window `sid` into the explorer window as a right-hand
+    pane. `-h` makes the split horizontal (side by side); the joined (claude)
+    pane lands on the right at ~`pct`% width. Size is `-l <n>%`: `join-pane` has
+    no `-p` flag (that belongs to `split-window` and is gone from modern tmux —
+    `-p` yields "size missing"). The `%` suffix on `-l` needs tmux ≥ 3.1, which
+    is why VERSION_FLOOR is 3.1. `focus=False` adds `-d` so the joined pane is
+    not selected — the explorer keeps focus (cursor-follow sync)."""
+    argv = ["join-pane", "-h", "-l", f"{pct}%", "-s", sid, "-t", EXPLORER_WINDOW]
+    if not focus:
+        argv.insert(1, "-d")              # join-pane -d: don't select the pane
+    return build_base() + argv
+
+
+def build_undock(pane_id: str, sid: str) -> List[str]:
+    """Break the docked claude pane back out into its own background window
+    (named `sid` so reconciliation finds it). `-d` keeps it off-screen."""
+    return build_base() + ["break-pane", "-d", "-s", pane_id, "-n", sid]
+
+
+def build_list_panes() -> List[str]:
+    """Pane ids in the explorer window — its own pane plus the docked claude
+    pane (target is hard-coded; the explorer is the only multi-pane window)."""
+    return build_base() + [
+        "list-panes", "-t", EXPLORER_WINDOW, "-F", "#{pane_id}"]
+
+
+def build_select_pane(pane_id: str) -> List[str]:
+    return build_base() + ["select-pane", "-t", pane_id]
 
 
 def build_capture(target: str) -> List[str]:
@@ -103,41 +136,40 @@ def build_detach() -> List[str]:
     return build_base() + ["detach-client"]
 
 
-def build_config(*, persist_flag_path: str, back_key: str = "F12",
-                 socket: str = SOCKET) -> str:
+def build_config(*, persist_flag_path: str, switch_key: str = "F9",
+                 zoom_key: str = "F12", socket: str = SOCKET) -> str:
     """tmux config for the dedicated server. Self-contained; never touches the
-    user's ~/.tmux.conf. The client-detached hook implements Option C: an abrupt
-    window close (no persist-flag) kills the server; a deliberate detach that
-    first touched the flag is left to persist (spec §5)."""
+    user's ~/.tmux.conf. The split-pane layout (spec
+    2026-06-02-split-pane-explorer-claude): the explorer is the left pane and the
+    active claude session is docked as a right pane. `switch_key` flips focus
+    between the two panes; `zoom_key` toggles the focused pane fullscreen. The
+    client-detached hook implements Option C: an abrupt window close (no
+    persist-flag) kills the server; a deliberate detach that first touched the
+    flag is left to persist."""
     detach_hook = (
         f"set-hook -g client-detached "
         f"'run-shell -b \"if [ ! -f {persist_flag_path} ]; then "
         f"tmux -L {socket} kill-server; fi\"'"
     )
-    # Show the human label (@se_label) in the status bar, falling back to the
-    # window name (#W) for the explorer window which has none. Without this the
-    # bar shows raw session-id UUIDs.
-    win_fmt = " #I:#{?#{@se_label},#{@se_label},#W} "
-    # Right side: a "back to explorer" hint, shown only while the active window
-    # is a session (suppressed in the explorer window itself, where it's moot).
-    hint = f"#[fg=black,bg=green] {back_key} → explorer #[default]"
-    status_right = (
-        "#{?#{==:#{window_name},__EXPLORER__},,__HINT__}"
-        .replace("__EXPLORER__", EXPLORER_WINDOW)
-        .replace("__HINT__", hint)
-    )
+    # Hints live in the status line so they survive the zoomed-fullscreen case
+    # (where the Textual footer is hidden). Always shown — there is effectively
+    # one window now, so no per-window suppression.
+    hint = (f"#[fg=black,bg=green] {switch_key} ⇄ switch "
+            f"· {zoom_key} ⤢ full #[default]")
     return "\n".join([
         "set -g mouse on",
         "set -g status on",
-        'set -g status-left ""',          # drop the redundant [explorer] session label
-        f'set -g window-status-format "{win_fmt}"',
-        f'set -g window-status-current-format "{win_fmt}"',
-        f'set -g status-right "{status_right}"',
-        "set -g status-right-length 32",
-        # No `remain-on-exit`: when claude exits, its window closes and tmux
-        # drops the user back into the explorer (window 0). Avoids dead [exited]
-        # panes lingering and being mistaken for running sessions.
-        f"bind -n {back_key} select-window -t {EXPLORER_WINDOW}",
+        'set -g status-left ""',
+        # No window-tab list: sessions are panes/background windows, not
+        # user-facing window tabs. The explorer tree is the only switcher.
+        'set -g window-status-format ""',
+        'set -g window-status-current-format ""',
+        f'set -g status-right "{hint}"',
+        "set -g status-right-length 40",
+        # No `remain-on-exit`: when claude exits its pane closes and the
+        # explorer reclaims the full width.
+        f"bind -n {switch_key} select-pane -t :.+",
+        f"bind -n {zoom_key} resize-pane -Z",
         detach_hook,
         "",
     ])
@@ -198,6 +230,43 @@ def start_new_session_window(sid: str, cwd: str, name: str,
 
 def select_window(target: str) -> int:
     return _call(build_select_window(target))
+
+
+def dock(sid: str, pct: int = DOCK_PCT, focus: bool = True) -> int:
+    """Join the background window `sid` into the explorer window as the right
+    pane. join-pane consumes the source window. With `focus=True` (Enter) it
+    selects the joined pane so the user lands in claude; with `focus=False`
+    (cursor-follow sync) it adds `-d` so focus stays in the explorer tree."""
+    return _call(build_dock(sid, pct, focus))
+
+
+def undock(pane_id: str, sid: str) -> int:
+    return _call(build_undock(pane_id, sid))
+
+
+def list_panes() -> List[str]:
+    out = _capture(build_list_panes())
+    return [ln for ln in out.splitlines() if ln]
+
+
+def docked_pane(self_pane: "str | None",
+                _list: Callable[[], List[str]] = list_panes) -> "str | None":
+    """The id of the docked claude pane: the one pane in the explorer window
+    that is NOT the explorer's own pane (`self_pane`, from $TMUX_PANE).
+    Returns None when nothing is docked, or when `self_pane` is unknown — we
+    can't tell our pane from claude's, so reporting None is safer than
+    returning the first pane (which could be the explorer's own, and a caller
+    would then break-pane/refocus the wrong one)."""
+    if self_pane is None:
+        return None
+    for p in _list():
+        if p != self_pane:
+            return p
+    return None
+
+
+def select_pane(pane_id: str) -> int:
+    return _call(build_select_pane(pane_id))
 
 
 def capture_pane(target: str) -> str:

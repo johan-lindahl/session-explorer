@@ -46,6 +46,8 @@ SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
+DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
+                          # docked pane follows it (coalesces hold-scroll churn)
 
 
 def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
@@ -222,13 +224,14 @@ def _help_text() -> str:
         "show even when unnamed.",
         "",
         "[b]Running sessions in tmux[/]",
-        "When launched with tmux, the explorer stays open and each session you",
-        "resume runs in its own tmux window:",
-        "  • [b]Enter[/] (or double-click) starts a stopped session and switches you",
-        "    in; on a running session it flips you straight into it.",
-        "  • [b]F12[/] (or click the [b]explorer[/] tab in the bottom bar) returns",
-        "    to the tree; the session keeps running in the background.",
-        "  • [b]Space[/] peeks a live snapshot without leaving the explorer.",
+        "When launched with tmux, the explorer stays in the left pane and the",
+        "session you resume docks in a pane on the right:",
+        "  • [b]Enter[/] (or double-click) docks a session beside the tree and",
+        "    puts you in it; Enter on another session swaps it in (the previous",
+        "    one keeps running in the background).",
+        "  • [b]F9[/] (or click a pane) switches focus between tree and session.",
+        "  • [b]F12[/] zooms the focused pane fullscreen; press again to restore.",
+        "  • [b]Space[/] peeks a live snapshot of any session without docking it.",
         "  • [b]q[/] with sessions running asks whether to shut them all down or",
         "    leave them running (reattach next time you open the explorer).",
         "",
@@ -238,7 +241,8 @@ def _help_text() -> str:
         key("Enter", "Resume: start & switch into the session (flip into a running one)"),
         key("2×click", "Same as Enter on a session row"),
         key("Space", "Peek a live snapshot / toggle the preview pane"),
-        key("F12", "Return to the explorer from inside a session (tmux)"),
+        key("F9", "Switch focus between the explorer tree and the session"),
+        key("F12", "Zoom the focused pane fullscreen (toggle)"),
         key("r", "Rename a session (re-files it) or a folder (renames its subtree)"),
         key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
@@ -594,6 +598,13 @@ class SessionExplorerApp(App):
         # sids that are live windows in *our* tmux server (accessible via flip),
         # refreshed by _poll_live. Distinct from sessions live in other terminals.
         self._our_windows: set = set()
+        # Split-pane docking (spec 2026-06-02-split-pane-explorer-claude):
+        # our own tmux pane id (from $TMUX_PANE), and the sid currently docked
+        # as the right pane (None when only the explorer is shown).
+        self._self_pane: str | None = os.environ.get("TMUX_PANE")
+        self._docked_sid: str | None = None
+        # Debounce timer for cursor-follow docking; reset on every cursor move.
+        self._sync_timer = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -861,6 +872,83 @@ class SessionExplorerApp(App):
         if node is not None and node.allow_expand:
             node.collapse()
 
+    def _undock_current(self) -> None:
+        """Break the docked claude pane back out to a background window so it
+        keeps running off-screen. No-op when nothing is docked."""
+        if not self._docked_sid:
+            return
+        pane = _tmux.docked_pane(self._self_pane)
+        if pane:
+            _tmux.undock(pane, self._docked_sid)
+        self._docked_sid = None
+
+    def _join_docked(self, sid: str, *, focus: bool = True) -> None:
+        """Join `sid` into the explorer as the right pane, recording it as the
+        dock **only** when join-pane succeeds. A failed join must not leave a
+        phantom `_docked_sid` — that would lie to the refocus path (Enter on
+        the "docked" row would select a pane that isn't there) and hide the
+        failure. The session still runs as a background window, so surface the
+        problem and leave it re-dockable on the next Enter. `focus=False` keeps
+        focus in the explorer tree (cursor-follow sync)."""
+        if _tmux.dock(sid, focus=focus) == 0:
+            self._docked_sid = sid
+        else:
+            self.notify("Could not dock the session (tmux join-pane failed); "
+                        "it's running in the background.", severity="warning")
+
+    def _dock(self, sid: str, cwd: "str | None", label: "str | None",
+              *, already_running: bool, focus: bool = True) -> None:
+        """Make `sid` the docked right pane. If it is already docked, just
+        refocus it (when `focus`); otherwise undock whatever is docked, (re)start
+        the session as a background window when needed, and join it in. With
+        `focus=False` the explorer tree keeps focus (cursor-follow sync)."""
+        if self._docked_sid == sid:
+            # Refocus claude (Enter on the already-docked row). The cursor-follow
+            # sync never reaches here — it early-returns on sid == _docked_sid —
+            # so the `focus=False` case of this branch is only a defensive guard.
+            if focus:
+                pane = _tmux.docked_pane(self._self_pane)
+                if pane:
+                    _tmux.select_pane(pane)        # refocus claude
+            return
+        self._undock_current()
+        if not already_running:
+            _tmux.start_window(sid, cwd, label)    # background window first
+        self._join_docked(sid, focus=focus)        # join into the explorer
+
+    def _schedule_dock_sync(self) -> None:
+        """Queue a cursor-follow dock sync, debounced: every cursor move resets
+        the timer, so holding an arrow to scroll past several running sessions
+        coalesces to where the cursor settles instead of re-parenting the live
+        claude pane on every keypress."""
+        if not self._tmux_enabled:
+            return
+        if self._sync_timer is not None:
+            self._sync_timer.stop()
+        self._sync_timer = self.set_timer(
+            DOCK_SYNC_DEBOUNCE, self._sync_dock_to_cursor)
+
+    def _sync_dock_to_cursor(self) -> None:
+        """Keep the docked pane in step with the tree cursor: show the selected
+        session when it's a running, dockable session of ours; otherwise close
+        the pane. Never starts a stopped session (that's Enter) and never steals
+        focus from the tree — so you can navigate and have the pane follow.
+
+        A docked session is a pane (absent from `session_windows()`); a
+        re-dockable running session is one of our background windows. Anything
+        else — a stopped session, a session live in another terminal (we can't
+        host a second claude on its transcript), or a folder/project node —
+        closes the pane."""
+        if not self._tmux_enabled:
+            return
+        sid = self._selected_sid()
+        if sid and sid == self._docked_sid:
+            return                                 # already shown; leave focus
+        if sid and sid in _tmux.session_windows():
+            self._dock(sid, None, None, already_running=True, focus=False)
+        else:
+            self._undock_current()
+
     def action_resume(self) -> None:
         node = self._tree.cursor_node
         if not node or not node.data or "sid" not in node.data:
@@ -878,23 +966,25 @@ class SessionExplorerApp(App):
             return
 
         running = _tmux.session_windows()
-        if sid in running:
-            _tmux.select_window(sid)                 # flip in to interact
+        # Already docked, or a running background window → (re)dock it. _dock
+        # refocuses if it is the current dock, else undocks-current and joins.
+        if sid == self._docked_sid or sid in running:
+            self._dock(sid, None, label, already_running=True)
+            self._poll_live()
             return
         if sid in self._live_states:
-            # Live in another terminal, not one of our windows: never start a
-            # second claude on the same transcript (spec §5).
+            # Live in another terminal, not one of ours: never start a second
+            # claude on the same transcript (spec §5).
             self.push_screen(ConfirmScreen(
                 "This session is already running in another terminal.\n"
                 "Showing its progress here; press space to peek. (y/esc)"))
             return
-        # Stopped → start the session in a tmux window and switch straight into it.
+        # Stopped → start it as a background window and dock it beside the tree.
         if _dead_worktree_repo(project_path):
             def after(ok: bool) -> None:
                 if ok:
                     cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
-                    _tmux.start_window(sid, cwd, label)
-                    _tmux.select_window(sid)   # auto-switch into the new session
+                    self._dock(sid, cwd, label, already_running=False)
                     self._poll_live()
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
@@ -902,8 +992,7 @@ class SessionExplorerApp(App):
                 f"{project_path}"), after)
         else:
             cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
-            _tmux.start_window(sid, cwd, label)
-            _tmux.select_window(sid)   # auto-switch into the new session
+            self._dock(sid, cwd, label, already_running=False)
             self._poll_live()
 
     def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:
@@ -1166,12 +1255,20 @@ class SessionExplorerApp(App):
 
             _, display = split_path(name)
             label = display or sid[:8]
-            _tmux.start_new_session_window(sid, cwd, name, worktree, label)
-            _tmux.select_window(sid)   # land straight in the new session
-            self._populate()           # show the newly-named session immediately
-            self._poll_live()
+            self._do_new_session(sid, cwd, name, worktree, label)
 
         self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)
+
+    def _do_new_session(self, sid: str, cwd: str, name: str,
+                        worktree: "str | None", label: "str | None") -> None:
+        """Start a fresh claude session as a background window and dock it as
+        the right pane, swapping out whatever was docked. Mirrors _dock but
+        uses start_new_session_window (a new session, not a resume)."""
+        self._undock_current()
+        _tmux.start_new_session_window(sid, cwd, name, worktree, label)
+        self._join_docked(sid)
+        self._populate()           # show the newly-named session immediately
+        self._poll_live()
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project_label, prefix). prefix ends in '/' when the cursor sits
@@ -1276,11 +1373,25 @@ class SessionExplorerApp(App):
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
+    def _running_sids(self) -> list:
+        """All sessions running in our server: background windows plus the
+        currently-docked session. The docked session is a *pane* in the
+        explorer window, not a window of its own, so `session_windows()` misses
+        it — callers that reason about "what's running" (the quit-guard, the
+        liveness-accessibility flag) must union it back in. Snapshots are the
+        deliberate exception: a docked pane can't be captured by window name,
+        so the live preview keeps using `session_windows()` and falls through
+        to the transcript tail (the docked session is already visible live)."""
+        sids = _tmux.session_windows()
+        if self._docked_sid and self._docked_sid not in sids:
+            sids.append(self._docked_sid)
+        return sids
+
     def action_quit(self) -> None:
         if not self._tmux_enabled:
             self.exit()
             return
-        running = _tmux.session_windows()
+        running = self._running_sids()
         if not running:
             self.exit()
             return
@@ -1317,7 +1428,10 @@ class SessionExplorerApp(App):
         new_ours: set = set()
         if self._tmux_enabled:
             try:
-                new_ours = set(_tmux.session_windows())
+                # Include the docked session: it's a pane, not a window, but it
+                # is one of *ours* (you can F9 into it), so the glyph must show
+                # accessible (●), not peek-only (○).
+                new_ours = set(self._running_sids())
             except Exception:
                 new_ours = self._our_windows  # keep last good on a tmux hiccup
         states_changed = new_states != self._live_states
@@ -1546,6 +1660,7 @@ class SessionExplorerApp(App):
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._refresh_preview()
+        self._schedule_dock_sync()
 
 
 _WORKTREE_MARKER = "/.claude/worktrees/"
