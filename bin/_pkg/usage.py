@@ -116,8 +116,11 @@ def _wait_for(target: str, predicate, timeout: float,
 def cleanup_probe_transcripts(claude_dir: str) -> None:
     """Delete the JSONLs the throwaway probe claude wrote. Globbing by the probe
     dirname is robust to however Claude mangles the cwd into a project folder."""
+    # Claude mangles the probe cwd into a project-folder name with non-alphanumerics
+    # (incl. the leading dot) turned to dashes, e.g. "...--session-explorer-probe".
+    # Match on the dot-less stem so the glob actually hits that folder.
     pattern = os.path.join(
-        claude_dir, "projects", "*" + PROBE_DIRNAME + "*", "*.jsonl")
+        claude_dir, "projects", "*session-explorer-probe*", "*.jsonl")
     for path in glob.glob(pattern):
         try:
             os.remove(path)
@@ -133,6 +136,13 @@ def scrape_usage(claude_dir: str, window: str = None) -> Optional[UsageInfo]:
     info: Optional[UsageInfo] = None
     try:
         os.makedirs(cwd, exist_ok=True)
+        # Clear any stale probe window from a previously crashed run; a duplicate
+        # same-named window makes send-keys/capture/kill ambiguous and would leak
+        # an orphaned claude process.
+        try:
+            _tmux.kill_window(window)
+        except Exception:
+            pass
         if _tmux.start_probe_window(cwd, window) != 0:
             return None
         # Wait for the input prompt; dismiss the first-run trust dialog if shown.

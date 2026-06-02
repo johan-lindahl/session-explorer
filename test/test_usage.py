@@ -76,3 +76,24 @@ def test_parse_usage_rejects_out_of_range_percent():
 def test_probe_cwd_under_claude_dir():
     assert usage.probe_cwd("/home/x/.claude") == \
         "/home/x/.claude/.session-explorer-probe"
+
+
+def test_cleanup_probe_transcripts_matches_mangled_folder(tmp_path):
+    # Claude mangles the probe cwd "~/.claude/.session-explorer-probe" into a
+    # project-folder name where dots/slashes become dashes:
+    # "...--session-explorer-probe". The cleanup glob must match that, and must
+    # NOT touch a normal project's transcripts.
+    projects = tmp_path / "projects"
+    probe_proj = projects / "-Users-x--claude--session-explorer-probe"
+    probe_proj.mkdir(parents=True)
+    probe_jsonl = probe_proj / "abc.jsonl"
+    probe_jsonl.write_text("{}")
+    normal_proj = projects / "-Users-x-Projects-Foo"
+    normal_proj.mkdir(parents=True)
+    keep = normal_proj / "def.jsonl"
+    keep.write_text("{}")
+
+    usage.cleanup_probe_transcripts(str(tmp_path))
+
+    assert not probe_jsonl.exists()   # probe transcript removed
+    assert keep.exists()              # normal session untouched
