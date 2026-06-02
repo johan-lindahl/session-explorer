@@ -184,3 +184,29 @@ def test_cli_live_never_errors_on_bad_input(tmp_path, monkeypatch):
     # Missing --sid still must not crash the hook caller.
     rc = _cli.main(["live", "--event", "Stop", "--sid", ""])
     assert rc == 0
+
+
+def test_launch_wraps_in_tmux_when_available(tmp_path, monkeypatch):
+    from _pkg import cli, tmux, launcher
+    # Redirect HOME so the generated config lands in the test's tmp dir, never
+    # the real ~/.claude.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(tmux, "available", lambda which=None: True)
+    monkeypatch.setattr(tmux, "detected_version", lambda: (3, 4))
+    monkeypatch.setattr(tmux, "meets_floor", lambda v: True)
+    captured = {}
+    monkeypatch.setattr(launcher, "launch",
+                        lambda cmd: captured.setdefault("cmd", cmd) or 0)
+    cli._cmd_launch()
+    assert "tmux -L session-explorer" in captured["cmd"]
+
+
+def test_launch_plain_when_tmux_absent(monkeypatch):
+    from _pkg import cli, tmux, launcher
+    monkeypatch.setattr(tmux, "available", lambda which=None: False)
+    captured = {}
+    monkeypatch.setattr(launcher, "launch",
+                        lambda cmd: captured.setdefault("cmd", cmd) or 0)
+    cli._cmd_launch()
+    assert "tmux" not in captured["cmd"]
+    assert captured["cmd"].startswith("exec ")
