@@ -1375,7 +1375,7 @@ async def test_move_dialog_typed_path_on_enter(tmp_path):
 
 def test_restyled_dialogs_use_panel_base():
     for cls in (_tui.MoveScreen, _tui.ConfirmScreen, _tui.NotesScreen,
-                _tui.RenameScreen, _tui.NewFolderScreen):
+                _tui.RenameScreen, _tui.NewFolderScreen, _tui.NewSessionScreen):
         assert issubclass(cls, _tui._PanelScreen), cls.__name__
 
 
@@ -1734,3 +1734,20 @@ async def test_new_session_dialog_captures_worktree(index_path):
     assert captured["name"] == "feature"
     assert captured["worktree"] is True
     assert captured["worktree_name"] == "wt1"
+
+
+async def test_new_session_dialog_cancels_on_escape(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    result = {"called": False, "value": "sentinel"}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        def cb(r):
+            result["called"] = True
+            result["value"] = r
+        app.push_screen(NewSessionScreen("demo", "", "/tmp/demo-project"), cb)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+    assert result["called"] is True
+    assert result["value"] is None

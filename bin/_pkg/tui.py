@@ -389,6 +389,9 @@ class NewSessionScreen(_PanelScreen):
         )
 
     def on_mount(self) -> None:
+        # Textual selects all text on first focus, which would replace the
+        # prefilled folder prefix on the first keystroke. Move the cursor to
+        # the end so typing appends rather than overwrites.
         inp = self.query_one("#ns-name", Input)
         inp.cursor_position = len(inp.value)
 
