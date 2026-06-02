@@ -36,3 +36,23 @@ def test_transcript_tail_keeps_only_last_n(tmp_path):
 
 def test_transcript_tail_missing_file_is_empty(tmp_path):
     assert snapshot.transcript_tail(str(tmp_path / "nope.jsonl")) == ""
+
+
+def test_snapshot_uses_capture_for_tmux_window():
+    text, is_ansi = snapshot.snapshot(
+        sid="sid-1", transcript_path="/x.jsonl",
+        tmux_window_names=["sid-1", "sid-2"],
+        capture_fn=lambda s: f"CAPTURED:{s}",
+        tail_fn=lambda p, limit=12: "TAIL")
+    assert text == "CAPTURED:sid-1"
+    assert is_ansi is True
+
+
+def test_snapshot_falls_back_to_tail_for_non_window():
+    text, is_ansi = snapshot.snapshot(
+        sid="sid-9", transcript_path="/x.jsonl",
+        tmux_window_names=["sid-1"],
+        capture_fn=lambda s: "CAPTURED",
+        tail_fn=lambda p, limit=12: "TAIL")
+    assert text == "TAIL"
+    assert is_ansi is False

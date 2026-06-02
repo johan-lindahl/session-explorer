@@ -43,3 +43,14 @@ def transcript_tail(path: str, limit: int = 12) -> str:
         msg_lines = _line_for(msg)
         lines.extend(msg_lines)
     return "\n".join(lines[-limit:])
+
+
+def snapshot(*, sid: str, transcript_path: str,
+             tmux_window_names: List[str],
+             capture_fn: Callable[[str], str],
+             tail_fn: Callable[..., str] = transcript_tail) -> Tuple[str, bool]:
+    """Return (text, is_ansi). Capture-pane for our tmux windows (is_ansi=True);
+    transcript tail for any other live session (is_ansi=False)."""
+    if sid in tmux_window_names:
+        return capture_fn(sid), True
+    return tail_fn(transcript_path), False
