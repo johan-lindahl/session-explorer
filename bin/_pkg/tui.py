@@ -785,17 +785,18 @@ class SessionExplorerApp(App):
                 "Showing its progress here; press space to peek. (y/esc)"))
             return
         # Stopped → start in a background tmux window, stay in the explorer.
-        cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
         if _dead_worktree_repo(project_path):
             def after(ok: bool) -> None:
                 if ok:
-                    _tmux.start_window(sid, _resolve_resume_cwd(project_path) or cwd)
+                    cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
+                    _tmux.start_window(sid, cwd)
                     self._poll_live()
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
                 "Resume anyway? This re-creates an empty directory:\n"
                 f"{project_path}"), after)
         else:
+            cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
             _tmux.start_window(sid, cwd)
             self._poll_live()
 
