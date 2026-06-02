@@ -13,7 +13,8 @@ follows [semantic versioning](https://semver.org/).
   snapshot of the selected session in the preview pane — `capture-pane` for
   our tmux windows, transcript-tail for sessions running elsewhere. Switching
   back uses clickable status-bar tabs (primary) or F12 (keyboard fallback).
-  The status bar shows each session's human name, not its raw id.
+  The status bar shows each session's human name, not its raw id, and shows a
+  `F12 → explorer` hint while you're inside a session.
 - **Context-aware Enter.** Stopped → start the session and switch into it
   (single keypress); running → flip in; live-elsewhere (another terminal holds
   the transcript) → refuse with a warning and offer peek-only, preventing

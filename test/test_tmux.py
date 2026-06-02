@@ -75,11 +75,15 @@ def test_build_config_contains_core_settings():
     # Status bar renders the human label (@se_label), not the raw sid window name.
     assert "window-status-format" in conf
     assert "@se_label" in conf
+    # "back to explorer" hint on the right, suppressed in the explorer window.
+    assert "status-right" in conf
+    assert "F12 → explorer" in conf
 
 
 def test_build_config_respects_custom_back_key():
     conf = tmux.build_config(persist_flag_path="/tmp/f", back_key="C-g")
     assert "bind -n C-g select-window -t explorer" in conf
+    assert "C-g → explorer" in conf
 
 
 def test_build_set_label_targets_window_by_sid():

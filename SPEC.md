@@ -383,7 +383,7 @@ tmux -L session-explorer -f <generated.conf> new-session -A -s explorer 'exec se
 Enter always lands you *in* the session. To start several and watch them, jump in, press F12/click `[0 explorer]` to come back (the session keeps running), move to the next, Enter again; `space` peeks at any of them without switching.
 
 - **Already live elsewhere** — if the selected session is live in the registry but is not one of our tmux windows (running in another terminal), Enter refuses with a warning and offers peek-only via transcript tail. Two `claude --resume` processes on one JSONL corrupts it.
-- **Switching back:** clickable status-bar tabs are the primary path (the generated config enables a tmux status bar with `[0 explorer] [1 feat/auth ●] …`). **F12** is the keyboard fallback — a no-prefix root binding `bind -n F12 select-window -t explorer`; configurable.
+- **Switching back:** clickable status-bar tabs are the primary path (the generated config enables a tmux status bar with `[0 explorer] [1 feat/auth ●] …`). **F12** is the keyboard fallback — a no-prefix root binding `bind -n F12 select-window -t explorer`; configurable. While inside a session, the status bar's right side shows a `F12 → explorer` hint (suppressed in the explorer window itself).
 - cwd/worktree handling carries over from the current `action_resume`: `tmux new-window -c <resolved cwd>` using `_resolve_resume_cwd`, dead-worktree warning fires before spawning.
 
 ### Snapshot rendering

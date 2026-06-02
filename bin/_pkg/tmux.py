@@ -96,11 +96,22 @@ def build_config(*, persist_flag_path: str, back_key: str = "F12",
     # window name (#W) for the explorer window which has none. Without this the
     # bar shows raw session-id UUIDs.
     win_fmt = " #I:#{?#{@se_label},#{@se_label},#W} "
+    # Right side: a "back to explorer" hint, shown only while the active window
+    # is a session (suppressed in the explorer window itself, where it's moot).
+    hint = f"#[fg=black,bg=green] {back_key} → explorer #[default]"
+    status_right = (
+        "#{?#{==:#{window_name},__EXPLORER__},,__HINT__}"
+        .replace("__EXPLORER__", EXPLORER_WINDOW)
+        .replace("__HINT__", hint)
+    )
     return "\n".join([
         "set -g mouse on",
         "set -g status on",
+        'set -g status-left ""',          # drop the redundant [explorer] session label
         f'set -g window-status-format "{win_fmt}"',
         f'set -g window-status-current-format "{win_fmt}"',
+        f'set -g status-right "{status_right}"',
+        "set -g status-right-length 32",
         # No `remain-on-exit`: when claude exits, its window closes and tmux
         # drops the user back into the explorer (window 0). Avoids dead [exited]
         # panes lingering and being mistaken for running sessions.
