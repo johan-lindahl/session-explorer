@@ -73,8 +73,8 @@ def test_build_config_contains_core_settings():
     assert 'window-status-format ""' in conf
     assert 'window-status-current-format ""' in conf
     # Status-right advertises both keys (always visible, incl. when zoomed).
-    assert "F9" in conf and "F12" in conf
-    assert "switch" in conf and "full" in conf
+    # Status-right advertises both keys (always visible, incl. when zoomed).
+    assert "F9 ⇄ switch · F12 ⤢ full" in conf
     # Option C: kill the server on detach unless the persist-flag is present.
     assert "client-detached" in conf
     assert "/tmp/se.flag" in conf

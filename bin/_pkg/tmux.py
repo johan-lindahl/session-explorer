@@ -72,9 +72,10 @@ def build_new_session_window(sid: str, cwd: str, name: str,
 
 
 def build_set_label(sid: str, label: str) -> List[str]:
-    """Store a human-readable label on the window (window name stays the sid for
-    unique targeting). The status bar renders `@se_label` instead of the raw
-    sid — see build_config's window-status-format."""
+    """Store a human-readable label on the window as a custom option
+    (`@se_label`); the window name stays the sid for unique targeting. Kept as
+    session metadata — the split-pane layout no longer renders window tabs, so
+    it is not shown in the status bar."""
     return build_base() + ["set-option", "-w", "-t", sid, "@se_label", label]
 
 
