@@ -1151,6 +1151,12 @@ class SessionExplorerApp(App):
             worktree = (result["worktree_name"] or "") if result["worktree"] else None
             sid = _new_sid()
 
+            # Seed the chosen name now: claude writes no transcript (and thus no
+            # custom-title) until the first turn, so without this the session
+            # shows under (unnamed) until then. claude -n persists the identical
+            # title later, so there's no divergence.
+            _index.seed_new_session(self._index_path, sid, name, cwd)
+
             # No tmux → exit and execvp claude (handled in run()).
             if not self._tmux_enabled:
                 self._new_session_argv = _new_session_argv(sid, name, worktree)
@@ -1162,6 +1168,7 @@ class SessionExplorerApp(App):
             label = display or sid[:8]
             _tmux.start_new_session_window(sid, cwd, name, worktree, label)
             _tmux.select_window(sid)   # land straight in the new session
+            self._populate()           # show the newly-named session immediately
             self._poll_live()
 
         self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)

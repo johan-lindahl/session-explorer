@@ -78,6 +78,51 @@ def test_record_session_creates_entry(tmp_path):
     assert s["bytes"] > 0
 
 
+def test_record_session_preserves_name_when_transcript_has_no_title(tmp_path):
+    """A just-created session (claude -n) has no transcript until its first turn,
+    so session_name() returns None. record_session must NOT blank a previously
+    known name in that gap — the transcript is append-only, so an absent title
+    means 'not written yet', never 'name removed'."""
+    idx_path = str(tmp_path / "index.json")
+    # Seed an entry with a name but point at a transcript that does not exist.
+    missing = str(tmp_path / "ghost.jsonl")
+    index.mutate(idx_path, lambda d: d["sessions"].update(
+        {"S1": {"name_cached": "planning/sprint15"}}) or d)
+
+    index.record_session(idx_path, session_id="S1", transcript_path=missing,
+                         cwd="/Users/jl/proj/foo")
+
+    s = index.load(idx_path)["sessions"]["S1"]
+    assert s["name_cached"] == "planning/sprint15"  # preserved, not nulled
+    assert s["project_label"] == "foo"
+
+
+def test_record_session_unnamed_stays_none(tmp_path):
+    """The preservation fallback must not invent a name: a genuinely unnamed
+    session (no prior name, no transcript title) stays None."""
+    idx_path = str(tmp_path / "index.json")
+    missing = str(tmp_path / "ghost.jsonl")
+
+    index.record_session(idx_path, session_id="S2", transcript_path=missing,
+                         cwd="/Users/jl/proj/foo")
+
+    assert index.load(idx_path)["sessions"]["S2"]["name_cached"] is None
+
+
+def test_seed_new_session_records_name_before_transcript(tmp_path):
+    """seed_new_session writes the user-chosen name (and project fields) for a
+    session whose transcript does not exist yet."""
+    idx_path = str(tmp_path / "index.json")
+
+    index.seed_new_session(idx_path, "S3", "planning/sprint15", "/Users/jl/proj/foo")
+
+    s = index.load(idx_path)["sessions"]["S3"]
+    assert s["name_cached"] == "planning/sprint15"
+    assert s["project_path"] == "/Users/jl/proj/foo"
+    assert s["project_label"] == "foo"
+    assert "created_at" in s
+
+
 def test_record_session_idempotent(tmp_path):
     """Calling record twice updates last_active_at but doesn't duplicate."""
     transcript = str(tmp_path / "01ABC.jsonl")

@@ -178,10 +178,21 @@ The explorer generates the session UUID up front and launches
 Claude itself writes the `custom-title` (via `-n`) and owns all worktree/branch
 creation (via `-w`) — the plugin writes neither. The UUID is the tmux window name,
 so the new window reconciles through the same live-registry / `list-windows`
-machinery as resume, and the named session surfaces in the tree on the next live
-poll. Without tmux, the explorer `execvp`s into the new session (same exit-and-
-replace pattern as resume). Claude's own `--tmux` flag is deliberately not used —
-sessions are hosted in the dedicated `-L session-explorer` server.
+machinery as resume. Without tmux, the explorer `execvp`s into the new session
+(same exit-and-replace pattern as resume). Claude's own `--tmux` flag is
+deliberately not used — sessions are hosted in the dedicated `-L session-explorer`
+server.
+
+**Name seeding.** Claude writes no transcript (and therefore no `custom-title`)
+until the session's first turn, so a freshly-created, never-messaged session would
+otherwise appear under `(unnamed)`. To avoid that, creation seeds `name_cached`
+into the index immediately (`index.seed_new_session`) and repopulates the tree.
+This does not violate "JSONL is authoritative": `claude -n` persists the identical
+`custom-title` on the first turn, and `record_session` only falls back to the
+seeded name while the transcript yields none (`session_name() or existing
+name_cached`) — since the transcript is append-only, an absent title always means
+"not written yet", never "name removed", so a known name is never blanked by the
+2 s live-refresh.
 
 If the chosen directory is not a git repository and a worktree was requested,
 `claude -w` reports the error inside the session window; v1 does not pre-validate.

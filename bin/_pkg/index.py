@@ -154,7 +154,12 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
         window = _context_window(model, tokens)
         new_entry = {
             **existing,  # preserve notes and other user-edited fields
-            "name_cached": _jsonl.session_name(transcript_path),
+            # Fall back to the last-known name when the transcript yields none:
+            # a just-created (`claude -n`) session has no transcript until its
+            # first turn, and the transcript is append-only, so an absent title
+            # means "not written yet", never "name removed". Without this the
+            # 2s live-refresh would blank a seeded name on every poll.
+            "name_cached": _jsonl.session_name(transcript_path) or existing.get("name_cached"),
             "first_prompt": _jsonl.first_user_prompt(transcript_path),
             "message_count": _jsonl.message_count(transcript_path),
             "bytes": file_bytes,
@@ -181,6 +186,29 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
             fs_path = folder_store_path or _fs.default_path_for(index_path)
             _fs.add(fs_path, entry["project_label"], "/".join(segments))
     return result
+
+
+def seed_new_session(index_path: str, session_id: str, name: str,
+                     cwd: str) -> dict:
+    """Record a just-created session's user-chosen name before its transcript
+    exists. `claude -n <name>` writes the matching `custom-title` to the
+    transcript on its first turn, so this only bridges the gap until then; once
+    the transcript appears, record_session reads the (identical) title, and
+    while it's still absent record_session preserves this seeded name. Merges
+    onto any existing row (e.g. one the SessionStart hook already created)."""
+    def mutator(data: dict) -> dict:
+        existing = data["sessions"].get(session_id, {})
+        now = datetime.now(timezone.utc).isoformat()
+        data["sessions"][session_id] = {
+            **existing,
+            "name_cached": name,
+            "project_path": cwd,
+            "project_label": _project_label(cwd),
+            "created_at": existing.get("created_at", now),
+            "last_active_at": now,
+        }
+        return data
+    return mutate(index_path, mutator)
 
 
 def backfill(index_path: str, projects_root: "str | None" = None,

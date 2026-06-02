@@ -1807,6 +1807,32 @@ async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     assert args[3] is None                  # no worktree
     assert calls["select"] == "fixed-sid"
 
+    # The name is seeded into the index immediately so the new session shows
+    # named (not under (unnamed)) before claude writes its first transcript.
+    import json as _json
+    seeded = _json.load(open(index_path))["sessions"]["fixed-sid"]
+    assert seeded["name_cached"] == "planning/sprint15"
+    assert seeded["project_path"] == "/tmp/demo-project"
+
+
+async def test_new_session_no_tmux_seeds_name(index_path, monkeypatch):
+    import _pkg.tui as tui_mod
+    import json as _json
+    monkeypatch.setattr(tui_mod, "_new_sid", lambda: "fixed-sid")
+    app = tui_mod.SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")  # demo project node
+        await pilot.press("c")
+        await pilot.pause()
+        for ch in "feature":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    seeded = _json.load(open(index_path))["sessions"]["fixed-sid"]
+    assert seeded["name_cached"] == "feature"
+    assert seeded["project_path"] == "/tmp/demo-project"
+
 
 async def test_new_session_no_tmux_sets_argv(index_path, monkeypatch):
     import _pkg.tui as tui_mod
