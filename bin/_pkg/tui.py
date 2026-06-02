@@ -242,6 +242,7 @@ def _help_text() -> str:
         key("r", "Rename a session (re-files it) or a folder (renames its subtree)"),
         key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
+        key("c", "New session in the current project/folder (names it; optional worktree)"),
         key("d", "Delete the selected session, or an empty folder (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
         key("u", "Toggle visibility of unnamed sessions"),
