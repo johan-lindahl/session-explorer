@@ -7,13 +7,14 @@ several MB of code. Only happens when the user actually runs `tui`/`launch`.
 from __future__ import annotations
 
 import os
+import uuid
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
+from textual.widgets import Checkbox, Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from . import __version__
@@ -1500,6 +1501,46 @@ def _resume_argv(target: str) -> list[str]:
     that starts with '-' stays inside the single `--resume=<id>` token and can
     never be parsed as a separate `claude` flag."""
     return ["claude", f"--resume={target}"]
+
+
+def _new_sid() -> str:
+    """Fresh session UUID for a new session. Isolated so tests can stub it."""
+    return str(uuid.uuid4())
+
+
+def _derive_project_cwd(sessions: dict, project_label: str) -> "str | None":
+    """Launch cwd for a new session in `project_label`: the project_path of its
+    most-recently-active session, with any git-worktree suffix stripped back to
+    the repo root so `claude -w` branches from the real repository. None when the
+    project has no session with a usable path."""
+    best = None
+    best_key = ""
+    for s in sessions.values():
+        if s.get("project_label") != project_label:
+            continue
+        path = s.get("project_path")
+        if not path:
+            continue
+        key = s.get("last_active_at") or ""
+        if best is None or key >= best_key:
+            best, best_key = path, key
+    if not best:
+        return None
+    if _WORKTREE_MARKER in best:
+        best = best.split(_WORKTREE_MARKER, 1)[0]
+    return best
+
+
+def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> list[str]:
+    """argv for `os.execvp` to start a fresh session without tmux. A list (no
+    shell), so the name needs no quoting. `worktree`: None → no `-w`; "" → bare
+    `-w`; otherwise `-w <name>`."""
+    argv = ["claude", "--session-id", sid, "-n", name]
+    if worktree is not None:
+        argv.append("-w")
+        if worktree:
+            argv.append(worktree)
+    return argv
 
 
 def run() -> int:

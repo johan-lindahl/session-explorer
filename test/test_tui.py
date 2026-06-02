@@ -1644,3 +1644,23 @@ async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
         await pilot.pause()
     assert "flag" in calls               # persist-flag set before detaching
     assert calls.get("detach") is True
+
+
+def test_derive_project_cwd_picks_most_recent_and_strips_worktree():
+    from _pkg.tui import _derive_project_cwd
+    sessions = {
+        "a": {"project_label": "demo", "project_path": "/repo/old",
+              "last_active_at": "2026-05-01T00:00:00Z"},
+        "b": {"project_label": "demo",
+              "project_path": "/repo/main/.claude/worktrees/wt",
+              "last_active_at": "2026-05-09T00:00:00Z"},
+        "c": {"project_label": "other", "project_path": "/elsewhere",
+              "last_active_at": "2026-05-20T00:00:00Z"},
+    }
+    # Most recent demo session is the worktree one; strip back to the repo root.
+    assert _derive_project_cwd(sessions, "demo") == "/repo/main"
+
+
+def test_derive_project_cwd_returns_none_when_no_match():
+    from _pkg.tui import _derive_project_cwd
+    assert _derive_project_cwd({}, "demo") is None
