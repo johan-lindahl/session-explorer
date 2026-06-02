@@ -1543,3 +1543,50 @@ async def test_tmux_offer_shown_once_then_marked(tmp_path, monkeypatch):
         await pilot.press("n")           # decline the offer
         await pilot.pause()
     assert (tmp_path / ".session-explorer.tmux-declined").exists()
+
+
+@pytest.mark.asyncio
+async def test_enter_refuses_session_live_elsewhere(index_path, monkeypatch):
+    # Session is live (in the registry) but NOT one of our tmux windows: Enter
+    # must refuse to start a duplicate claude and must not exit-to-resume.
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd: calls.setdefault("start", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app, "_poll_live", lambda: None)   # freeze live state
+        app._live_states = {"sid-1": "working"}
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.press("down")
+        app.action_resume()
+        await pilot.pause()
+    assert "start" not in calls          # no duplicate claude started
+    assert app._resume_target is None    # did not exit-to-resume
+
+
+@pytest.mark.asyncio
+async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "set_persist_flag",
+                        lambda p: calls.setdefault("flag", p))
+    monkeypatch.setattr(tuimod._tmux, "detach_client",
+                        lambda: calls.setdefault("detach", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit()
+        await pilot.pause()
+        await pilot.press("b")            # leave running in background
+        await pilot.pause()
+    assert "flag" in calls               # persist-flag set before detaching
+    assert calls.get("detach") is True

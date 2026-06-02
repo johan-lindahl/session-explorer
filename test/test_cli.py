@@ -211,3 +211,18 @@ def test_launch_plain_when_tmux_absent(monkeypatch):
     cli._cmd_launch()
     assert "tmux" not in captured["cmd"]
     assert captured["cmd"].startswith("exec ")
+
+
+def test_launch_clears_stale_persist_flag(tmp_path, monkeypatch):
+    from _pkg import cli, tmux, launcher
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(tmux, "available", lambda which=None: True)
+    monkeypatch.setattr(tmux, "detected_version", lambda: (3, 4))
+    monkeypatch.setattr(tmux, "meets_floor", lambda v: True)
+    monkeypatch.setattr(launcher, "launch", lambda cmd: 0)
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    flag = claude / ".session-explorer.tmux-persist"
+    flag.write_text("stale")
+    cli._cmd_launch()
+    assert not flag.exists()             # stale flag cleared on fresh launch
