@@ -128,3 +128,28 @@ EOF
   run bash -c "printf '' | bash '$REPO/hooks/session-live.sh'"
   [ "$status" -eq 0 ]
 }
+
+@test "session-start: probe sessions leave no trace" {
+  export SESSION_EXPLORER_PROBE=1
+  run bash -c 'printf "%s" "{\"session_id\":\"p1\",\"transcript_path\":\"/t/p1.jsonl\",\"cwd\":\"/c\"}" | bash "'"$REPO"'/hooks/session-start.sh"'
+  [ "$status" -eq 0 ]
+  [ ! -f "$HOME/.claude/.session-explorer.current" ]
+  unset SESSION_EXPLORER_PROBE
+}
+
+@test "session-live: probe sessions leave no trace" {
+  STUB="$BATS_TEST_TMPDIR/cli-args"
+  cat > "$BATS_TEST_TMPDIR/session-explorer" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$STUB"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/session-explorer"
+  export PATH="$BATS_TEST_TMPDIR:$PATH"
+  unset CLAUDE_PLUGIN_ROOT
+  export SESSION_EXPLORER_PROBE=1
+  printf '%s' '{"hook_event_name":"SessionStart","session_id":"p2","transcript_path":"/t/p2.jsonl","cwd":"/repo"}' \
+    | bash "$REPO/hooks/session-live.sh"
+  sleep 0.1
+  [ ! -f "$STUB" ]
+  unset SESSION_EXPLORER_PROBE
+}

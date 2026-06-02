@@ -6,6 +6,10 @@
 # the only synchronous cost is one python JSON parse; the CLI write is detached.
 
 set -u
+
+# Skip the usage-bar probe entirely (no live-registry churn).
+if [ "${SESSION_EXPLORER_PROBE:-}" = "1" ]; then exit 0; fi
+
 CLAUDE_DIR="${HOME}/.claude"
 LOG="${CLAUDE_DIR}/session-explorer.log"
 mkdir -p "${CLAUDE_DIR}" 2>/dev/null || true
