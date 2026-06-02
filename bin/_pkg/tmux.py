@@ -140,7 +140,10 @@ def build_capture_plain(target: str) -> List[str]:
 
 
 def build_set_status_left(text: str) -> List[str]:
-    return build_base() + ["set-option", "-g", "status-left", text]
+    # tmux runs status-left through strftime: a literal '%' (and the next char)
+    # is consumed as a date format, so "31% used" renders as "31". Double it.
+    return build_base() + [
+        "set-option", "-g", "status-left", text.replace("%", "%%")]
 
 
 def build_list_windows() -> List[str]:

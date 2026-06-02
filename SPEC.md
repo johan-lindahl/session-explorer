@@ -463,7 +463,7 @@ A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), pas
 An opt-in progress bar showing the current 5-hour session usage (0–100%) appears in `status-left` of the tmux status line.  The existing `F9 ⇄ switch · F12 ⤢ full` hint stays on `status-right` unchanged.  Example rendering:
 
 ```
- [████░░░░░░░░░░] 18% ↺1:29am
+ [██░░░░░░░░░░] 18% ↺1:29am
 ```
 
 **Enablement.** The bar is **off by default**.  A marker file `~/.claude/.session-explorer.usage-bar` signals "enabled" (persists across launches).  Press `g` in the TUI to toggle it on or off.  Enable fires one probe immediately so the bar appears within a few seconds, then starts a 5-minute refresh interval.  Disable removes the marker, cancels the interval, and clears `status-left`.  There is no separate refresh key — toggling `g` off then on is the manual force-refresh.  The feature is entirely **inert when not tmux-hosted**.
@@ -475,10 +475,10 @@ Probe details:
 - The probe session runs in a **fixed cwd** `~/.claude/.session-explorer-probe/` so all probe transcripts land in one predictable project folder under `~/.claude/projects/`.
 - Env `SESSION_EXPLORER_PROBE=1` is set on the spawned process.  Both the `session-start.sh` and `session-live.sh` hooks check for this variable and **bail out immediately**, so probe sessions are never recorded in the index, live registry, or tree.
 - After each capture the probe transcripts in that folder are **deleted** by `usage.cleanup_probe_transcripts`, keeping the litter fully contained.
-- The probe window is torn down with `send-keys '/exit' Enter` + a `kill-window` backstop so nothing lingers on the dedicated server.
-- The orchestration runs in a **Textual thread worker** (`run_worker(..., thread=True)`) so bounded waits never block the TUI event loop.
+- The probe window is torn down with `send-keys 'Escape'` (to dismiss the modal Settings screen that `/usage` opens) + a `kill-window` backstop that terminates the throwaway claude either way.
+- The orchestration runs in a **Textual thread worker** (decorated `@work(thread=True, exclusive=True, group="usage")` on `_refresh_usage`) so bounded waits never block the TUI event loop.
 
-**Failure handling.** Any error — `claude` missing, trust prompt unresolved, parse miss, any timeout — leaves `status-left` at its prior value (or empty), logs to `~/.claude/session-explorer.log`, and returns cleanly.  The worker swallows all exceptions.  Failures never block the TUI or surface an error dialog.
+**Failure handling.** Any error — `claude` missing, trust prompt unresolved, parse miss, any timeout — degrades silently: the prior bar is left in place (or cleared on explicit toggle-off) and the UI is never blocked.  The worker swallows all exceptions and writes no log.  Failures never block the TUI or surface an error dialog.
 
 **Scope.** Session (5-hour) bucket only.  No weekly or model-breakdown display in v1.  No configurable cadence or format.
 

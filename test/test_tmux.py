@@ -263,10 +263,13 @@ def test_build_capture_plain_has_no_escapes_flag():
     ]
 
 
-def test_build_set_status_left():
+def test_build_set_status_left_escapes_percent():
+    # tmux runs status-left through strftime, so a literal % must be doubled
+    # ('%%') or it gets eaten. render_bar emits a single % (human-readable);
+    # the tmux builder is where the escaping happens.
     assert tmux.build_set_status_left(" [██] 1% ↺1am") == [
         "tmux", "-L", "session-explorer", "set-option", "-g",
-        "status-left", " [██] 1% ↺1am",
+        "status-left", " [██] 1%% ↺1am",
     ]
 
 
