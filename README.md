@@ -216,7 +216,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.4.0.** Released and installable from the Claude Code marketplace. Textual
+**v1.5.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders
@@ -224,8 +224,9 @@ TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 live filtering; rescan (`F5`);
 opt-in `--gc` retention with a once-daily auto-trigger; `session-explorer
 uninstall`; model-aware context sizing; macOS/Linux/WSL launchers (native
-Windows out of scope). Tested by pytest + bats in CI on ubuntu + macOS across
-Python 3.11–3.13.
+Windows out of scope); tmux-backed multi-session interaction (background windows,
+live preview snapshots, context-aware Enter, quit-guard). Tested by pytest + bats
+in CI on ubuntu + macOS across Python 3.11–3.13.
 
 ### Running the tests
 

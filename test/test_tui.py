@@ -33,7 +33,8 @@ def index_path(tmp_path):
     }, open(path, "w"))
     # Mark help as already seen AND retention as decided so neither first-launch
     # modal (help / retention prompt) pops over the tree these tests drive. Both
-    # have their own dedicated tests using marker-free index paths.
+    # have their own dedicated tests using marker-free index paths. (The tmux
+    # install offer is suppressed suite-wide via conftest's env guard.)
     (tmp_path / ".session-explorer.help-seen").write_text("")
     (tmp_path / ".session-explorer.retention-declined").write_text("")
     yield path
@@ -1421,3 +1422,225 @@ def test_help_text_documents_live_sessions():
     assert "spinner" in txt.lower()
     assert "○" in txt
     assert "active" in txt.lower()
+
+
+async def test_enter_starts_and_switches_when_stopped(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # nothing running
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.setdefault("start", (sid, cwd, label)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_window",
+                        lambda t: calls.setdefault("select", t) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")            # project node
+        await pilot.press("down")            # folder node
+        await pilot.press("down")            # session leaf (sid-1)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert calls["start"][0] == "sid-1"      # started the session
+    assert calls["start"][2] == "sprint14"   # human label, not the sid (name_cached planning/sprint14)
+    assert calls["select"] == "sid-1"        # auto-switched into it (no second Enter)
+    assert app._resume_target is None        # did NOT exit-to-resume
+
+
+async def test_double_click_resumes_like_enter(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_window",
+                        lambda t: calls.setdefault("select", t) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")            # project node
+        await pilot.press("down")            # folder node
+        await pilot.press("down")            # session leaf (sid-1)
+
+        class _Click:
+            widget = app._tree
+            chain = 2
+        # single click on the tree must NOT resume
+        class _Single(_Click):
+            chain = 1
+        app.on_click(_Single())
+        assert "start" not in calls
+        # double click resumes the cursored session, same as Enter
+        app.on_click(_Click())
+        await pilot.pause()
+    assert calls.get("start") == "sid-1"
+    assert calls.get("select") == "sid-1"
+
+
+def test_glyph_distinguishes_ownership():
+    from _pkg.tui import _glyph
+    # legacy (no tmux distinction): green spinner / dim hollow ○
+    assert "green" in _glyph("working", 0, None)
+    assert "○" in _glyph("idle", 0, None) and "dim" in _glyph("idle", 0, None)
+    # accessible (our tmux window): solid green ● for idle, green spinner working
+    assert "●" in _glyph("idle", 0, True) and "green" in _glyph("idle", 0, True)
+    assert "green" in _glyph("working", 0, True)
+    # elsewhere (peek-only): hollow ○ for idle — now GREEN (visible), not dim
+    assert "○" in _glyph("idle", 0, False) and "green" in _glyph("idle", 0, False)
+    assert "green" in _glyph("working", 0, False)
+    # not live → blank cell
+    assert _glyph(None, 0, True).strip() == ""
+
+
+async def test_enter_flips_into_running_window(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "select_window",
+                        lambda t: calls.setdefault("select", t) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")            # project node
+        await pilot.press("down")            # folder node
+        await pilot.press("down")            # session leaf (sid-1)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert calls["select"] == "sid-1"
+
+
+async def test_preview_shows_snapshot_for_live_session(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "capture_pane", lambda s: "LIVE FRAME for " + s)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._live_states = {"sid-1": "working"}
+        group = app._render_live_preview(
+            {"sid": "sid-1", "transcript_path": "/x", "name_cached": "planning/sprint14"},
+            "sid-1")
+    # Group.renderables is a list of rich Text objects; check the captured frame
+    # made it into the body.
+    bodies = " ".join(r.plain for r in group.renderables if hasattr(r, "plain"))
+    assert "LIVE FRAME for sid-1" in bodies
+
+
+@pytest.mark.asyncio
+async def test_quit_with_live_sessions_shuts_down(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "kill_server", lambda: calls.setdefault("kill", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit()                    # live sessions → guard modal
+        await pilot.pause()
+        await pilot.press("s")               # shut down all
+        await pilot.pause()
+    assert calls.get("kill") is True
+
+
+@pytest.mark.asyncio
+async def test_quit_without_sessions_exits_directly(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit()                    # no sessions → no modal, just exit
+        await pilot.pause()
+    # Reaching here without a hanging modal means it exited cleanly.
+
+
+@pytest.mark.asyncio
+async def test_mount_does_not_crash_without_tmux(index_path):
+    # Sanity: mount path must be safe when not tmux-hosted (no env var).
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._tmux_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_tmux_offer_shown_once_then_marked(tmp_path, monkeypatch):
+    import json
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    # Fresh index dir WITHOUT the tmux-declined marker; retention already decided,
+    # help already seen, so the tmux offer is the only modal.
+    path = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "folders": [], "sessions": {}}, open(path, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    monkeypatch.delenv("SESSION_EXPLORER_TMUX", raising=False)   # plain launch
+    # This test exercises the offer itself, so undo the suite-wide suppression.
+    monkeypatch.delenv("SESSION_EXPLORER_TMUX_NO_OFFER", raising=False)
+    # Force "tmux not installed" regardless of the test machine, so the offer fires.
+    monkeypatch.setattr(tuimod._tmux, "available", lambda which=None: False)
+    app = SessionExplorerApp(index_path=path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("n")           # decline the offer
+        await pilot.pause()
+    assert (tmp_path / ".session-explorer.tmux-declined").exists()
+
+
+@pytest.mark.asyncio
+async def test_enter_refuses_session_live_elsewhere(index_path, monkeypatch):
+    # Session is live (in the registry) but NOT one of our tmux windows: Enter
+    # must refuse to start a duplicate claude and must not exit-to-resume.
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.setdefault("start", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app, "_poll_live", lambda: None)   # freeze live state
+        app._live_states = {"sid-1": "working"}
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.press("down")
+        app.action_resume()
+        await pilot.pause()
+    assert "start" not in calls          # no duplicate claude started
+    assert app._resume_target is None    # did not exit-to-resume
+
+
+@pytest.mark.asyncio
+async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "set_persist_flag",
+                        lambda p: calls.setdefault("flag", p))
+    monkeypatch.setattr(tuimod._tmux, "detach_client",
+                        lambda: calls.setdefault("detach", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit()
+        await pilot.pause()
+        await pilot.press("b")            # leave running in background
+        await pilot.pause()
+    assert "flag" in calls               # persist-flag set before detaching
+    assert calls.get("detach") is True

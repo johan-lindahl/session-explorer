@@ -3,6 +3,43 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.5.0
+
+### Added
+- **tmux-backed multi-session interaction.** The explorer now runs as window 0
+  of a dedicated `tmux -L session-explorer` server and stays alive while you
+  work. `Enter` on a stopped session starts it and switches you straight in;
+  `Enter` on a running session flips in to interact. `space` shows a live
+  snapshot of the selected session in the preview pane — `capture-pane` for
+  our tmux windows, transcript-tail for sessions running elsewhere. Switching
+  back uses clickable status-bar tabs (primary) or F12 (keyboard fallback).
+  The status bar shows each session's human name, not its raw id, and shows a
+  `F12 → explorer` hint while you're inside a session.
+- **Context-aware Enter.** Stopped → start the session and switch into it
+  (single keypress); running → flip in; live-elsewhere (another terminal holds
+  the transcript) → refuse with a warning and offer peek-only, preventing
+  duplicate `claude --resume` processes on one JSONL.
+- **Accessibility-aware live glyphs.** When tmux-hosted, the tree distinguishes
+  sessions running in *our* tmux (solid green `●` — press Enter to jump in) from
+  sessions running in a separate terminal (hollow green `○` — peek-only). All
+  live glyphs are green for visibility; the shape carries the distinction.
+- **Quit-guard.** `q` with live sessions prompts: `[s]` shut down all and quit
+  (`tmux kill-server`), `[b]` leave running in the background (sets persist-flag
+  then detaches), or `[c]` cancel. Zero live sessions quit cleanly with no
+  prompt.
+- **Abrupt-close sentinel (Option C).** A `client-detached` hook in the
+  generated config kills the server on any unintentional detach (red button,
+  `Cmd+W`). Only the deliberate `[b]` leave-running path sets the persist-flag
+  beforehand, preventing orphaned sessions.
+- **Optional consented tmux install.** First launch without tmux shows a
+  one-time yes/no prompt; **yes** shows the install command for the detected
+  package manager (`brew`, `apt-get`, `dnf`, `pacman`, …) to run yourself,
+  **no** writes a marker so it is not re-nagged. The plugin only shows the
+  command — no binary bundling, no silent sudo.
+- **`execvp` fallback.** Without tmux (absent, too old, or declined), resume
+  behaves exactly as before (process-replace the explorer with `claude
+  --resume`). No regression for non-tmux users.
+
 ## 1.4.0
 
 ### Added

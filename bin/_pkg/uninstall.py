@@ -24,6 +24,10 @@ _OPERATIONAL_SIDECARS = (
     "session-explorer.log",
     "session-explorer-live.json",
     "session-explorer-live.json.lock",
+    # tmux interaction-layer artifacts.
+    ".session-explorer.tmux.conf",
+    ".session-explorer.tmux-persist",
+    ".session-explorer.tmux-declined",
 )
 _DATA_FILES = (
     "session-explorer-index.json",
@@ -98,12 +102,20 @@ def teardown(*, claude_dir: str, settings_path: "str | None" = None,
         os.unlink(symlink)
         actions.append(f"removed symlink {symlink}")
 
-    # 4. Operational sidecars.
+    # 4. Operational sidecars (includes tmux interaction-layer artifacts).
     for name in _OPERATIONAL_SIDECARS:
         path = os.path.join(claude_dir, name)
         if os.path.exists(path):
             os.unlink(path)
             actions.append(f"removed {name}")
+
+    # 4b. Kill our dedicated tmux server if it is still running (best-effort).
+    try:
+        from . import tmux as _tmux
+        if _tmux.available():
+            _tmux.kill_server()
+    except Exception:
+        pass
 
     # 5. User data (opt-in).
     if purge_data:

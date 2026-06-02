@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Implemented and released (**v1.4.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
+Implemented and released (**v1.5.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, the tmux interaction layer, and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
 
 ## What this project is
 
@@ -36,6 +36,10 @@ These are the constraints to preserve — violating any breaks the spec's contra
 - **One Python dep: vendored Textual.** Bundled under `bin/_pkg/_vendor/`. No `pip install` runs on either install path. Don't add other deps casually.
 - **Don't sum `input_tokens` / `output_tokens` from the JSONL for context-size stats.** Those are streaming-time estimates and have been observed to be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` to set expectations.
 - **No in-place `/compact`.** v1 surfaces context size only; compaction stays a manual `/compact` inside a resumed Claude session. Don't reintroduce SDK-driven compaction without revisiting the spec.
+- **Resume is non-destructive when tmux-hosted.** The explorer runs as tmux window 0 and stays alive; sessions are sibling windows. Without tmux it falls back to `execvp` (today's behaviour). Don't reintroduce unconditional exit-on-resume.
+- **tmux is an optional, consented dependency.** Detect + offer install (declined-marker at `~/.claude/.session-explorer.tmux-declined`), never bundle a binary, never silent-sudo. The dedicated `-L session-explorer` server never touches the user's tmux.
+- **Snapshots are read-only.** `capture-pane` for our tmux windows, transcript-tail otherwise. No embedded interactive terminal widget.
+- **Abrupt window-close shuts sessions down via the persist-flag sentinel (Option C).** Only the deliberate "leave running" quit path (`[b]`) sets the persist-flag before detaching; without it the `client-detached` hook kills the server. Don't leave lingering claude sessions on red-button close.
 
 ## Commands
 
@@ -48,7 +52,7 @@ These are the constraints to preserve — violating any breaks the spec's contra
 
 ## Implementation order
 
-All milestones (M1–M6) are shipped as of v1.3.0; the `SPEC.md` milestone table records what each delivered. For new work, keep `SPEC.md` authoritative — update it in the same change rather than letting code and spec diverge.
+All milestones (M1–M7) are shipped as of v1.5.0; the `SPEC.md` milestone table records what each delivered. For new work, keep `SPEC.md` authoritative — update it in the same change rather than letting code and spec diverge.
 
 ## Resolved design decisions
 

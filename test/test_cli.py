@@ -108,12 +108,13 @@ def test_list_renders_slash_path_as_nested(tmp_path):
     assert out.index("planning/") < out.index("sprint14")
 
 
-def test_launch_invokes_osascript_on_mac(monkeypatch):
+def test_launch_invokes_osascript_on_mac(tmp_path, monkeypatch):
     """Smoke test: `session-explorer launch` should attempt to spawn a new terminal."""
     # We run the binary in a subprocess where we can intercept by setting
     # SESSION_EXPLORER_DRY_RUN=1, which makes launcher.launch print the would-be
     # command and exit 0 without actually shelling out.
-    env = {**os.environ, "SESSION_EXPLORER_DRY_RUN": "1"}
+    # Redirect HOME so any tmux conf / persist-flag writes land in tmp_path, not ~/.claude.
+    env = {**os.environ, "SESSION_EXPLORER_DRY_RUN": "1", "HOME": str(tmp_path)}
     result = subprocess.run([_BIN, "launch"], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert "session-explorer" in result.stdout
@@ -184,3 +185,44 @@ def test_cli_live_never_errors_on_bad_input(tmp_path, monkeypatch):
     # Missing --sid still must not crash the hook caller.
     rc = _cli.main(["live", "--event", "Stop", "--sid", ""])
     assert rc == 0
+
+
+def test_launch_wraps_in_tmux_when_available(tmp_path, monkeypatch):
+    from _pkg import cli, tmux, launcher
+    # Redirect HOME so the generated config lands in the test's tmp dir, never
+    # the real ~/.claude.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(tmux, "available", lambda which=None: True)
+    monkeypatch.setattr(tmux, "detected_version", lambda: (3, 4))
+    monkeypatch.setattr(tmux, "meets_floor", lambda v: True)
+    captured = {}
+    monkeypatch.setattr(launcher, "launch",
+                        lambda cmd: captured.setdefault("cmd", cmd) or 0)
+    cli._cmd_launch()
+    assert "tmux -L session-explorer" in captured["cmd"]
+
+
+def test_launch_plain_when_tmux_absent(monkeypatch):
+    from _pkg import cli, tmux, launcher
+    monkeypatch.setattr(tmux, "available", lambda which=None: False)
+    captured = {}
+    monkeypatch.setattr(launcher, "launch",
+                        lambda cmd: captured.setdefault("cmd", cmd) or 0)
+    cli._cmd_launch()
+    assert "tmux" not in captured["cmd"]
+    assert captured["cmd"].startswith("exec ")
+
+
+def test_launch_clears_stale_persist_flag(tmp_path, monkeypatch):
+    from _pkg import cli, tmux, launcher
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(tmux, "available", lambda which=None: True)
+    monkeypatch.setattr(tmux, "detected_version", lambda: (3, 4))
+    monkeypatch.setattr(tmux, "meets_floor", lambda v: True)
+    monkeypatch.setattr(launcher, "launch", lambda cmd: 0)
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    flag = claude / ".session-explorer.tmux-persist"
+    flag.write_text("stale")
+    cli._cmd_launch()
+    assert not flag.exists()             # stale flag cleared on fresh launch

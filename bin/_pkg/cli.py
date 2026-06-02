@@ -179,11 +179,24 @@ def _cmd_uninstall(args) -> int:
 
 
 def _cmd_launch() -> int:
+    import shlex as _shlex
+    from . import tmux as _tmux
     here = os.path.dirname(os.path.realpath(__file__))
     # bin/_pkg/cli.py → bin/session-explorer
     bin_path = os.path.normpath(os.path.join(here, "..", "session-explorer"))
     # `exec` so closing the TUI closes the spawned terminal window cleanly.
-    target = f"exec {shlex.quote(bin_path)} tui"
+    target = f"exec {_shlex.quote(bin_path)} tui"
+    if _tmux.available() and _tmux.meets_floor(_tmux.detected_version()):
+        claude_dir = os.path.expanduser("~/.claude")
+        os.makedirs(claude_dir, exist_ok=True)   # may not exist yet (CI / first run)
+        flag = os.path.join(claude_dir, ".session-explorer.tmux-persist")
+        conf = os.path.join(claude_dir, ".session-explorer.tmux.conf")
+        with open(conf, "w") as f:
+            f.write(_tmux.build_config(persist_flag_path=flag))
+        # Stale persist-flag from a prior run must not suppress the next
+        # abrupt-close kill; clear it on every fresh launch.
+        _tmux.clear_persist_flag(flag)
+        target = _launcher.wrap_in_tmux(target, config_path=conf)
     return _launcher.launch(target)
 
 

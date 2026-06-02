@@ -18,6 +18,8 @@ from textual.widgets.option_list import Option
 
 from . import __version__
 from . import index as _index
+from . import snapshot as _snapshot
+from . import tmux as _tmux
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path
 
@@ -37,14 +39,24 @@ NAME_W = 24
 GUIDE_DEPTH = 4  # cells Textual indents per tree level (Tree.guide_depth)
 GLYPH_W = 2  # leading cells reserved on every row for the live-state glyph
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-IDLE_GLYPH = "○"
+IDLE_GLYPH = "○"   # idle, peek-only (running in a separate terminal)
+OURS_GLYPH = "●"   # idle, accessible (running in our tmux — Enter to jump in)
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
+SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
+LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 
 
-def _glyph(state: "str | None", frame: int) -> str:
+def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
     """A GLYPH_W-wide leading cell for a row's live state. Returns Textual
     console markup (rendered by Tree.process_label). Pure for unit testing.
+
+    `ours` distinguishes a session running in *our* tmux (accessible — press
+    Enter to jump in) from one running in a separate terminal (peek-only). All
+    live glyphs are green (visible); the SHAPE carries the distinction:
+      None  → legacy non-tmux look: green spinner / dim ○
+      True  → accessible: green spinner / solid green ● (jump in)
+      False → elsewhere:  green spinner / hollow green ○ (peek-only)
 
     Display width is always GLYPH_W cells after markup is stripped (the markup
     glyph is 1 cell + 1 separating space), so stat columns stay aligned."""
@@ -52,7 +64,11 @@ def _glyph(state: "str | None", frame: int) -> str:
         ch = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
         return f"[green]{ch}[/] "
     if state == "idle":
-        return f"[dim]{IDLE_GLYPH}[/] "
+        if ours is True:
+            return f"[green]{OURS_GLYPH}[/] "      # accessible: solid ●
+        if ours is False:
+            return f"[green]{IDLE_GLYPH}[/] "      # elsewhere: hollow ○ (visible)
+        return f"[dim]{IDLE_GLYPH}[/] "            # legacy non-tmux: unchanged
     return " " * GLYPH_W
 
 
@@ -197,17 +213,31 @@ def _help_text() -> str:
         "",
         "[b]Live sessions[/]",
         "Sessions running right now are flagged in the left column:",
-        "  [green]⠿[/] a spinner = actively working   [dim]○[/] = open but idle",
+        "  [green]⠿[/] spinner = working    [green]●[/] = idle, started here (Enter to jump in)",
+        "  [green]○[/] = idle, running in another terminal (peek-only via Space)",
         "The subtitle shows [b]● N active[/]. Live rows refresh from their",
         "transcript about every 2s, so the first prompt, message count, tokens",
         "and context % fill in and tick up as the agent works. Live sessions",
         "show even when unnamed.",
         "",
+        "[b]Running sessions in tmux[/]",
+        "When launched with tmux, the explorer stays open and each session you",
+        "resume runs in its own tmux window:",
+        "  • [b]Enter[/] (or double-click) starts a stopped session and switches you",
+        "    in; on a running session it flips you straight into it.",
+        "  • [b]F12[/] (or click the [b]explorer[/] tab in the bottom bar) returns",
+        "    to the tree; the session keeps running in the background.",
+        "  • [b]Space[/] peeks a live snapshot without leaving the explorer.",
+        "  • [b]q[/] with sessions running asks whether to shut them all down or",
+        "    leave them running (reattach next time you open the explorer).",
+        "",
         "[b]Keys[/]",
         key("↑ ↓", "Move between rows"),
         key("← →", "Collapse / expand a folder or project"),
-        key("Enter", "Resume the selected session"),
-        key("Space", "Toggle the preview pane"),
+        key("Enter", "Resume: start & switch into the session (flip into a running one)"),
+        key("2×click", "Same as Enter on a session row"),
+        key("Space", "Peek a live snapshot / toggle the preview pane"),
+        key("F12", "Return to the explorer from inside a session (tmux)"),
         key("r", "Rename a session (re-files it) or a folder (renames its subtree)"),
         key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
@@ -350,6 +380,32 @@ class ConfirmScreen(_PanelScreen):
         )
 
 
+class QuitScreen(_PanelScreen):
+    """Exit guard when sessions are still running. Returns 'shutdown',
+    'background', or None (cancel)."""
+
+    BINDINGS = [
+        Binding("s", "dismiss('shutdown')", "Shut down all", show=False),
+        Binding("b", "dismiss('background')", "Leave running", show=False),
+        Binding("escape", "dismiss(None)", "Cancel"),
+        Binding("c", "dismiss(None)", "Cancel", show=False),
+    ]
+
+    def __init__(self, names: list) -> None:
+        super().__init__()
+        self._names = names
+
+    def compose(self) -> ComposeResult:
+        listing = "\n".join(f"  • {n}" for n in self._names)
+        yield Vertical(
+            Label(f"{len(self._names)} Claude session(s) still running:\n{listing}",
+                  classes="dialog-title"),
+            Label("s shut down all · b leave running · esc/c cancel",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+
 class NotesScreen(_PanelScreen):
     """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
 
@@ -441,7 +497,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
-        Binding("f5", "rescan", "Rescan"),
+        Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
@@ -476,18 +532,34 @@ class SessionExplorerApp(App):
         # sid -> (TreeNode, child_depth) for in-place glyph updates without a
         # full rebuild. Rebuilt by _populate.
         self._row_nodes: dict[str, tuple] = {}
+        # tmux-hosted interaction layer (spec §1). The launcher sets this env
+        # var only when it wrapped the explorer in our dedicated tmux server.
+        self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
+        # sids that are live windows in *our* tmux server (accessible via flip),
+        # refreshed by _poll_live. Distinct from sessions live in other terminals.
+        self._our_windows: set = set()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
         if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         return True
+
+    def on_click(self, event) -> None:
+        # Double-click on a session row == pressing Enter on it. The single click
+        # that precedes it has already moved the tree cursor to that row, so
+        # action_resume acts on the right session. Scoped to the tree so clicks
+        # elsewhere (preview pane, etc.) don't resume.
+        if getattr(event, "chain", 1) == 2 and event.widget is self._tree:
+            node = self._tree.cursor_node
+            if node and node.data and "sid" in node.data:
+                self.action_resume()
 
     def on_key(self, event) -> None:
         # Hide the filter on Esc and refocus the tree. Stopping the event here
@@ -561,8 +633,40 @@ class SessionExplorerApp(App):
         self._poll_live()
         self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
+        self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
+
+    def _tmux_decline_marker(self) -> str:
+        return os.path.join(self._claude_dir(), ".session-explorer.tmux-declined")
+
+    def _maybe_offer_tmux(self) -> None:
+        # Only when NOT tmux-hosted (tmux was absent at /open) and not already
+        # declined. Mirrors the retention one-time prompt.
+        # Escape hatch for automated/non-interactive runs (CI, scripted launch):
+        # SESSION_EXPLORER_TMUX_NO_OFFER=1 suppresses the install nag entirely.
+        if os.environ.get("SESSION_EXPLORER_TMUX_NO_OFFER"):
+            return
+        if self._tmux_enabled or os.path.exists(self._tmux_decline_marker()):
+            return
+        if _tmux.available():       # present now but launch wasn't wrapped; skip
+            return
+
+        def after(ok: bool) -> None:
+            if not ok:
+                open(self._tmux_decline_marker(), "a").close()
+            else:
+                import platform
+                from . import tmux_install
+                cmd = tmux_install.install_command(platform.system()) \
+                    or "see https://github.com/tmux/tmux/wiki/Installing"
+                self.push_screen(ConfirmScreen(
+                    f"Run this, then re-open the explorer:\n\n  {cmd}\n\n(y/esc)"))
+        self.push_screen(ConfirmScreen(
+            "Run multiple sessions and monitor them live inside the explorer?\n"
+            "This needs tmux, which isn't installed. Set it up? (y = how, n = no)"),
+            after)
 
     def _maybe_open_help(self) -> None:
+        self._maybe_offer_tmux()
         # First run only: pop the help overlay so newcomers learn the slash-
         # folder naming and the named-only default. The marker is written up
         # front so a crash mid-session still counts as "seen".
@@ -666,7 +770,8 @@ class SessionExplorerApp(App):
         def render(parent, project_label, segments, node, child_depth):
             for sid, s in node["_sessions"]:
                 if self._matches(sid, s):
-                    glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
+                    glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
+                                   self._ours_flag(sid))
                     leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph),
                                            data={"sid": sid, **s})
                     self._row_nodes[sid] = (leaf, child_depth)
@@ -707,26 +812,54 @@ class SessionExplorerApp(App):
             return
         sid = node.data["sid"]
         project_path = node.data.get("project_path")
+        # Human label for the tmux status bar (the window name stays the sid).
+        _, _display = split_path(node.data.get("name_cached"))
+        label = _display or sid[:8]
 
+        # No tmux → today's behaviour: exit and execvp claude (handled in run()).
+        if not self._tmux_enabled:
+            self._exit_to_resume(sid, project_path)
+            return
+
+        running = _tmux.session_windows()
+        if sid in running:
+            _tmux.select_window(sid)                 # flip in to interact
+            return
+        if sid in self._live_states:
+            # Live in another terminal, not one of our windows: never start a
+            # second claude on the same transcript (spec §5).
+            self.push_screen(ConfirmScreen(
+                "This session is already running in another terminal.\n"
+                "Showing its progress here; press space to peek. (y/esc)"))
+            return
+        # Stopped → start the session in a tmux window and switch straight into it.
+        if _dead_worktree_repo(project_path):
+            def after(ok: bool) -> None:
+                if ok:
+                    cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
+                    _tmux.start_window(sid, cwd, label)
+                    _tmux.select_window(sid)   # auto-switch into the new session
+                    self._poll_live()
+            self.push_screen(ConfirmScreen(
+                "This session is from a deleted git worktree.\n"
+                "Resume anyway? This re-creates an empty directory:\n"
+                f"{project_path}"), after)
+        else:
+            cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
+            _tmux.start_window(sid, cwd, label)
+            _tmux.select_window(sid)   # auto-switch into the new session
+            self._poll_live()
+
+    def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:
         def proceed() -> None:
             self._resume_target = sid
             self._resume_cwd = project_path
             self.exit()
-
-        # If the session's git worktree was deleted, resuming has to recreate
-        # that directory (claude --resume is cwd-scoped). Warn before doing so.
         if _dead_worktree_repo(project_path):
-            def after(ok: bool) -> None:
-                if ok:
-                    proceed()
-            self.push_screen(
-                ConfirmScreen(
-                    "This session is from a deleted git worktree.\n"
-                    "Resume anyway? This re-creates an empty directory:\n"
-                    f"{project_path}"
-                ),
-                after,
-            )
+            self.push_screen(ConfirmScreen(
+                "This session is from a deleted git worktree.\n"
+                "Resume anyway? This re-creates an empty directory:\n"
+                f"{project_path}"), lambda ok: proceed() if ok else None)
         else:
             proceed()
 
@@ -1047,6 +1180,27 @@ class SessionExplorerApp(App):
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
+    def action_quit(self) -> None:
+        if not self._tmux_enabled:
+            self.exit()
+            return
+        running = _tmux.session_windows()
+        if not running:
+            self.exit()
+            return
+
+        def after(choice) -> None:
+            if choice == "shutdown":
+                _tmux.kill_server()
+                self.exit()
+            elif choice == "background":
+                flag = os.path.join(self._claude_dir(),
+                                    ".session-explorer.tmux-persist")
+                _tmux.set_persist_flag(flag)   # Option C: this detach is deliberate
+                _tmux.detach_client()
+            # None → cancel: stay in the explorer.
+        self.push_screen(QuitScreen(running), after)
+
     def action_toggle_unnamed(self) -> None:
         self._show_unnamed = not self._show_unnamed
         self._populate()
@@ -1063,10 +1217,20 @@ class SessionExplorerApp(App):
             new_states = _live.poll(self._live_path())
         except Exception:
             return  # never let the indicator break the UI
-        if new_states != self._live_states:
+        # Which live sessions are *our* tmux windows (accessible) vs elsewhere.
+        new_ours: set = set()
+        if self._tmux_enabled:
+            try:
+                new_ours = set(_tmux.session_windows())
+            except Exception:
+                new_ours = self._our_windows  # keep last good on a tmux hiccup
+        states_changed = new_states != self._live_states
+        ours_changed = new_ours != self._our_windows
+        if states_changed or ours_changed:
             old = self._live_states
             self._live_states = new_states
-            if self._visibility_changed(old, new_states):
+            self._our_windows = new_ours
+            if states_changed and self._visibility_changed(old, new_states):
                 sid = self._selected_sid()
                 self._populate()
                 self._restore_cursor_to_sid(sid)
@@ -1075,6 +1239,13 @@ class SessionExplorerApp(App):
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
+
+    def _ours_flag(self, sid: str) -> "bool | None":
+        """For _glyph: None when not tmux-hosted (no accessibility distinction),
+        else True if `sid` is one of our tmux windows, False if live elsewhere."""
+        if not self._tmux_enabled:
+            return None
+        return sid in self._our_windows
 
     def _selected_sid(self) -> "str | None":
         """The sid of the currently-selected row, or None if on a non-session node."""
@@ -1125,7 +1296,8 @@ class SessionExplorerApp(App):
         """Rewrite glyphs for all rows currently tracked, without rebuilding."""
         for sid, (leaf, depth) in self._row_nodes.items():
             data = leaf.data or {}
-            glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
+            glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
+                           self._ours_flag(sid))
             leaf.set_label(_row_label(sid, data, depth, glyph))
 
     def _do_live_metadata_refresh(self) -> None:
@@ -1184,7 +1356,8 @@ class SessionExplorerApp(App):
                 continue
             leaf, depth = node
             leaf.set_label(_row_label(sid, leaf.data or {}, depth,
-                                      _glyph(state, self._spinner_frame)))
+                                      _glyph(state, self._spinner_frame,
+                                             self._ours_flag(sid))))
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread
@@ -1244,10 +1417,36 @@ class SessionExplorerApp(App):
         node = self._tree.cursor_node
         data = node.data if node and node.data else {}
         if "sid" not in data:
-            # Cursor is on a project/folder node, not a session.
             self._preview.update("[dim]Select a session to preview.[/]")
             return
+        sid = data["sid"]
+        if self._tmux_enabled and sid in self._live_states:
+            self._preview.update(self._render_live_preview(data, sid))
+            return
         self._preview.update(_preview_text(data))
+
+    def _render_live_preview(self, data: dict, sid: str):
+        """Full metadata block (same as a stopped session) followed by a live
+        section: the captured tmux frame for our windows, or a transcript tail."""
+        from rich.console import Group
+        from rich.text import Text
+        text, is_ansi = _snapshot.snapshot(
+            sid=sid,
+            transcript_path=data.get("transcript_path", ""),
+            tmux_window_names=_tmux.session_windows(),
+            capture_fn=_tmux.capture_pane)
+        meta = Text.from_markup(_preview_text(data))
+        state = self._live_states.get(sid, "")
+        divider = Text.from_markup(f"\n[dim]──[/] [green]live[/] [dim]({state}) ──────[/]\n")
+        # Keep the metadata block visible: cap the live section to its last lines
+        # (a full-screen capture-pane can be 40+ rows). Splitting on \n is safe
+        # for ANSI — escape sequences never span lines.
+        lines = text.rstrip("\n").splitlines()
+        if len(lines) > LIVE_PREVIEW_LINES:
+            lines = lines[-LIVE_PREVIEW_LINES:]
+        clipped = "\n".join(lines)
+        body = Text.from_ansi(clipped) if is_ansi else Text(clipped)
+        return Group(meta, divider, body)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._refresh_preview()
