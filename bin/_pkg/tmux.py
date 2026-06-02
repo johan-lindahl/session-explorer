@@ -71,3 +71,24 @@ def build_kill_server() -> List[str]:
 
 def build_detach() -> List[str]:
     return build_base() + ["detach-client"]
+
+
+def build_config(*, persist_flag_path: str, back_key: str = "F12",
+                 socket: str = SOCKET) -> str:
+    """tmux config for the dedicated server. Self-contained; never touches the
+    user's ~/.tmux.conf. The client-detached hook implements Option C: an abrupt
+    window close (no persist-flag) kills the server; a deliberate detach that
+    first touched the flag is left to persist (spec §5)."""
+    detach_hook = (
+        f"set-hook -g client-detached "
+        f"'run-shell -b \"if [ ! -f {persist_flag_path} ]; then "
+        f"tmux -L {socket} kill-server; fi\"'"
+    )
+    return "\n".join([
+        "set -g mouse on",
+        "set -g status on",
+        "set -g remain-on-exit on",
+        f"bind -n {back_key} select-window -t {EXPLORER_WINDOW}",
+        detach_hook,
+        "",
+    ])

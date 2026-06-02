@@ -57,3 +57,21 @@ def test_build_kill_window_and_server_and_detach():
     assert tmux.build_kill_window("sid-9")[-2:] == ["-t", "sid-9"]
     assert tmux.build_kill_server()[-1] == "kill-server"
     assert tmux.build_detach()[-1] == "detach-client"
+
+
+def test_build_config_contains_core_settings():
+    conf = tmux.build_config(persist_flag_path="/tmp/se.flag", back_key="F12")
+    assert "set -g mouse on" in conf
+    assert "set -g status on" in conf
+    assert "set -g remain-on-exit on" in conf
+    # Back-to-explorer key (no-prefix root binding):
+    assert "bind -n F12 select-window -t explorer" in conf
+    # Option C: kill the server on detach unless the persist-flag is present.
+    assert "client-detached" in conf
+    assert "/tmp/se.flag" in conf
+    assert "kill-server" in conf
+
+
+def test_build_config_respects_custom_back_key():
+    conf = tmux.build_config(persist_flag_path="/tmp/f", back_key="C-g")
+    assert "bind -n C-g select-window -t explorer" in conf
