@@ -1522,6 +1522,8 @@ def _derive_project_cwd(sessions: dict, project_label: str) -> "str | None":
         if not path:
             continue
         key = s.get("last_active_at") or ""
+        # >= so the last session encountered wins on equal/missing timestamps;
+        # any recent path in the project is an acceptable cwd, so ties are fine.
         if best is None or key >= best_key:
             best, best_key = path, key
     if not best:

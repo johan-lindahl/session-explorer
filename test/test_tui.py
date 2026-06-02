@@ -978,6 +978,31 @@ def test_resume_argv_dash_leading_id_stays_a_value():
     assert _resume_argv("-foo") == ["claude", "--resume=-foo"]
 
 
+def test_new_session_argv_no_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "feature") == [
+        "claude", "--session-id", "sid-9", "-n", "feature"]
+
+
+def test_new_session_argv_bare_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "feature", worktree="") == [
+        "claude", "--session-id", "sid-9", "-n", "feature", "-w"]
+
+
+def test_new_session_argv_named_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "feature", worktree="wt1") == [
+        "claude", "--session-id", "sid-9", "-n", "feature", "-w", "wt1"]
+
+
+def test_new_session_argv_name_with_space_is_one_token():
+    from _pkg.tui import _new_session_argv
+    # execvp takes a list, so a spaced name stays a single argv token (no quoting).
+    argv = _new_session_argv("sid-9", "my session")
+    assert argv[4] == "my session"
+
+
 def test_preview_text_shows_model():
     from _pkg.tui import _preview_text
     s = {"sid": "x", "name_cached": "n", "tokens_estimate": 620000,
