@@ -402,7 +402,7 @@ tmux -L session-explorer -f <generated.conf> new-session -A -s explorer 'exec se
 
 - **`-L session-explorer`** — fully isolated from the user's personal tmux server, config, and keybindings. The plugin never reads or writes `~/.tmux.conf`.
 - **`-A` (attach-or-create)** — relaunching `/open` reattaches to an existing server. Sessions started in a previous explorer window **survive closing and reopening** the explorer; `new-session -A` is also the reconciliation mechanism: on mount, the explorer calls `tmux list-windows` to rediscover any still-running session windows.
-- The explorer is the **left pane** of the `explorer` window (window name `explorer`, constant `EXPLORER_WINDOW`). The active session is **joined as the right pane** (`join-pane -h -p 65 -s <sid> -t explorer`, `DOCK_PCT=65`). Inactive sessions are **background windows** named by their session id (`tmux new-window -d -n <sid>`). For a background session the `session_id → window` mapping is the window name — no separate registry; the docked claude pane is identified relative to the explorer's own pane (`$TMUX_PANE` → `_self_pane`; `docked_pane(self_pane)` returns the other pane in the explorer window). The currently-docked sid is tracked in `_docked_sid`.
+- The explorer is the **left pane** of the `explorer` window (window name `explorer`, constant `EXPLORER_WINDOW`). The active session is **joined as the right pane** (`join-pane -h -l 65% -s <sid> -t explorer`, `DOCK_PCT=65`; size is `-l <n>%`, since `join-pane` has no `-p` flag). Inactive sessions are **background windows** named by their session id (`tmux new-window -d -n <sid>`). For a background session the `session_id → window` mapping is the window name — no separate registry; the docked claude pane is identified relative to the explorer's own pane (`$TMUX_PANE` → `_self_pane`; `docked_pane(self_pane)` returns the other pane in the explorer window). The currently-docked sid is tracked in `_docked_sid`.
 - `launcher.py` wraps the existing `target_command` in the tmux invocation when `tmux.available()` is true; otherwise passes the command through unchanged.
 
 **No-tmux fallback:** when tmux is absent or declined, `tui.py:run` does `os.execvp("claude", …)` (today's behaviour). The feature is purely additive.
@@ -457,14 +457,14 @@ A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), pas
 
 ### tmux dependency — optional and consented
 
-- **Detect** at launch: `tmux -V`, require ~3.0+ (for `capture-pane -e`, root bindings, status styling). `tmux.py` owns detection and version parsing.
+- **Detect** at launch: `tmux -V`, require 3.1+ (for `join-pane -l <n>%` percentage dock sizing, plus `capture-pane -e`, root bindings, status styling). `tmux.py` owns detection and version parsing.
 - **Missing** → a one-time yes/no consent prompt mirroring the retention pattern. **Yes** shows the install command for the detected package manager (`brew install tmux` on macOS; `sudo apt-get install -y tmux` / `dnf` / `pacman` / `zypper` / `apk` on Linux) for the user to run, then re-open. **No** writes a declined-marker (`~/.claude/.session-explorer.tmux-declined`) so the user is not re-nagged. The plugin only *shows* the command — it never runs the install itself (no silent sudo).
 - **No bundled binary.** Auto-install is package-manager-based only, never silent, never sudo-without-asking. Vendoring a static tmux binary is rejected — against the "one vendored dep" ethos.
 - **Declined or unavailable** → `execvp` fallback (§ *Process model*). The explorer remains fully functional; only background monitoring and interaction are disabled.
 
 ### New files
 
-- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/`detected_version()`, pure `build_*` argv builders + `build_config(*, persist_flag_path, switch_key, zoom_key, socket)`, persist-flag helpers (`set`/`clear`/`persist_flag_set`), and thin executing wrappers. Split-pane wrappers: `dock`/`undock` (`build_dock` = `join-pane -h -p 65`, `build_undock` = `break-pane -d`), `list_panes`, `docked_pane` (the pane in the explorer window that is not `$TMUX_PANE`), `select_pane`. Plus the background-window wrappers (`start_window`, `start_new_session_window`, `capture_pane`, `list_windows`, `session_windows`, `kill_window`, `kill_server`, `detach_client`). `build_select_window`/`select_window` and `build_set_label`/`set_label` still exist but are no longer on the resume/new-session paths (the label is metadata-only — there are no window tabs). The dedicated server is created with `new-session -A` (attach-or-create), so there is no explicit ensure-server step. Pure logic is unit-tested; wrappers are covered by mocked TUI tests + the spikes.
+- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/`detected_version()`, pure `build_*` argv builders + `build_config(*, persist_flag_path, switch_key, zoom_key, socket)`, persist-flag helpers (`set`/`clear`/`persist_flag_set`), and thin executing wrappers. Split-pane wrappers: `dock`/`undock` (`build_dock` = `join-pane -h -l 65%`, `build_undock` = `break-pane -d`), `list_panes`, `docked_pane` (the pane in the explorer window that is not `$TMUX_PANE`), `select_pane`. Plus the background-window wrappers (`start_window`, `start_new_session_window`, `capture_pane`, `list_windows`, `session_windows`, `kill_window`, `kill_server`, `detach_client`). `build_select_window`/`select_window` and `build_set_label`/`set_label` still exist but are no longer on the resume/new-session paths (the label is metadata-only — there are no window tabs). The dedicated server is created with `new-session -A` (attach-or-create), so there is no explicit ensure-server step. Pure logic is unit-tested; wrappers are covered by mocked TUI tests + the spikes.
 - **`bin/_pkg/snapshot.py`** — `snapshot(sid) -> renderable`: capture-pane path for tmux windows, transcript-tail path otherwise. Pure; testable with fixtures.
 
 ### Tunables (defaults)
@@ -476,7 +476,7 @@ A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), pas
 | Pane-switch key | F9 | configurable (`switch_key`); mouse-click also focuses |
 | Fullscreen-zoom key | F12 | configurable (`zoom_key`) |
 | Dock width | 65% | claude pane width when docked (`DOCK_PCT`) |
-| tmux version floor | ~3.0 | `capture-pane -e`, root bindings, status styling |
+| tmux version floor | 3.1 | `join-pane -l <n>%` dock sizing, `capture-pane -e`, root bindings, status styling |
 
 ## Disabling native auto-cleanup
 

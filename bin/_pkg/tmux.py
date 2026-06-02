@@ -16,7 +16,7 @@ import subprocess
 from typing import Callable, List, Optional
 
 SOCKET = "session-explorer"
-VERSION_FLOOR = (3, 0)
+VERSION_FLOOR = (3, 1)  # 3.1 adds `-l <n>%` sizing for join-pane (split dock)
 EXPLORER_WINDOW = "explorer"
 DOCK_PCT = 65  # claude pane width when docked beside the explorer tree
 
@@ -86,11 +86,12 @@ def build_select_window(target: str) -> List[str]:
 def build_dock(sid: str, pct: int = DOCK_PCT) -> List[str]:
     """Join the background window `sid` into the explorer window as a right-hand
     pane. `-h` makes the split horizontal (side by side); the joined (claude)
-    pane lands on the right at ~`pct`% width. `-p` (percentage) is used rather
-    than `-l <n>%` because the `%` suffix on `-l` requires tmux 3.1 while our
-    floor is 3.0."""
+    pane lands on the right at ~`pct`% width. Size is `-l <n>%`: `join-pane` has
+    no `-p` flag (that belongs to `split-window` and is gone from modern tmux —
+    `-p` yields "size missing"). The `%` suffix on `-l` needs tmux ≥ 3.1, which
+    is why VERSION_FLOOR is 3.1."""
     return build_base() + [
-        "join-pane", "-h", "-p", str(pct), "-s", sid, "-t", EXPLORER_WINDOW]
+        "join-pane", "-h", "-l", f"{pct}%", "-s", sid, "-t", EXPLORER_WINDOW]
 
 
 def build_undock(pane_id: str, sid: str) -> List[str]:

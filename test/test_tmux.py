@@ -13,8 +13,9 @@ def test_parse_version_returns_none_on_garbage():
 
 
 def test_meets_floor():
-    assert tmux.meets_floor((3, 0)) is True
+    assert tmux.meets_floor((3, 1)) is True
     assert tmux.meets_floor((3, 4)) is True
+    assert tmux.meets_floor((3, 0)) is False   # needs 3.1 for `-l <n>%` dock
     assert tmux.meets_floor((2, 9)) is False
 
 
@@ -141,17 +142,53 @@ def test_build_new_session_window_named_worktree():
 
 def test_build_dock_joins_session_into_explorer_on_the_right():
     # -h = horizontal split (side by side); source window `sid` becomes the
-    # right pane of the `explorer` window. `-p 65` sizes the joined (claude)
-    # pane to ~65% width.
+    # right pane of the `explorer` window. `-l 65%` sizes the joined (claude)
+    # pane to ~65% width. NB: join-pane has no `-p` flag (that's split-window
+    # only, and removed from modern tmux) — `-l <n>%` is the size syntax.
     assert tmux.build_dock("sid-1") == [
         "tmux", "-L", "session-explorer",
-        "join-pane", "-h", "-p", "65", "-s", "sid-1", "-t", "explorer"]
+        "join-pane", "-h", "-l", "65%", "-s", "sid-1", "-t", "explorer"]
 
 
 def test_build_dock_respects_custom_pct():
     assert tmux.build_dock("sid-1", pct=50) == [
         "tmux", "-L", "session-explorer",
-        "join-pane", "-h", "-p", "50", "-s", "sid-1", "-t", "explorer"]
+        "join-pane", "-h", "-l", "50%", "-s", "sid-1", "-t", "explorer"]
+
+
+def test_build_dock_actually_joins_a_pane_on_real_tmux():
+    # A pure-argv assertion can't catch a well-formed-but-wrong flag (the
+    # original `-p 65` returned "size missing" yet looked fine in the unit
+    # test). This runs build_dock's REAL argv against a throwaway tmux server
+    # and proves the explorer window goes from 1 pane to 2.
+    import shutil
+    import subprocess
+    import pytest
+    if shutil.which("tmux") is None or not tmux.meets_floor(tmux.detected_version()):
+        pytest.skip("tmux >= floor not available")
+    sock = "se-pytest-dock"
+    base = ["tmux", "-L", sock]
+
+    def panes():
+        out = subprocess.run(
+            base + ["list-panes", "-t", "explorer", "-F", "#{pane_id}"],
+            capture_output=True, text=True)
+        return [ln for ln in out.stdout.splitlines() if ln]
+
+    subprocess.run(base + ["kill-server"], capture_output=True)
+    try:
+        subprocess.run(base + ["new-session", "-d", "-s", "explorer",
+                               "-n", "explorer", "sleep 600"], check=True)
+        subprocess.run(base + ["new-window", "-d", "-n", "mysid",
+                               "sleep 600"], check=True)
+        assert len(panes()) == 1
+        # Run the real build_dock argv, but on the throwaway socket.
+        argv = base + tmux.build_dock("mysid")[3:]
+        rc = subprocess.run(argv, capture_output=True, text=True)
+        assert rc.returncode == 0, rc.stderr
+        assert len(panes()) == 2          # the dock actually happened
+    finally:
+        subprocess.run(base + ["kill-server"], capture_output=True)
 
 
 def test_build_undock_breaks_pane_back_to_named_background_window():
