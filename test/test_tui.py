@@ -1828,3 +1828,27 @@ def test_run_execvps_new_session(monkeypatch, tmp_path):
     assert chdirs == [str(target_dir)]
     assert execs == [("claude",
                       ["claude", "--session-id", "fixed-sid", "-n", "feature"])]
+
+
+def test_run_new_session_skips_chdir_when_cwd_missing(monkeypatch, tmp_path):
+    import _pkg.tui as tui_mod
+
+    missing = str(tmp_path / "does-not-exist")
+
+    class FakeApp:
+        _new_session_argv = ["claude", "--session-id", "fixed-sid", "-n", "feature"]
+        _new_session_cwd = missing
+        _resume_target = None
+        def run(self):
+            pass
+
+    monkeypatch.setattr(tui_mod, "SessionExplorerApp", lambda *a, **k: FakeApp())
+    chdirs, execs = [], []
+    monkeypatch.setattr(tui_mod.os, "chdir", lambda p: chdirs.append(p))
+    monkeypatch.setattr(tui_mod.os, "execvp",
+                        lambda f, argv: execs.append((f, argv)))
+
+    tui_mod.run()
+    assert chdirs == []  # nonexistent dir → no chdir
+    assert execs == [("claude",
+                      ["claude", "--session-id", "fixed-sid", "-n", "feature"])]

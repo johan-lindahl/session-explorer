@@ -1636,6 +1636,8 @@ def run() -> int:
         # chdir into the chosen project dir so claude (and `-w`) operate in the
         # right repo, then hand the window over to a fresh claude session.
         cwd = getattr(app, "_new_session_cwd", None)
+        # Fail open: if the chosen dir no longer exists, start from cwd as-is
+        # rather than aborting the launch.
         if cwd and os.path.isdir(cwd):
             os.chdir(cwd)
         os.execvp("claude", new_argv)
