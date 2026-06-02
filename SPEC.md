@@ -415,18 +415,18 @@ Fallback if the `client-detached` self-kill proves flaky: `destroy-unattached on
 
 ### Generated tmux config
 
-A config file generated at launch (under the plugin's runtime dir), passed via `-f`, so the dedicated server is self-contained. Contents: status bar with window tabs, mouse on (clickable tabs + flip), `bind -n F12 select-window -t explorer`, `remain-on-exit on`, `set-hook -g client-detached` (kill-server unless persist-flag), status-bar auto-hide while only the explorer window exists (non-resuming users see an unchanged full-screen explorer). No rebinding of any user key outside this server.
+A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), passed via `-f`, so the dedicated server is self-contained. Contents: status bar with window tabs, mouse on (clickable tabs + flip), `bind -n F12 select-window -t explorer`, `remain-on-exit on`, `set-hook -g client-detached` (kill-server unless persist-flag). The status bar stays on so the clickable window tabs are always available (an empty explorer simply shows `[0 explorer]`). No rebinding of any user key outside this server.
 
 ### tmux dependency — optional and consented
 
 - **Detect** at launch: `tmux -V`, require ~3.0+ (for `capture-pane -e`, root bindings, `remain-on-exit`, status styling). `tmux.py` owns detection and version parsing.
-- **Missing/too old** → one-time consent prompt mirroring the retention pattern: `[i] install now` (via detected package manager — `brew` on macOS without sudo; `apt`/`dnf`/`pacman`/… printed for user to run since they need sudo), `[s] show instructions`, `[n] not now`. Records the choice with a declined-marker (`~/.claude/.session-explorer.tmux-declined`) so the user is not re-nagged.
+- **Missing** → a one-time yes/no consent prompt mirroring the retention pattern. **Yes** shows the install command for the detected package manager (`brew install tmux` on macOS; `sudo apt-get install -y tmux` / `dnf` / `pacman` / `zypper` / `apk` on Linux) for the user to run, then re-open. **No** writes a declined-marker (`~/.claude/.session-explorer.tmux-declined`) so the user is not re-nagged. The plugin only *shows* the command — it never runs the install itself (no silent sudo).
 - **No bundled binary.** Auto-install is package-manager-based only, never silent, never sudo-without-asking. Vendoring a static tmux binary is rejected — against the "one vendored dep" ethos.
 - **Declined or unavailable** → `execvp` fallback (§ *Process model*). The explorer remains fully functional; only background monitoring and interaction are disabled.
 
 ### New files
 
-- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/version, `ensure_server`, `start_session_window`, `select_window`, `capture_pane`, `list_windows`, `kill_window`, `generate_config`. Pure logic + injected command runner for unit tests.
+- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/`detected_version()`, pure `build_*` argv builders + `build_config()`, persist-flag helpers (`set`/`clear`/`persist_flag_set`), and thin executing wrappers (`start_window`, `select_window`, `capture_pane`, `list_windows`, `session_windows`, `kill_window`, `kill_server`, `detach_client`). The dedicated server is created with `new-session -A` (attach-or-create), so there is no explicit ensure-server step. Pure logic is unit-tested; wrappers are covered by mocked TUI tests + the spikes.
 - **`bin/_pkg/snapshot.py`** — `snapshot(sid) -> renderable`: capture-pane path for tmux windows, transcript-tail path otherwise. Pure; testable with fixtures.
 
 ### Tunables (defaults)

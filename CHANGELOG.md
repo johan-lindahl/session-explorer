@@ -26,9 +26,10 @@ follows [semantic versioning](https://semver.org/).
   `Cmd+W`). Only the deliberate `[b]` leave-running path sets the persist-flag
   beforehand, preventing orphaned sessions.
 - **Optional consented tmux install.** First launch without tmux shows a
-  one-time prompt (`[i]` install via detected package manager, `[s]` show
-  instructions, `[n]` not now); declined via a marker file so it is not
-  re-nagged. No binary bundling, no silent sudo.
+  one-time yes/no prompt; **yes** shows the install command for the detected
+  package manager (`brew`, `apt-get`, `dnf`, `pacman`, …) to run yourself,
+  **no** writes a marker so it is not re-nagged. The plugin only shows the
+  command — no binary bundling, no silent sudo.
 - **`execvp` fallback.** Without tmux (absent, too old, or declined), resume
   behaves exactly as before (process-replace the explorer with `claude
   --resume`). No regression for non-tmux users.
