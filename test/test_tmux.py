@@ -171,3 +171,15 @@ def test_build_list_panes_lists_explorer_window_pane_ids():
 def test_build_select_pane_targets_pane_id():
     assert tmux.build_select_pane("%7") == [
         "tmux", "-L", "session-explorer", "select-pane", "-t", "%7"]
+
+
+def test_docked_pane_returns_the_pane_that_is_not_the_explorer():
+    # list_panes returns both panes; the explorer's own pane id ($TMUX_PANE)
+    # is filtered out, leaving the docked claude pane.
+    panes = lambda: ["%0", "%3"]
+    assert tmux.docked_pane("%0", _list=panes) == "%3"
+
+
+def test_docked_pane_returns_none_when_only_explorer_pane():
+    panes = lambda: ["%0"]
+    assert tmux.docked_pane("%0", _list=panes) is None

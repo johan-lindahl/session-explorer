@@ -228,6 +228,37 @@ def select_window(target: str) -> int:
     return _call(build_select_window(target))
 
 
+def dock(sid: str, pct: int = DOCK_PCT) -> int:
+    """Join the background window `sid` into the explorer window as the right
+    pane. join-pane consumes the source window and focuses the joined pane, so
+    the user lands in claude ready to type."""
+    return _call(build_dock(sid, pct))
+
+
+def undock(pane_id: str, sid: str) -> int:
+    return _call(build_undock(pane_id, sid))
+
+
+def list_panes() -> List[str]:
+    out = _capture(build_list_panes())
+    return [ln for ln in out.splitlines() if ln]
+
+
+def docked_pane(self_pane: "str | None",
+                _list: Callable[[], List[str]] = list_panes) -> "str | None":
+    """The id of the docked claude pane: the one pane in the explorer window
+    that is NOT the explorer's own pane (`self_pane`, from $TMUX_PANE).
+    Returns None when nothing is docked."""
+    for p in _list():
+        if p != self_pane:
+            return p
+    return None
+
+
+def select_pane(pane_id: str) -> int:
+    return _call(build_select_pane(pane_id))
+
+
 def capture_pane(target: str) -> str:
     return _capture(build_capture(target))
 
