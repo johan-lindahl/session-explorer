@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.7.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
+**Status:** Shipped — **v1.8.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 adds a subscription-usage progress bar in the tmux status line.
 
 ## Goals
 
@@ -125,6 +125,7 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
 | `u` | Toggle visibility of unnamed sessions (hidden by default). |
+| `g` | Toggle the subscription-usage bar in the tmux status line (off by default; tmux-hosted only). Enable fires an immediate probe and starts a 5-min refresh interval; disable clears the bar. Off-then-on is the manual force-refresh. Inert without tmux. |
 | `F5` | Rescan: import any sessions under `~/.claude/projects/` not yet tracked and refresh cached fields (runs `index.reindex` in a background worker, with a determinate progress bar shown in a modal panel — the same centered `_PanelScreen` styling as the other dialogs, overlaid on the dimmed tree). Use after a fresh install to pull in pre-existing sessions. |
 | `/` | Live filter across name, notes, first prompt, summary. |
 | `h` | Show the help overlay (slash-folder naming, the named-only default + `u`, full key list, author credit). Auto-opens once on first launch, then only on demand. |
@@ -457,6 +458,30 @@ Fallback if the `client-detached` self-kill proves flaky: `destroy-unattached on
 
 A config file generated at launch (`~/.claude/.session-explorer.tmux.conf`), passed via `-f`, so the dedicated server is self-contained. `build_config(*, persist_flag_path, switch_key="F9", zoom_key="F12", socket=SOCKET)`. Contents: status bar on but with **no window tabs** (`window-status-format ""` / `window-status-current-format ""` — the explorer tree is the only switcher), mouse on (click-to-focus a pane), `bind -n F9 select-pane -t :.+` (pane-switch), `bind -n F12 resize-pane -Z` (fullscreen-zoom), `set-hook -g client-detached` (kill-server unless persist-flag), and a `status-right` hint `F9 ⇄ switch · F12 ⤢ full`. `remain-on-exit` is intentionally left off so exited panes auto-close. No rebinding of any user key outside this server.
 
+### Subscription-usage bar
+
+An opt-in progress bar showing the current 5-hour session usage (0–100%) appears in `status-left` of the tmux status line.  The existing `F9 ⇄ switch · F12 ⤢ full` hint stays on `status-right` unchanged.  Example rendering:
+
+```
+ [██░░░░░░░░░░] 18% ↺1:29am
+```
+
+**Enablement.** The bar is **off by default**.  A marker file `~/.claude/.session-explorer.usage-bar` signals "enabled" (persists across launches).  Press `g` in the TUI to toggle it on or off.  Enable fires one probe immediately so the bar appears within a few seconds, then starts a 5-minute refresh interval.  Disable removes the marker, cancels the interval, and clears `status-left`.  There is no separate refresh key — toggling `g` off then on is the manual force-refresh.  The feature is entirely **inert when not tmux-hosted**.
+
+**Data source and probe mechanism.** There is no sanctioned local or API path to the subscription usage percentage: no local file caches it, there is no `claude usage` CLI subcommand, and the OAuth token Claude Code uses is rejected by the public Messages API (community tools that replicate the call are flagged as risking account bans).  Instead, the bar is produced by **scraping the official client**: a hidden throwaway `claude` is spawned on the dedicated `-L session-explorer` tmux server, driven to run `/usage`, and the rendered panel is captured with `capture-pane` and parsed by `usage.parse_usage`.  This uses the official client directly (lowest ban risk, no token juggling) and reuses the project's existing tmux capture machinery.
+
+Probe details:
+
+- The probe session runs in a **fixed cwd** `~/.claude/.session-explorer-probe/` so all probe transcripts land in one predictable project folder under `~/.claude/projects/`.
+- Env `SESSION_EXPLORER_PROBE=1` is set on the spawned process.  Both the `session-start.sh` and `session-live.sh` hooks check for this variable and **bail out immediately**, so probe sessions are never recorded in the index, live registry, or tree.
+- After each capture the probe transcripts in that folder are **deleted** by `usage.cleanup_probe_transcripts`, keeping the litter fully contained.
+- The probe window is torn down with `send-keys 'Escape'` (to dismiss the modal Settings screen that `/usage` opens) + a `kill-window` backstop that terminates the throwaway claude either way.
+- The orchestration runs in a **Textual thread worker** (decorated `@work(thread=True, exclusive=True, group="usage")` on `_refresh_usage`) so bounded waits never block the TUI event loop.
+
+**Failure handling.** Any error — `claude` missing, trust prompt unresolved, parse miss, any timeout — degrades silently: the prior bar is left in place (or cleared on explicit toggle-off) and the UI is never blocked.  The worker swallows all exceptions and writes no log.  Failures never block the TUI or surface an error dialog.
+
+**Scope.** Session (5-hour) bucket only.  No weekly or model-breakdown display in v1.  No configurable cadence or format.
+
 ### tmux dependency — optional and consented
 
 - **Detect** at launch: `tmux -V`, require 3.1+ (for `join-pane -l <n>%` percentage dock sizing, plus `capture-pane -e`, root bindings, status styling). `tmux.py` owns detection and version parsing.
@@ -553,6 +578,7 @@ session-explorer/
 │       ├── jsonl.py                      ← read names, prompts, message counts
 │       ├── tui.py                        ← Textual app
 │       ├── launcher.py                   ← OS-specific terminal spawning
+│       ├── usage.py                      ← usage-bar scrape + parse + render
 │       └── _vendor/                      ← bundled Textual + transitive deps
 ├── hooks/
 │   └── session-start.sh
@@ -589,7 +615,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.5.0). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.8.0). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|
@@ -601,6 +627,7 @@ All milestones below are **shipped** (current release: v1.5.0). The table is kep
 | M5 | Community-marketplace distribution. WSL launcher (`wt.exe` re-entry + fallback); native Windows out of scope. |
 | M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike validated (2026-05-29, macOS); end-to-end TUI smoke test optional (timers/animation covered by `run_test` tests). |
 | M7 | **tmux interaction layer** — `tmux.py` + `snapshot.py`; context-aware Enter (stop→start+switch-in, running→flip-in, live-elsewhere→refuse); accessible-vs-elsewhere live glyphs; generated tmux config (tabs/F12/`client-detached` sentinel); quit-guard; snapshot preview for selected live session; optional consented tmux install with declined-marker; `execvp` fallback without tmux. |
+| M8 | **Subscription-usage bar** — `usage.py` (parse + render); `tui.py` scheduler (`g` toggle, immediate-probe-on-enable, 5-min interval, clear-on-disable/quit); `SESSION_EXPLORER_PROBE=1` hook bail-out; transcript cleanup after each scrape; probe cwd `~/.claude/.session-explorer-probe/`; marker file `~/.claude/.session-explorer.usage-bar`; inert without tmux; silent-failure. |
 
 ## Design decisions (resolved)
 
@@ -612,3 +639,4 @@ A log of decisions that were open during design and have since been settled. Two
 - **In-place compaction.** *Still deferred* (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.
 - **Preview-pane content.** Settled: headline is the full display name (the grid truncates it), followed by project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. The `summary` block was dropped — the field is never populated today.
 - **`session-explorer browse` as a standalone shell command.** Not shipped — the TUI is only reachable via the slash command's launcher (and `session-explorer tui`/`launch`). Easy to add later as a thin CLI wrapper if users ask.
+- **Usage bar data source and bucket.** API-replication (using the Claude Code OAuth token against the Messages API) was rejected: the token is refused by the public API and community tools that spoof the Claude Code client are flagged as risking account bans. Scraping the official `claude` client via tmux `capture-pane` was chosen instead — it uses the official client (lowest ban risk, no token-refresh complexity) and reuses the project's existing capture machinery. Of the available `/usage` buckets (session/weekly/model breakdown), **session (5-hour) only** is displayed in v1 — it is the most actionable indicator of "can I keep working now" and fits the status-line width cleanly.

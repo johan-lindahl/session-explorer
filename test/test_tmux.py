@@ -238,3 +238,41 @@ def test_docked_pane_none_self_pane_returns_none():
     # Defensive: with no $TMUX_PANE we can't tell our own pane from claude's,
     # so report nothing docked rather than risk break-pane'ing the explorer.
     assert tmux.docked_pane(None, _list=lambda: ["%0", "%3"]) is None
+
+
+def test_build_probe_window_sets_env_and_cwd():
+    argv = tmux.build_probe_window("/home/x/.claude/.session-explorer-probe")
+    assert argv == [
+        "tmux", "-L", "session-explorer", "new-window", "-d",
+        "-n", "se-usage-probe", "-c", "/home/x/.claude/.session-explorer-probe",
+        "SESSION_EXPLORER_PROBE=1 exec claude",
+    ]
+
+
+def test_build_send_keys_passes_keys_through():
+    assert tmux.build_send_keys("se-usage-probe", "/usage", "Enter") == [
+        "tmux", "-L", "session-explorer", "send-keys", "-t", "se-usage-probe",
+        "/usage", "Enter",
+    ]
+
+
+def test_build_capture_plain_has_no_escapes_flag():
+    assert tmux.build_capture_plain("se-usage-probe") == [
+        "tmux", "-L", "session-explorer", "capture-pane", "-p",
+        "-t", "se-usage-probe",
+    ]
+
+
+def test_build_set_status_left_escapes_percent():
+    # tmux runs status-left through strftime, so a literal % must be doubled
+    # ('%%') or it gets eaten. render_bar emits a single % (human-readable);
+    # the tmux builder is where the escaping happens.
+    assert tmux.build_set_status_left(" [██] 1% ↺1am") == [
+        "tmux", "-L", "session-explorer", "set-option", "-g",
+        "status-left", " [██] 1%% ↺1am",
+    ]
+
+
+def test_build_config_sets_status_left_length():
+    cfg = tmux.build_config(persist_flag_path="/tmp/flag")
+    assert "set -g status-left-length 40" in cfg

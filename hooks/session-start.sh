@@ -7,6 +7,10 @@
 
 set -u
 
+# Usage-bar probe sessions (see usage.py / SESSION_EXPLORER_PROBE) must leave no
+# trace: no current-pointer, no index record, no GC. Bail out before any work.
+if [ "${SESSION_EXPLORER_PROBE:-}" = "1" ]; then exit 0; fi
+
 CLAUDE_DIR="${HOME}/.claude"
 LOG="${CLAUDE_DIR}/session-explorer.log"
 SETTINGS="${CLAUDE_DIR}/settings.json"

@@ -21,6 +21,7 @@ from . import __version__
 from . import index as _index
 from . import snapshot as _snapshot
 from . import tmux as _tmux
+from . import usage as _usage
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path
 
@@ -44,6 +45,7 @@ IDLE_GLYPH = "○"   # idle, peek-only (running in a separate terminal)
 OURS_GLYPH = "●"   # idle, accessible (running in our tmux — Enter to jump in)
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
+USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
@@ -555,6 +557,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
+        Binding("g", "toggle_usage", "Usage bar"),
         Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
@@ -605,16 +608,21 @@ class SessionExplorerApp(App):
         self._docked_sid: str | None = None
         # Debounce timer for cursor-follow docking; reset on every cursor move.
         self._sync_timer = None
+        # Usage-bar refresh timer (5-min interval); None when the bar is off.
+        self._usage_timer = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
         if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+            return False
+        # The usage bar only exists in the tmux-hosted layout.
+        if action == "toggle_usage" and not self._tmux_enabled:
             return False
         return True
 
@@ -701,6 +709,10 @@ class SessionExplorerApp(App):
         self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
         self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
+        # Usage bar: restore it if the user left it enabled, but only in the
+        # tmux-hosted layout (it has nowhere to render otherwise).
+        if self._tmux_enabled and self._usage_enabled():
+            self._start_usage()
 
     def _tmux_decline_marker(self) -> str:
         return os.path.join(self._claude_dir(), ".session-explorer.tmux-declined")
@@ -1393,14 +1405,17 @@ class SessionExplorerApp(App):
             return
         running = self._running_sids()
         if not running:
+            _tmux.set_status_left("")
             self.exit()
             return
 
         def after(choice) -> None:
             if choice == "shutdown":
+                _tmux.set_status_left("")
                 _tmux.kill_server()
                 self.exit()
             elif choice == "background":
+                _tmux.set_status_left("")
                 flag = os.path.join(self._claude_dir(),
                                     ".session-explorer.tmux-persist")
                 _tmux.set_persist_flag(flag)   # Option C: this detach is deliberate
@@ -1411,6 +1426,56 @@ class SessionExplorerApp(App):
     def action_toggle_unnamed(self) -> None:
         self._show_unnamed = not self._show_unnamed
         self._populate()
+
+    def _usage_marker(self) -> str:
+        return os.path.join(self._claude_dir(), ".session-explorer.usage-bar")
+
+    def _usage_enabled(self) -> bool:
+        return os.path.exists(self._usage_marker())
+
+    def action_toggle_usage(self) -> None:
+        if not self._tmux_enabled:
+            return
+        if self._usage_enabled():
+            try:
+                os.remove(self._usage_marker())
+            except OSError:
+                pass
+            self._stop_usage()
+            self.notify("Usage bar off")
+        else:
+            with open(self._usage_marker(), "a"):
+                pass
+            self._start_usage()
+            self.notify("Usage bar on — checking…")
+
+    def _start_usage(self) -> None:
+        # Enabling fires one probe immediately so the bar appears within seconds;
+        # toggling g off then on is therefore the manual "check now" path.
+        self._refresh_usage()
+        if self._usage_timer is None:
+            self._usage_timer = self.set_interval(
+                USAGE_POLL_INTERVAL, self._refresh_usage)
+
+    def _stop_usage(self) -> None:
+        if self._usage_timer is not None:
+            self._usage_timer.stop()
+            self._usage_timer = None
+        _tmux.set_status_left("")
+
+    @work(thread=True, exclusive=True, group="usage")
+    def _refresh_usage(self) -> None:
+        """Off-thread: scrape /usage (spawns a hidden claude, ~seconds), then push
+        the rendered bar on the UI thread. `exclusive` so a slow scrape can't
+        stack across the 5-min interval."""
+        info = _usage.scrape_usage(self._claude_dir())
+        self.call_from_thread(self._apply_usage, info)
+
+    def _apply_usage(self, info) -> None:
+        if info is not None:
+            _tmux.set_status_left(_usage.render_bar(info))
+        # On a miss we leave the previous bar in place (transient blip) rather
+        # than blanking it; an explicit `g` off clears it.
 
     def _poll_live(self) -> None:
         """Refresh live-session state from the registry (called on a timer).
