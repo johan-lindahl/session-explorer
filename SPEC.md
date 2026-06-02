@@ -434,11 +434,11 @@ Only the selected session is polled for a full snapshot. Tree-wide liveness uses
 
 No new liveness mechanism. A session started via `tmux new-window 'claude --resume …'` is an ordinary Claude session; the existing `session-live.sh` hook registers it in `session-explorer-live.json` and the TUI's existing poll renders the working/idle glyph.
 
-When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *our* tmux windows (you can dock into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our windows (`session_windows()`); `_glyph(state, frame, ours)` keeps all live glyphs **green** (visible) and uses the **shape** to distinguish: **accessible** → solid green `●` (idle) / green spinner (working); **elsewhere** → hollow green `○` (idle) / green spinner (working). Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
+When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *ours* (you can dock/focus into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our sessions (`_running_sids()` — background windows plus the docked pane, so the docked row shows accessible `●` rather than peek-only `○`); `_glyph(state, frame, ours)` keeps all live glyphs **green** (visible) and uses the **shape** to distinguish: **accessible** → solid green `●` (idle) / green spinner (working); **elsewhere** → hollow green `○` (idle) / green spinner (working). Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
 
 ### Lifecycle and quit-guard
 
-**Quit (`q`) with live sessions** opens a guarded prompt listing running windows and offering:
+**Quit (`q`) with live sessions** opens a guarded prompt listing the running set and offering (the running set is `_running_sids()` = background windows **plus** the docked session, since the docked claude is a pane, not a window, and `session_windows()` alone would miss it — otherwise a lone docked session would let `q` exit silently and kill it):
 - **[s] shut down all and quit** — `tmux kill-server` → terminal closes cleanly.
 - **[b] leave running in the background** — sets the persist-flag (marker file) then detaches. The server and sessions stay alive headless.
 - **[c] cancel** — no action.
