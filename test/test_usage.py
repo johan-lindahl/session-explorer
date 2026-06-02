@@ -48,3 +48,19 @@ def test_render_bar_clamps_rounding():
     # 99% of 10 cells rounds to 10 filled but must not exceed cells
     s = usage.render_bar(usage.UsageInfo(99, "9:00am"), cells=10)
     assert s.count("█") <= 10
+
+
+def test_has_usage_panel_detects_percent_line():
+    assert usage.has_usage_panel("blah 18% used blah") is True
+    assert usage.has_usage_panel("welcome to claude") is False
+
+
+def test_looks_like_trust_prompt():
+    assert usage.looks_like_trust_prompt(
+        "Do you trust the files in this folder?") is True
+    assert usage.looks_like_trust_prompt("normal prompt") is False
+
+
+def test_probe_cwd_under_claude_dir():
+    assert usage.probe_cwd("/home/x/.claude") == \
+        "/home/x/.claude/.session-explorer-probe"

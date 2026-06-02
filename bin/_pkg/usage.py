@@ -62,3 +62,22 @@ def render_bar(info: UsageInfo, cells: int = CELLS) -> str:
     n = max(0, min(cells, round(info.percent / 100 * cells)))
     bar = FILL * n + EMPTY * (cells - n)
     return f" [{bar}] {info.percent}% ↺{info.reset_label}"
+
+
+import os
+
+PROBE_DIRNAME = ".session-explorer-probe"
+
+
+def probe_cwd(claude_dir: str) -> str:
+    """Fixed cwd for the throwaway probe claude, so all probe transcripts land in
+    one predictable project folder we can clean up afterward."""
+    return os.path.join(claude_dir, PROBE_DIRNAME)
+
+
+def has_usage_panel(text: str) -> bool:
+    return bool(_PERCENT.search(_strip_ansi(text or "")))
+
+
+def looks_like_trust_prompt(text: str) -> bool:
+    return "trust the files in this folder" in (text or "").lower()
