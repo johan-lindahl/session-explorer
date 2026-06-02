@@ -1451,13 +1451,13 @@ def test_glyph_distinguishes_ownership():
     from _pkg.tui import _glyph
     # legacy (no tmux distinction): green spinner / dim hollow ○
     assert "green" in _glyph("working", 0, None)
-    assert "○" in _glyph("idle", 0, None)
-    # accessible (our tmux window): solid ● for idle, green spinner for working
-    assert "●" in _glyph("idle", 0, True)
+    assert "○" in _glyph("idle", 0, None) and "dim" in _glyph("idle", 0, None)
+    # accessible (our tmux window): solid green ● for idle, green spinner working
+    assert "●" in _glyph("idle", 0, True) and "green" in _glyph("idle", 0, True)
     assert "green" in _glyph("working", 0, True)
-    # elsewhere (peek-only): hollow ○ for idle, dim spinner for working
-    assert "○" in _glyph("idle", 0, False)
-    assert "dim" in _glyph("working", 0, False)
+    # elsewhere (peek-only): hollow ○ for idle — now GREEN (visible), not dim
+    assert "○" in _glyph("idle", 0, False) and "green" in _glyph("idle", 0, False)
+    assert "green" in _glyph("working", 0, False)
     # not live → blank cell
     assert _glyph(None, 0, True).strip() == ""
 

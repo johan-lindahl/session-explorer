@@ -400,7 +400,7 @@ Only the selected session is polled for a full snapshot. Tree-wide liveness uses
 
 No new liveness mechanism. A session started via `tmux new-window 'claude --resume …'` is an ordinary Claude session; the existing `session-live.sh` hook registers it in `session-explorer-live.json` and the TUI's existing poll renders the working/idle glyph.
 
-When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *our* tmux windows (you can flip into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our windows (`session_windows()`); `_glyph(state, frame, ours)` renders: **accessible** → green spinner (working) / solid green `●` (idle); **elsewhere** → dim spinner / hollow `○`. Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
+When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *our* tmux windows (you can flip into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our windows (`session_windows()`); `_glyph(state, frame, ours)` keeps all live glyphs **green** (visible) and uses the **shape** to distinguish: **accessible** → solid green `●` (idle) / green spinner (working); **elsewhere** → hollow green `○` (idle) / green spinner (working). Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
 
 ### Lifecycle and quit-guard
 

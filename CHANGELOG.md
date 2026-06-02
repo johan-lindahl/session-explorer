@@ -20,9 +20,9 @@ follows [semantic versioning](https://semver.org/).
   the transcript) → refuse with a warning and offer peek-only, preventing
   duplicate `claude --resume` processes on one JSONL.
 - **Accessibility-aware live glyphs.** When tmux-hosted, the tree distinguishes
-  sessions running in *our* tmux (green spinner / solid `●` — press Enter to
-  jump in) from sessions running in a separate terminal (dim spinner / hollow
-  `○` — peek-only).
+  sessions running in *our* tmux (solid green `●` — press Enter to jump in) from
+  sessions running in a separate terminal (hollow green `○` — peek-only). All
+  live glyphs are green for visibility; the shape carries the distinction.
 - **Quit-guard.** `q` with live sessions prompts: `[s]` shut down all and quit
   (`tmux kill-server`), `[b]` leave running in the background (sets persist-flag
   then detaches), or `[c]` cancel. Zero live sessions quit cleanly with no

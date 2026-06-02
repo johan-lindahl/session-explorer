@@ -52,21 +52,23 @@ def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
     console markup (rendered by Tree.process_label). Pure for unit testing.
 
     `ours` distinguishes a session running in *our* tmux (accessible — press
-    Enter to jump in) from one running in a separate terminal (peek-only):
-      None  → no tmux distinction (legacy look: green spinner / dim ○)
-      True  → accessible: green spinner / solid green ●
-      False → elsewhere:  dim spinner  / dim ○
+    Enter to jump in) from one running in a separate terminal (peek-only). All
+    live glyphs are green (visible); the SHAPE carries the distinction:
+      None  → legacy non-tmux look: green spinner / dim ○
+      True  → accessible: green spinner / solid green ● (jump in)
+      False → elsewhere:  green spinner / hollow green ○ (peek-only)
 
     Display width is always GLYPH_W cells after markup is stripped (the markup
     glyph is 1 cell + 1 separating space), so stat columns stay aligned."""
     if state == "working":
         ch = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-        color = "dim" if ours is False else "green"
-        return f"[{color}]{ch}[/] "
+        return f"[green]{ch}[/] "
     if state == "idle":
         if ours is True:
-            return f"[green]{OURS_GLYPH}[/] "
-        return f"[dim]{IDLE_GLYPH}[/] "
+            return f"[green]{OURS_GLYPH}[/] "      # accessible: solid ●
+        if ours is False:
+            return f"[green]{IDLE_GLYPH}[/] "      # elsewhere: hollow ○ (visible)
+        return f"[dim]{IDLE_GLYPH}[/] "            # legacy non-tmux: unchanged
     return " " * GLYPH_W
 
 
