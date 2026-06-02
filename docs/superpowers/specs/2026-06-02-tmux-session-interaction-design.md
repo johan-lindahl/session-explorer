@@ -88,6 +88,16 @@ No new mechanism. A session started via `tmux new-window 'claude --resume …'` 
 
 ## 5. Lifecycle & edge cases (approved defaults)
 
+**Why exit needs explicit handling:** the explorer is tmux window `0`, and a tmux session lives as long as *any* window exists. So quitting the explorer while session windows are open does **not** close the terminal — tmux would switch the client to a claude window. Both quit paths below must therefore be defined.
+
+- **Quit (`q`) with live sessions — guarded prompt.** If ≥1 *live* session window exists (process alive, not a `remain-on-exit` corpse), `q` opens a `ConfirmScreen`-style prompt listing them and offering: **[s] shut down all and quit** (`tmux kill-server` → terminal closes cleanly, today's behaviour), **[b] leave running in the background** (intentional detach — see persist-flag below), **[c] cancel**. **No silent default** — the choice is explicit, so background sessions are always deliberate. With zero live sessions, `q` quits cleanly with no prompt. `exited` corpses are killed silently on quit regardless.
+
+- **Window closed by the OS (red button / `Cmd+W`) — clean shutdown via sentinel (Option C).** An abrupt close SIGHUPs the tmux *client*, which **detaches without killing the server** — by default leaving every claude session running headless and invisible (the exact "lingering unaware" hazard). tmux cannot distinguish an abrupt close from an intentional `detach-client`, and no interactive prompt is possible mid-close. Resolution: a **persist-flag sentinel**.
+  - A `client-detached` hook in the generated config runs server-side on *any* detach: `if persist-flag absent → tmux kill-server; else → persist`.
+  - Only the deliberate **[b] leave running** path (above) sets the persist-flag (marker file) *before* detaching; it is cleared on the next attach.
+  - Net: **red-button close shuts all sessions down cleanly** (flag absent → kill-server), while **[b] leave running persists** (flag present → no-op). Killing the server SIGHUPs the claude processes, but claude streams its transcript to JSONL continuously, so nothing is lost and the session stays resumable from the tree.
+  - The self-killing `client-detached` hook is edge-casey; validate in the §9 spike. Fallback if it proves flaky: **Option B** — `destroy-unattached on` (drops the [b] persistence option, but never lingers).
+
 - **Finished session** — the generated config sets `remain-on-exit on`. A session whose `claude` exits keeps its final frame; its tab is marked `exited`; dismissing the tab (or an explorer action) closes the window with `tmux kill-window`. Lets the user read the final state and `capture-pane` still works on it.
 - **Already live *elsewhere*** — if the selected session is live in `live.py` but is **not** one of our tmux windows (running in another terminal), Enter must **not** spawn a duplicate `claude --resume` (two claude processes on one transcript corrupts it). It shows a warning and offers **peek-only** via transcript tail. Detection: session id present in `live.py` poll but absent from `tmux list-windows`.
 - **Status bar visibility** — hidden while only window `0` (explorer) exists; shown once ≥1 session window is running, so non-resuming users see an unchanged full-screen explorer.
@@ -101,6 +111,7 @@ A config file generated at launch (e.g. under the plugin's runtime dir), passed 
 - Status bar on, window-tab list, mouse on (clickable tabs + flip).
 - `bind -n F12 select-window -t explorer` (configurable key).
 - `set remain-on-exit on`.
+- `set-hook -g client-detached` → kill-server unless the persist-flag is present (§5 Option C).
 - Status-bar auto-hide while only the explorer window exists (§5).
 - No rebinding of the user's prefix or anything outside this server.
 
@@ -125,11 +136,12 @@ A config file generated at launch (e.g. under the plugin's runtime dir), passed 
 
 - **tmux mouse vs Textual mouse** — both consume mouse events. tmux forwards mouse to apps requesting tracking (so clicking tree rows should still reach Textual; status-bar/tab clicks go to tmux), but drag-to-select and edge cases need validation on macOS + Linux before committing to mouse-on.
 - **Repaint after flip-back** — expected low risk (tmux preserves and restores each pane's buffer, so returning shows the last frame immediately and the app re-renders on its next tick). Confirm the explorer redraws cleanly after `select-window` round-trips, including after a terminal resize while a session was focused.
+- **`client-detached` self-kill hook (§5 Option C)** — confirm a `client-detached` hook can `kill-server` on the server it runs in, that the persist-flag correctly distinguishes red-button close (kill) from intentional [b] detach (persist), and that the flag clears on reattach. If unreliable, fall back to Option B (`destroy-unattached on`).
 
 ## 10. Build order (internal sequencing — all ships together)
 
 1. `tmux.py` + spikes (§9) + launch-in-tmux + reconciliation + no-tmux fallback.
-2. Context-aware Enter + generated config (tabs/F12/remain-on-exit) + switching.
+2. Context-aware Enter + generated config (tabs/F12/remain-on-exit/client-detached hook) + switching + quit-guard + persist-flag.
 3. `snapshot.py` + preview snapshot + selected-session poll + already-live-elsewhere guard.
 4. tmux detection + consent-install + declined-marker + status-bar auto-hide.
 5. `SPEC.md`/`CLAUDE.md` updates + tests.
@@ -138,7 +150,8 @@ A config file generated at launch (e.g. under the plugin's runtime dir), passed 
 
 - `test/test_tmux.py` — `tmux.py` command construction and version-gate via injected runner (no real tmux): start-window/select/capture/list/kill argv; config generation; availability parsing.
 - `test/test_snapshot.py` — capture-pane vs transcript-tail selection; transcript-tail rendering from JSONL fixtures; ANSI→`Text` for capture output.
-- `test/test_tui.py` (extend) — context-aware `action_resume` dispatch (stopped→start-window, running→select-window, live-elsewhere→warn) with tmux mocked; explorer no longer exits on resume when tmux present; fallback execvp path when absent.
+- `test/test_tui.py` (extend) — context-aware `action_resume` dispatch (stopped→start-window, running→select-window, live-elsewhere→warn) with tmux mocked; explorer no longer exits on resume when tmux present; fallback execvp path when absent; quit-guard prompt fires only when ≥1 live session and dispatches kill-server vs persist-flag+detach per choice.
+- `test/test_tmux.py` (extend) — persist-flag set/clear sequencing; generated config contains the `client-detached` kill-unless-flag hook (string assertion; the runtime self-kill behaviour is covered by the §9 spike, not CI).
 - `test/test_launcher.py` (extend) — tmux-wrapped vs pass-through launch command.
 - bats — install/uninstall teardown of generated config + markers.
 - CI already runs pytest + bats on ubuntu + macOS. Real-tmux integration is covered by the §9 spikes, not CI (CI runners lack an interactive tmux client).
