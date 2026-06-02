@@ -1785,3 +1785,46 @@ async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     assert args[2] == "planning/sprint15"   # folder prefix auto-applied
     assert args[3] is None                  # no worktree
     assert calls["select"] == "fixed-sid"
+
+
+async def test_new_session_no_tmux_sets_argv(index_path, monkeypatch):
+    import _pkg.tui as tui_mod
+    monkeypatch.setattr(tui_mod, "_new_sid", lambda: "fixed-sid")
+    app = tui_mod.SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # _tmux_enabled defaults False (env suppressed suite-wide).
+        await pilot.press("down")  # demo project node
+        await pilot.press("c")
+        await pilot.pause()
+        for ch in "feature":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app._new_session_argv == ["claude", "--session-id", "fixed-sid", "-n", "feature"]
+    assert app._new_session_cwd == "/tmp/demo-project"
+
+
+def test_run_execvps_new_session(monkeypatch, tmp_path):
+    import _pkg.tui as tui_mod
+
+    target_dir = tmp_path / "proj"
+    target_dir.mkdir()
+
+    class FakeApp:
+        _new_session_argv = ["claude", "--session-id", "fixed-sid", "-n", "feature"]
+        _new_session_cwd = str(target_dir)
+        _resume_target = None
+        def run(self):
+            pass
+
+    monkeypatch.setattr(tui_mod, "SessionExplorerApp", lambda *a, **k: FakeApp())
+    chdirs, execs = [], []
+    monkeypatch.setattr(tui_mod.os, "chdir", lambda p: chdirs.append(p))
+    monkeypatch.setattr(tui_mod.os, "execvp",
+                        lambda f, argv: execs.append((f, argv)))
+
+    tui_mod.run()
+    assert chdirs == [str(target_dir)]
+    assert execs == [("claude",
+                      ["claude", "--session-id", "fixed-sid", "-n", "feature"])]

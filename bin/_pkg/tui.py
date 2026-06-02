@@ -1142,7 +1142,8 @@ class SessionExplorerApp(App):
             if not name:
                 return
             cwd = result["cwd"].strip() or os.path.expanduser("~")
-            worktree = result["worktree_name"] if result["worktree"] else None
+            # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
+            worktree = (result["worktree_name"] or "") if result["worktree"] else None
             sid = _new_sid()
 
             # No tmux → exit and execvp claude (handled in run()).
@@ -1630,6 +1631,14 @@ def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> lis
 def run() -> int:
     app = SessionExplorerApp()
     app.run()
+    new_argv = getattr(app, "_new_session_argv", None)
+    if new_argv:
+        # chdir into the chosen project dir so claude (and `-w`) operate in the
+        # right repo, then hand the window over to a fresh claude session.
+        cwd = getattr(app, "_new_session_cwd", None)
+        if cwd and os.path.isdir(cwd):
+            os.chdir(cwd)
+        os.execvp("claude", new_argv)
     target = getattr(app, "_resume_target", None)
     if target:
         # chdir into the session's original project so `claude --resume`
