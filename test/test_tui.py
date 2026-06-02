@@ -738,6 +738,17 @@ def test_help_text_explains_naming_visibility_and_credit():
     assert __version__ in text
 
 
+def test_help_text_describes_split_pane_keys():
+    from _pkg.tui import _help_text
+    txt = _help_text()
+    assert "F9" in txt and "F12" in txt
+    # F9 switches panes; F12 zooms claude fullscreen.
+    assert "switch" in txt.lower() or "focus" in txt.lower()
+    assert "fullscreen" in txt.lower() or "full screen" in txt.lower()
+    # The old window-tab wording is gone.
+    assert "explorer tab" not in txt
+
+
 def test_empty_state_text_none_when_rows_visible():
     from _pkg.tui import _empty_state_text
     assert _empty_state_text(total_indexed=3, visible=3, unnamed_hidden=0,
