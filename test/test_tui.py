@@ -1447,6 +1447,38 @@ async def test_enter_starts_and_switches_when_stopped(index_path, monkeypatch):
     assert app._resume_target is None        # did NOT exit-to-resume
 
 
+async def test_double_click_resumes_like_enter(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_window",
+                        lambda t: calls.setdefault("select", t) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")            # project node
+        await pilot.press("down")            # folder node
+        await pilot.press("down")            # session leaf (sid-1)
+
+        class _Click:
+            widget = app._tree
+            chain = 2
+        # single click on the tree must NOT resume
+        class _Single(_Click):
+            chain = 1
+        app.on_click(_Single())
+        assert "start" not in calls
+        # double click resumes the cursored session, same as Enter
+        app.on_click(_Click())
+        await pilot.pause()
+    assert calls.get("start") == "sid-1"
+    assert calls.get("select") == "sid-1"
+
+
 def test_glyph_distinguishes_ownership():
     from _pkg.tui import _glyph
     # legacy (no tmux distinction): green spinner / dim hollow ○

@@ -537,6 +537,16 @@ class SessionExplorerApp(App):
             return False
         return True
 
+    def on_click(self, event) -> None:
+        # Double-click on a session row == pressing Enter on it. The single click
+        # that precedes it has already moved the tree cursor to that row, so
+        # action_resume acts on the right session. Scoped to the tree so clicks
+        # elsewhere (preview pane, etc.) don't resume.
+        if getattr(event, "chain", 1) == 2 and event.widget is self._tree:
+            node = self._tree.cursor_node
+            if node and node.data and "sid" in node.data:
+                self.action_resume()
+
     def on_key(self, event) -> None:
         # Hide the filter on Esc and refocus the tree. Stopping the event here
         # keeps the global Esc→close_preview binding from also firing.
