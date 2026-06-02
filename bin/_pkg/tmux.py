@@ -188,6 +188,8 @@ def start_window(sid: str, cwd: str, label: "str | None" = None) -> int:
 def start_new_session_window(sid: str, cwd: str, name: str,
                              worktree: "str | None" = None,
                              label: "str | None" = None) -> int:
+    """Start a fresh session window; see build_new_session_window for the
+    worktree tri-state (None / "" / name) semantics."""
     rc = _call(build_new_session_window(sid, cwd, name, worktree))
     if label:
         _call(build_set_label(sid, label))
