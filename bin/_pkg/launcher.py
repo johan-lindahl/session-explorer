@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 
@@ -130,3 +131,16 @@ def launch(target_command: str) -> int:
 
     print(f"Unsupported platform '{system}'. Run this in any terminal:\n  {target_command}")
     return 2
+
+
+def wrap_in_tmux(target_command: str, config_path: str,
+                 socket: str = "session-explorer") -> str:
+    """Wrap the explorer launch in a dedicated-server tmux session.
+
+    `-A` attaches to an existing `explorer` session (so a re-`/open` reattaches
+    to still-running sessions); `-n explorer` names window 0 so list-windows can
+    distinguish it from session windows. SESSION_EXPLORER_TMUX=1 tells the TUI it
+    is tmux-hosted and may use the interaction layer."""
+    inner = f"SESSION_EXPLORER_TMUX=1 {target_command}"
+    return (f"tmux -L {socket} -f {shlex.quote(config_path)} "
+            f"new-session -A -s explorer -n explorer {shlex.quote(inner)}")

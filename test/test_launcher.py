@@ -134,3 +134,17 @@ def test_launch_falls_back_to_print_when_wsl_has_no_wt(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc != 0
     assert "/abs/path/session-explorer" in captured.out
+
+
+from _pkg import launcher as _launcher
+
+
+def test_wrap_in_tmux_builds_dedicated_session():
+    cmd = _launcher.wrap_in_tmux("exec /abs/session-explorer tui",
+                                 config_path="/tmp/se.conf")
+    assert cmd.startswith("tmux -L session-explorer")
+    assert "-f /tmp/se.conf" in cmd
+    assert "new-session -A -s explorer -n explorer" in cmd
+    assert "exec /abs/session-explorer tui" in cmd
+    # The explorer marks itself so the TUI knows it is tmux-hosted:
+    assert "SESSION_EXPLORER_TMUX=1" in cmd
