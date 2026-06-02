@@ -18,6 +18,7 @@ from typing import Callable, List, Optional
 SOCKET = "session-explorer"
 VERSION_FLOOR = (3, 0)
 EXPLORER_WINDOW = "explorer"
+DOCK_PCT = 65  # claude pane width when docked beside the explorer tree
 
 
 def parse_version(text: str) -> Optional[tuple]:
@@ -79,6 +80,31 @@ def build_set_label(sid: str, label: str) -> List[str]:
 
 def build_select_window(target: str) -> List[str]:
     return build_base() + ["select-window", "-t", target]
+
+
+def build_dock(sid: str, pct: int = DOCK_PCT) -> List[str]:
+    """Join the background window `sid` into the explorer window as a right-hand
+    pane. `-h` makes the split horizontal (side by side); the joined (claude)
+    pane lands on the right at ~`pct`% width. `-p` (percentage) is used rather
+    than `-l <n>%` because the `%` suffix on `-l` requires tmux 3.1 while our
+    floor is 3.0."""
+    return build_base() + [
+        "join-pane", "-h", "-p", str(pct), "-s", sid, "-t", EXPLORER_WINDOW]
+
+
+def build_undock(pane_id: str, sid: str) -> List[str]:
+    """Break the docked claude pane back out into its own background window
+    (named `sid` so reconciliation finds it). `-d` keeps it off-screen."""
+    return build_base() + ["break-pane", "-d", "-s", pane_id, "-n", sid]
+
+
+def build_list_panes() -> List[str]:
+    return build_base() + [
+        "list-panes", "-t", EXPLORER_WINDOW, "-F", "#{pane_id}"]
+
+
+def build_select_pane(pane_id: str) -> List[str]:
+    return build_base() + ["select-pane", "-t", pane_id]
 
 
 def build_capture(target: str) -> List[str]:

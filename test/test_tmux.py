@@ -134,3 +134,36 @@ def test_build_new_session_window_bare_worktree():
 def test_build_new_session_window_named_worktree():
     argv = tmux.build_new_session_window("sid-9", "/proj", "feature", worktree="wt1")
     assert argv[-1] == "exec claude --session-id sid-9 -n feature -w wt1"
+
+
+def test_build_dock_joins_session_into_explorer_on_the_right():
+    # -h = horizontal split (side by side); source window `sid` becomes the
+    # right pane of the `explorer` window. `-p 65` sizes the joined (claude)
+    # pane to ~65% width.
+    assert tmux.build_dock("sid-1") == [
+        "tmux", "-L", "session-explorer",
+        "join-pane", "-h", "-p", "65", "-s", "sid-1", "-t", "explorer"]
+
+
+def test_build_dock_respects_custom_pct():
+    assert tmux.build_dock("sid-1", pct=50)[-6:] == [
+        "-p", "50", "-s", "sid-1", "-t", "explorer"]
+
+
+def test_build_undock_breaks_pane_back_to_named_background_window():
+    # -d keeps the broken-out window in the background; -n names it the sid so
+    # session_windows()/reconciliation finds it again.
+    assert tmux.build_undock("%7", "sid-1") == [
+        "tmux", "-L", "session-explorer",
+        "break-pane", "-d", "-s", "%7", "-n", "sid-1"]
+
+
+def test_build_list_panes_lists_explorer_window_pane_ids():
+    assert tmux.build_list_panes() == [
+        "tmux", "-L", "session-explorer",
+        "list-panes", "-t", "explorer", "-F", "#{pane_id}"]
+
+
+def test_build_select_pane_targets_pane_id():
+    assert tmux.build_select_pane("%7") == [
+        "tmux", "-L", "session-explorer", "select-pane", "-t", "%7"]
