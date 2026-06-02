@@ -1319,11 +1319,25 @@ class SessionExplorerApp(App):
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
+    def _running_sids(self) -> list:
+        """All sessions running in our server: background windows plus the
+        currently-docked session. The docked session is a *pane* in the
+        explorer window, not a window of its own, so `session_windows()` misses
+        it — callers that reason about "what's running" (the quit-guard, the
+        liveness-accessibility flag) must union it back in. Snapshots are the
+        deliberate exception: a docked pane can't be captured by window name,
+        so the live preview keeps using `session_windows()` and falls through
+        to the transcript tail (the docked session is already visible live)."""
+        sids = _tmux.session_windows()
+        if self._docked_sid and self._docked_sid not in sids:
+            sids.append(self._docked_sid)
+        return sids
+
     def action_quit(self) -> None:
         if not self._tmux_enabled:
             self.exit()
             return
-        running = _tmux.session_windows()
+        running = self._running_sids()
         if not running:
             self.exit()
             return
@@ -1360,7 +1374,10 @@ class SessionExplorerApp(App):
         new_ours: set = set()
         if self._tmux_enabled:
             try:
-                new_ours = set(_tmux.session_windows())
+                # Include the docked session: it's a pane, not a window, but it
+                # is one of *ours* (you can F9 into it), so the glyph must show
+                # accessible (●), not peek-only (○).
+                new_ours = set(self._running_sids())
             except Exception:
                 new_ours = self._our_windows  # keep last good on a tmux hiccup
         states_changed = new_states != self._live_states

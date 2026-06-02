@@ -1637,6 +1637,27 @@ async def test_quit_without_sessions_exits_directly(index_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_quit_with_only_a_docked_session_still_guards(index_path, monkeypatch):
+    # A docked session is a pane, not a window, so session_windows() is empty;
+    # the quit-guard must still fire (and not silently kill the docked claude).
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "kill_server", lambda: calls.setdefault("kill", True) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "sid-docked"       # only the docked pane is running
+        app.action_quit()                    # must show the guard, not exit
+        await pilot.pause()
+        await pilot.press("s")               # shut down all
+        await pilot.pause()
+    assert calls.get("kill") is True         # guard fired → kill on [s]
+
+
+@pytest.mark.asyncio
 async def test_mount_does_not_crash_without_tmux(index_path):
     # Sanity: mount path must be safe when not tmux-hosted (no env var).
     from _pkg.tui import SessionExplorerApp
