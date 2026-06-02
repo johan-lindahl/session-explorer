@@ -594,6 +594,11 @@ class SessionExplorerApp(App):
         # sids that are live windows in *our* tmux server (accessible via flip),
         # refreshed by _poll_live. Distinct from sessions live in other terminals.
         self._our_windows: set = set()
+        # Split-pane docking (spec 2026-06-02-split-pane-explorer-claude):
+        # our own tmux pane id (from $TMUX_PANE), and the sid currently docked
+        # as the right pane (None when only the explorer is shown).
+        self._self_pane: str | None = os.environ.get("TMUX_PANE")
+        self._docked_sid: str | None = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -860,6 +865,32 @@ class SessionExplorerApp(App):
         node = self._tree.cursor_node
         if node is not None and node.allow_expand:
             node.collapse()
+
+    def _undock_current(self) -> None:
+        """Break the docked claude pane back out to a background window so it
+        keeps running off-screen. No-op when nothing is docked."""
+        if not self._docked_sid:
+            return
+        pane = _tmux.docked_pane(self._self_pane)
+        if pane:
+            _tmux.undock(pane, self._docked_sid)
+        self._docked_sid = None
+
+    def _dock(self, sid: str, cwd: "str | None", label: "str | None",
+              *, already_running: bool) -> None:
+        """Make `sid` the docked right pane. If it is already docked, just
+        refocus it; otherwise undock whatever is docked, (re)start the session
+        as a background window when needed, and join it in."""
+        if self._docked_sid == sid:
+            pane = _tmux.docked_pane(self._self_pane)
+            if pane:
+                _tmux.select_pane(pane)            # refocus claude
+            return
+        self._undock_current()
+        if not already_running:
+            _tmux.start_window(sid, cwd, label)    # background window first
+        _tmux.dock(sid)                            # join into the explorer
+        self._docked_sid = sid
 
     def action_resume(self) -> None:
         node = self._tree.cursor_node

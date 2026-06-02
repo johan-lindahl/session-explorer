@@ -1899,3 +1899,45 @@ def test_run_new_session_skips_chdir_when_cwd_missing(monkeypatch, tmp_path):
     assert chdirs == []  # nonexistent dir → no chdir
     assert execs == [("claude",
                       ["claude", "--session-id", "fixed-sid", "-n", "feature"])]
+
+
+# --- docking state and helpers ---
+
+async def test_dock_helper_swaps_docked_session(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: "%9")
+    monkeypatch.setattr(tuimod._tmux, "undock",
+                        lambda pane, sid: calls.append(("undock", pane, sid)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.append(("start", sid)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.append(("dock", sid)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "old"                         # something already docked
+        app._dock("new", "/proj", "New", already_running=False)
+    assert calls == [("undock", "%9", "old"), ("start", "new"), ("dock", "new")]
+    assert app._docked_sid == "new"
+
+
+async def test_dock_helper_refocuses_when_same_session(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: "%9")
+    monkeypatch.setattr(tuimod._tmux, "select_pane",
+                        lambda pane: calls.append(("select", pane)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.append(("dock", sid)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "same"
+        app._dock("same", None, None, already_running=True)
+    assert calls == [("select", "%9")]                  # refocus only, no re-dock
+    assert app._docked_sid == "same"
