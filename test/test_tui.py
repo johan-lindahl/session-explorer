@@ -1915,6 +1915,8 @@ async def test_dock_helper_swaps_docked_session(index_path, monkeypatch):
                         lambda sid, cwd, label=None: calls.append(("start", sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid: calls.append(("dock", sid)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_pane",
+                        lambda pane: calls.append(("select", pane)) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
