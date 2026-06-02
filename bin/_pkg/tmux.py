@@ -8,6 +8,7 @@ bottom are thin subprocess calls. Mirrors launcher.py's builder/launch split.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -92,3 +93,71 @@ def build_config(*, persist_flag_path: str, back_key: str = "F12",
         detach_hook,
         "",
     ])
+
+
+# --- persist-flag helpers ---
+
+def set_persist_flag(path: str) -> None:
+    with open(path, "a"):
+        os.utime(path, None)
+
+
+def clear_persist_flag(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def persist_flag_set(path: str) -> bool:
+    return os.path.exists(path)
+
+
+# --- thin executing wrappers (not unit-tested; covered by spikes + TUI tests) ---
+
+def _call(argv: List[str]) -> int:
+    return subprocess.run(argv, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode
+
+
+def _capture(argv: List[str]) -> str:
+    return subprocess.run(argv, capture_output=True, text=True).stdout
+
+
+def detected_version() -> Optional[tuple]:
+    if not available():
+        return None
+    return parse_version(_capture(["tmux", "-V"]))
+
+
+def start_window(sid: str, cwd: str) -> int:
+    return _call(build_start_window(sid, cwd))
+
+
+def select_window(target: str) -> int:
+    return _call(build_select_window(target))
+
+
+def capture_pane(target: str) -> str:
+    return _capture(build_capture(target))
+
+
+def list_windows() -> List[str]:
+    out = _capture(build_list_windows())
+    return [ln for ln in out.splitlines() if ln]
+
+
+def session_windows(_list: Callable[[], List[str]] = list_windows) -> List[str]:
+    return [w for w in _list() if w != EXPLORER_WINDOW]
+
+
+def kill_window(target: str) -> int:
+    return _call(build_kill_window(target))
+
+
+def kill_server() -> int:
+    return _call(build_kill_server())
+
+
+def detach_client() -> int:
+    return _call(build_detach())

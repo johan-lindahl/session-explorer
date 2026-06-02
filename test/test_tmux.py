@@ -75,3 +75,18 @@ def test_build_config_contains_core_settings():
 def test_build_config_respects_custom_back_key():
     conf = tmux.build_config(persist_flag_path="/tmp/f", back_key="C-g")
     assert "bind -n C-g select-window -t explorer" in conf
+
+
+def test_persist_flag_set_clear_check(tmp_path):
+    flag = str(tmp_path / "persist.flag")
+    assert tmux.persist_flag_set(flag) is False
+    tmux.set_persist_flag(flag)
+    assert tmux.persist_flag_set(flag) is True
+    tmux.clear_persist_flag(flag)
+    assert tmux.persist_flag_set(flag) is False
+    tmux.clear_persist_flag(flag)  # idempotent, no raise
+
+
+def test_session_windows_excludes_explorer():
+    assert tmux.session_windows(
+        _list=lambda: ["explorer", "sid-1", "sid-2"]) == ["sid-1", "sid-2"]
