@@ -1430,7 +1430,7 @@ async def test_enter_starts_background_window_when_stopped(index_path, monkeypat
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # nothing running
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd: calls.setdefault("start", (sid, cwd)) or 0)
+                        lambda sid, cwd, label=None: calls.setdefault("start", (sid, cwd, label)) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1440,6 +1440,7 @@ async def test_enter_starts_background_window_when_stopped(index_path, monkeypat
         await pilot.press("enter")
         await pilot.pause()
     assert calls["start"][0] == "sid-1"      # started in the background
+    assert calls["start"][2] == "sprint14"   # human label, not the sid (name_cached planning/sprint14)
     assert app._resume_target is None        # did NOT exit-to-resume
 
 
@@ -1555,7 +1556,7 @@ async def test_enter_refuses_session_live_elsewhere(index_path, monkeypatch):
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd: calls.setdefault("start", True) or 0)
+                        lambda sid, cwd, label=None: calls.setdefault("start", True) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()

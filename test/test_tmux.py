@@ -72,11 +72,20 @@ def test_build_config_contains_core_settings():
     assert "client-detached" in conf
     assert "/tmp/se.flag" in conf
     assert "kill-server" in conf
+    # Status bar renders the human label (@se_label), not the raw sid window name.
+    assert "window-status-format" in conf
+    assert "@se_label" in conf
 
 
 def test_build_config_respects_custom_back_key():
     conf = tmux.build_config(persist_flag_path="/tmp/f", back_key="C-g")
     assert "bind -n C-g select-window -t explorer" in conf
+
+
+def test_build_set_label_targets_window_by_sid():
+    assert tmux.build_set_label("sid-7", "sprint14") == [
+        "tmux", "-L", "session-explorer",
+        "set-option", "-w", "-t", "sid-7", "@se_label", "sprint14"]
 
 
 def test_persist_flag_set_clear_check(tmp_path):

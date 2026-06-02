@@ -767,6 +767,9 @@ class SessionExplorerApp(App):
             return
         sid = node.data["sid"]
         project_path = node.data.get("project_path")
+        # Human label for the tmux status bar (the window name stays the sid).
+        _, _display = split_path(node.data.get("name_cached"))
+        label = _display or sid[:8]
 
         # No tmux → today's behaviour: exit and execvp claude (handled in run()).
         if not self._tmux_enabled:
@@ -789,7 +792,7 @@ class SessionExplorerApp(App):
             def after(ok: bool) -> None:
                 if ok:
                     cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
-                    _tmux.start_window(sid, cwd)
+                    _tmux.start_window(sid, cwd, label)
                     self._poll_live()
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
@@ -797,7 +800,7 @@ class SessionExplorerApp(App):
                 f"{project_path}"), after)
         else:
             cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
-            _tmux.start_window(sid, cwd)
+            _tmux.start_window(sid, cwd, label)
             self._poll_live()
 
     def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:

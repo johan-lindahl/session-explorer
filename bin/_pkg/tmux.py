@@ -48,6 +48,13 @@ def build_start_window(sid: str, cwd: str) -> List[str]:
         "new-window", "-d", "-n", sid, "-c", cwd, f"exec claude --resume={sid}"]
 
 
+def build_set_label(sid: str, label: str) -> List[str]:
+    """Store a human-readable label on the window (window name stays the sid for
+    unique targeting). The status bar renders `@se_label` instead of the raw
+    sid — see build_config's window-status-format."""
+    return build_base() + ["set-option", "-w", "-t", sid, "@se_label", label]
+
+
 def build_select_window(target: str) -> List[str]:
     return build_base() + ["select-window", "-t", target]
 
@@ -85,9 +92,15 @@ def build_config(*, persist_flag_path: str, back_key: str = "F12",
         f"'run-shell -b \"if [ ! -f {persist_flag_path} ]; then "
         f"tmux -L {socket} kill-server; fi\"'"
     )
+    # Show the human label (@se_label) in the status bar, falling back to the
+    # window name (#W) for the explorer window which has none. Without this the
+    # bar shows raw session-id UUIDs.
+    win_fmt = " #I:#{?#{@se_label},#{@se_label},#W} "
     return "\n".join([
         "set -g mouse on",
         "set -g status on",
+        f'set -g window-status-format "{win_fmt}"',
+        f'set -g window-status-current-format "{win_fmt}"',
         # No `remain-on-exit`: when claude exits, its window closes and tmux
         # drops the user back into the explorer (window 0). Avoids dead [exited]
         # panes lingering and being mistaken for running sessions.
@@ -132,8 +145,11 @@ def detected_version() -> Optional[tuple]:
     return parse_version(_capture(["tmux", "-V"]))
 
 
-def start_window(sid: str, cwd: str) -> int:
-    return _call(build_start_window(sid, cwd))
+def start_window(sid: str, cwd: str, label: "str | None" = None) -> int:
+    rc = _call(build_start_window(sid, cwd))
+    if label:
+        _call(build_set_label(sid, label))
+    return rc
 
 
 def select_window(target: str) -> int:
