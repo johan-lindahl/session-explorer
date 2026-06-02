@@ -978,6 +978,31 @@ def test_resume_argv_dash_leading_id_stays_a_value():
     assert _resume_argv("-foo") == ["claude", "--resume=-foo"]
 
 
+def test_new_session_argv_no_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "feature") == [
+        "claude", "--session-id", "sid-9", "-n", "feature"]
+
+
+def test_new_session_argv_bare_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "feature", worktree="") == [
+        "claude", "--session-id", "sid-9", "-n", "feature", "-w"]
+
+
+def test_new_session_argv_named_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "feature", worktree="wt1") == [
+        "claude", "--session-id", "sid-9", "-n", "feature", "-w", "wt1"]
+
+
+def test_new_session_argv_name_with_space_is_one_token():
+    from _pkg.tui import _new_session_argv
+    # execvp takes a list, so a spaced name stays a single argv token (no quoting).
+    argv = _new_session_argv("sid-9", "my session")
+    assert argv[4] == "my session"
+
+
 def test_preview_text_shows_model():
     from _pkg.tui import _preview_text
     s = {"sid": "x", "name_cached": "n", "tokens_estimate": 620000,
@@ -1350,7 +1375,7 @@ async def test_move_dialog_typed_path_on_enter(tmp_path):
 
 def test_restyled_dialogs_use_panel_base():
     for cls in (_tui.MoveScreen, _tui.ConfirmScreen, _tui.NotesScreen,
-                _tui.RenameScreen, _tui.NewFolderScreen):
+                _tui.RenameScreen, _tui.NewFolderScreen, _tui.NewSessionScreen):
         assert issubclass(cls, _tui._PanelScreen), cls.__name__
 
 
@@ -1644,3 +1669,233 @@ async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
         await pilot.pause()
     assert "flag" in calls               # persist-flag set before detaching
     assert calls.get("detach") is True
+
+
+def test_derive_project_cwd_picks_most_recent_and_strips_worktree():
+    from _pkg.tui import _derive_project_cwd
+    sessions = {
+        "a": {"project_label": "demo", "project_path": "/repo/old",
+              "last_active_at": "2026-05-01T00:00:00Z"},
+        "b": {"project_label": "demo",
+              "project_path": "/repo/main/.claude/worktrees/wt",
+              "last_active_at": "2026-05-09T00:00:00Z"},
+        "c": {"project_label": "other", "project_path": "/elsewhere",
+              "last_active_at": "2026-05-20T00:00:00Z"},
+    }
+    # Most recent demo session is the worktree one; strip back to the repo root.
+    assert _derive_project_cwd(sessions, "demo") == "/repo/main"
+
+
+def test_derive_project_cwd_returns_none_when_no_match():
+    from _pkg.tui import _derive_project_cwd
+    assert _derive_project_cwd({}, "demo") is None
+
+
+async def test_new_session_dialog_returns_dict(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(
+            NewSessionScreen("demo", "planning/", "/tmp/demo-project"),
+            lambda r: captured.update(r or {}),
+        )
+        await pilot.pause()
+        for ch in "sprint15":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured["name"] == "planning/sprint15"
+    assert captured["cwd"] == "/tmp/demo-project"
+    assert captured["worktree"] is False
+    assert captured["worktree_name"] == ""
+
+
+async def test_new_session_dialog_captures_worktree(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    from textual.widgets import Checkbox, Input
+    app = SessionExplorerApp(index_path=index_path)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(
+            NewSessionScreen("demo", "", "/tmp/demo-project"),
+            lambda r: captured.update(r or {}),
+        )
+        await pilot.pause()
+        for ch in "feature":
+            await pilot.press(ch)
+        app.screen.query_one("#ns-wt", Checkbox).value = True
+        app.screen.query_one("#ns-wtname", Input).value = "wt1"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert captured["name"] == "feature"
+    assert captured["worktree"] is True
+    assert captured["worktree_name"] == "wt1"
+
+
+async def test_new_session_dialog_cancels_on_escape(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    result = {"called": False, "value": "sentinel"}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        def cb(r):
+            result["called"] = True
+            result["value"] = r
+        app.push_screen(NewSessionScreen("demo", "", "/tmp/demo-project"), cb)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+    assert result["called"] is True
+    assert result["value"] is None
+
+
+async def test_new_session_dialog_wtname_disabled_until_checkbox(index_path):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    from textual.widgets import Checkbox, Input
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(NewSessionScreen("demo", "", "/tmp/demo-project"))
+        await pilot.pause()
+        wtname = app.screen.query_one("#ns-wtname", Input)
+        # Disabled while the worktree box is unchecked.
+        assert wtname.disabled is True
+        # Checking the box enables it.
+        app.screen.query_one("#ns-wt", Checkbox).value = True
+        await pilot.pause()
+        assert wtname.disabled is False
+        # Unchecking disables it again.
+        app.screen.query_one("#ns-wt", Checkbox).value = False
+        await pilot.pause()
+        assert wtname.disabled is True
+
+
+async def test_new_session_tmux_starts_window(index_path, monkeypatch):
+    import _pkg.tui as tui_mod
+    import _pkg.tmux as tmux_mod
+    calls = {}
+    monkeypatch.setattr(tui_mod, "_new_sid", lambda: "fixed-sid")
+    monkeypatch.setattr(
+        tmux_mod, "start_new_session_window",
+        lambda *a, **k: calls.setdefault("start", (a, k)))
+    monkeypatch.setattr(
+        tmux_mod, "select_window", lambda t: calls.setdefault("select", t))
+
+    app = tui_mod.SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = True
+        app._poll_live = lambda: None
+        await pilot.press("down")  # demo project node
+        await pilot.press("down")  # planning/ folder node
+        await pilot.press("c")
+        await pilot.pause()
+        for ch in "sprint15":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    args, _kw = calls["start"]
+    # start_new_session_window(sid, cwd, name, worktree, label)
+    assert args[0] == "fixed-sid"
+    assert args[1] == "/tmp/demo-project"
+    assert args[2] == "planning/sprint15"   # folder prefix auto-applied
+    assert args[3] is None                  # no worktree
+    assert calls["select"] == "fixed-sid"
+
+    # The name is seeded into the index immediately so the new session shows
+    # named (not under (unnamed)) before claude writes its first transcript.
+    import json as _json
+    seeded = _json.load(open(index_path))["sessions"]["fixed-sid"]
+    assert seeded["name_cached"] == "planning/sprint15"
+    assert seeded["project_path"] == "/tmp/demo-project"
+
+
+async def test_new_session_no_tmux_seeds_name(index_path, monkeypatch):
+    import _pkg.tui as tui_mod
+    import json as _json
+    monkeypatch.setattr(tui_mod, "_new_sid", lambda: "fixed-sid")
+    app = tui_mod.SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")  # demo project node
+        await pilot.press("c")
+        await pilot.pause()
+        for ch in "feature":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    seeded = _json.load(open(index_path))["sessions"]["fixed-sid"]
+    assert seeded["name_cached"] == "feature"
+    assert seeded["project_path"] == "/tmp/demo-project"
+
+
+async def test_new_session_no_tmux_sets_argv(index_path, monkeypatch):
+    import _pkg.tui as tui_mod
+    monkeypatch.setattr(tui_mod, "_new_sid", lambda: "fixed-sid")
+    app = tui_mod.SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # _tmux_enabled defaults False (env suppressed suite-wide).
+        await pilot.press("down")  # demo project node
+        await pilot.press("c")
+        await pilot.pause()
+        for ch in "feature":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+    assert app._new_session_argv == ["claude", "--session-id", "fixed-sid", "-n", "feature"]
+    assert app._new_session_cwd == "/tmp/demo-project"
+
+
+def test_run_execvps_new_session(monkeypatch, tmp_path):
+    import _pkg.tui as tui_mod
+
+    target_dir = tmp_path / "proj"
+    target_dir.mkdir()
+
+    class FakeApp:
+        _new_session_argv = ["claude", "--session-id", "fixed-sid", "-n", "feature"]
+        _new_session_cwd = str(target_dir)
+        _resume_target = None
+        def run(self):
+            pass
+
+    monkeypatch.setattr(tui_mod, "SessionExplorerApp", lambda *a, **k: FakeApp())
+    chdirs, execs = [], []
+    monkeypatch.setattr(tui_mod.os, "chdir", lambda p: chdirs.append(p))
+    monkeypatch.setattr(tui_mod.os, "execvp",
+                        lambda f, argv: execs.append((f, argv)))
+
+    tui_mod.run()
+    assert chdirs == [str(target_dir)]
+    assert execs == [("claude",
+                      ["claude", "--session-id", "fixed-sid", "-n", "feature"])]
+
+
+def test_run_new_session_skips_chdir_when_cwd_missing(monkeypatch, tmp_path):
+    import _pkg.tui as tui_mod
+
+    missing = str(tmp_path / "does-not-exist")
+
+    class FakeApp:
+        _new_session_argv = ["claude", "--session-id", "fixed-sid", "-n", "feature"]
+        _new_session_cwd = missing
+        _resume_target = None
+        def run(self):
+            pass
+
+    monkeypatch.setattr(tui_mod, "SessionExplorerApp", lambda *a, **k: FakeApp())
+    chdirs, execs = [], []
+    monkeypatch.setattr(tui_mod.os, "chdir", lambda p: chdirs.append(p))
+    monkeypatch.setattr(tui_mod.os, "execvp",
+                        lambda f, argv: execs.append((f, argv)))
+
+    tui_mod.run()
+    assert chdirs == []  # nonexistent dir → no chdir
+    assert execs == [("claude",
+                      ["claude", "--session-id", "fixed-sid", "-n", "feature"])]

@@ -105,3 +105,32 @@ def test_persist_flag_set_clear_check(tmp_path):
 def test_session_windows_excludes_explorer():
     assert tmux.session_windows(
         _list=lambda: ["explorer", "sid-1", "sid-2"]) == ["sid-1", "sid-2"]
+
+
+def test_build_new_session_window_bare():
+    argv = tmux.build_new_session_window("sid-9", "/proj", "feature")
+    assert argv == [
+        "tmux", "-L", "session-explorer", "new-window", "-d",
+        "-n", "sid-9", "-c", "/proj",
+        "exec claude --session-id sid-9 -n feature",
+    ]
+
+
+def test_build_new_session_window_with_folder_name_no_quoting():
+    argv = tmux.build_new_session_window("sid-9", "/proj", "planning/sprint14")
+    assert argv[-1] == "exec claude --session-id sid-9 -n planning/sprint14"
+
+
+def test_build_new_session_window_quotes_name_with_spaces():
+    argv = tmux.build_new_session_window("sid-9", "/proj", "my session")
+    assert argv[-1] == "exec claude --session-id sid-9 -n 'my session'"
+
+
+def test_build_new_session_window_bare_worktree():
+    argv = tmux.build_new_session_window("sid-9", "/proj", "feature", worktree="")
+    assert argv[-1] == "exec claude --session-id sid-9 -n feature -w"
+
+
+def test_build_new_session_window_named_worktree():
+    argv = tmux.build_new_session_window("sid-9", "/proj", "feature", worktree="wt1")
+    assert argv[-1] == "exec claude --session-id sid-9 -n feature -w wt1"

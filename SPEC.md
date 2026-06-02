@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.5.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
+**Status:** Shipped — **v1.6.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
 
 ## Goals
 
@@ -120,6 +120,7 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `Space` | Toggle the preview pane. Headline is the session's full (un-truncated) name; body shows project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. `Esc` also closes it. |
 | `r` | Rename. On a **session**: rename (= retag = move to a different folder), prompts for the new name. On a **folder**: rename its last segment in place, prompts prefilled with that segment — cascades to every session and subfolder under it (see *Folder rename and move*). |
 | `n` | New folder (prompts for path under the current project; cursor on a folder pre-fills the prefix). Created empty; persisted in the folder store. |
+| `c` | New session. On a **project** or **folder** node (or a session leaf, treated as its container): opens a dialog to name a new Claude session, pick its working directory, and optionally create a git worktree. Launches `claude --session-id <uuid> -n <name> [-w [<wt>]]` as a sibling tmux window (or via `execvp` without tmux). |
 | `m` | Move. On a **session**: move within its project (lists existing paths; type a new path to create it). On a **folder**: re-parent the whole subtree under a chosen path (or `(ungroup)` → top level), keeping its leaf name. Candidate parents exclude the folder and its own descendants. |
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
@@ -162,6 +163,39 @@ A folder has no record of its own — its identity is the segment-prefix shared 
 - The whole cascade is gated behind one confirmation that names the affected session count. Re-parenting a folder into itself or a descendant is rejected; renaming/moving onto an existing target path merges into it (duplicate store entries collapse).
 
 `tree_model.replace_folder_prefix` (pure name rewrite) and `folder_store.rename_subtree` (store re-prefix) carry the logic; `tui._relabel_folder` orchestrates the I/O.
+
+### New session flow
+
+`c` creates a new Claude session in the current project/folder context. A modal
+collects the **name** (prefilled with the folder prefix so a slash-path nests it
+exactly like rename/move), the **working directory** (derived from the project's
+most-recently-active session, with any worktree suffix stripped to the repo root;
+editable), and an optional **git worktree** (a checkbox plus an optional worktree
+name).
+
+The explorer generates the session UUID up front and launches
+`claude --session-id <uuid> -n <name>` (plus `-w` / `-w <name>` when requested).
+Claude itself writes the `custom-title` (via `-n`) and owns all worktree/branch
+creation (via `-w`) — the plugin writes neither. The UUID is the tmux window name,
+so the new window reconciles through the same live-registry / `list-windows`
+machinery as resume. Without tmux, the explorer `execvp`s into the new session
+(same exit-and-replace pattern as resume). Claude's own `--tmux` flag is
+deliberately not used — sessions are hosted in the dedicated `-L session-explorer`
+server.
+
+**Name seeding.** Claude writes no transcript (and therefore no `custom-title`)
+until the session's first turn, so a freshly-created, never-messaged session would
+otherwise appear under `(unnamed)`. To avoid that, creation seeds `name_cached`
+into the index immediately (`index.seed_new_session`) and repopulates the tree.
+This does not violate "JSONL is authoritative": `claude -n` persists the identical
+`custom-title` on the first turn, and `record_session` only falls back to the
+seeded name while the transcript yields none (`session_name() or existing
+name_cached`) — since the transcript is append-only, an absent title always means
+"not written yet", never "name removed", so a known name is never blanked by the
+2 s live-refresh.
+
+If the chosen directory is not a git repository and a worktree was requested,
+`claude -w` reports the error inside the session window; v1 does not pre-validate.
 
 ### Resume flow
 

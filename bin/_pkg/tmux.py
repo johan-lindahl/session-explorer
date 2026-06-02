@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from typing import Callable, List, Optional
@@ -46,6 +47,27 @@ def build_start_window(sid: str, cwd: str) -> List[str]:
     # tui._resume_argv for the rationale).
     return build_base() + [
         "new-window", "-d", "-n", sid, "-c", cwd, f"exec claude --resume={sid}"]
+
+
+def build_new_session_window(sid: str, cwd: str, name: str,
+                             worktree: "str | None" = None) -> List[str]:
+    """new-window argv for starting a *fresh* claude session (not a resume).
+
+    The window command is one shell string tmux runs via /bin/sh -c, so the
+    name (which carries spaces and '/') is composed with shlex so it can never
+    be re-split or injected. `--session-id <sid>` forces a known UUID up front,
+    so the window name (`-n <sid>`) matches the real session id and all the
+    existing resume/live machinery applies unchanged. `claude -n` writes the
+    custom-title; `claude -w` owns worktree creation. `worktree` is None for no
+    worktree, "" for a bare `-w` (claude auto-names), or a name for `-w <name>`.
+    """
+    inner = ["exec", "claude", "--session-id", sid, "-n", name]
+    if worktree is not None:
+        inner.append("-w")
+        if worktree:
+            inner.append(worktree)
+    return build_base() + [
+        "new-window", "-d", "-n", sid, "-c", cwd, shlex.join(inner)]
 
 
 def build_set_label(sid: str, label: str) -> List[str]:
@@ -158,6 +180,17 @@ def detected_version() -> Optional[tuple]:
 
 def start_window(sid: str, cwd: str, label: "str | None" = None) -> int:
     rc = _call(build_start_window(sid, cwd))
+    if label:
+        _call(build_set_label(sid, label))
+    return rc
+
+
+def start_new_session_window(sid: str, cwd: str, name: str,
+                             worktree: "str | None" = None,
+                             label: "str | None" = None) -> int:
+    """Start a fresh session window; see build_new_session_window for the
+    worktree tri-state (None / "" / name) semantics."""
+    rc = _call(build_new_session_window(sid, cwd, name, worktree))
     if label:
         _call(build_set_label(sid, label))
     return rc

@@ -7,13 +7,14 @@ several MB of code. Only happens when the user actually runs `tui`/`launch`.
 from __future__ import annotations
 
 import os
+import uuid
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
+from textual.widgets import Checkbox, Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from . import __version__
@@ -241,6 +242,7 @@ def _help_text() -> str:
         key("r", "Rename a session (re-files it) or a folder (renames its subtree)"),
         key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
+        key("c", "New session in the current project/folder (names it; optional worktree)"),
         key("d", "Delete the selected session, or an empty folder (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
         key("u", "Toggle visibility of unnamed sessions"),
@@ -357,6 +359,57 @@ class NewFolderScreen(_PanelScreen):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip())
+
+
+class NewSessionScreen(_PanelScreen):
+    """Create a new Claude session. Returns
+    {name, cwd, worktree: bool, worktree_name: str} or None on cancel.
+
+    The name Input prefills with the folder prefix (ends in '/') so the session
+    nests in the current folder; a slash-path is folder placement exactly like
+    rename/move. Enter from any Input gathers all fields and submits."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
+
+    def __init__(self, project: str, name_prefix: str = "", cwd: str = "") -> None:
+        super().__init__()
+        self._project = project
+        self._name_prefix = name_prefix
+        self._cwd = cwd
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(f"New session in '{self._project}' (use / to nest)",
+                  classes="dialog-title"),
+            Input(value=self._name_prefix, placeholder="session name", id="ns-name"),
+            Input(value=self._cwd, placeholder="working directory", id="ns-cwd"),
+            Checkbox("Create git worktree (-w)", id="ns-wt"),
+            Input(placeholder="worktree name (optional)", id="ns-wtname", disabled=True),
+            Label("enter create · esc cancel", classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        # Textual selects all text on first focus, which would replace the
+        # prefilled folder prefix on the first keystroke. Move the cursor to
+        # the end so typing appends rather than overwrites.
+        inp = self.query_one("#ns-name", Input)
+        inp.cursor_position = len(inp.value)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id == "ns-wt":
+            self.query_one("#ns-wtname", Input).disabled = not event.value
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(self._result())
+
+    def _result(self) -> dict:
+        return {
+            "name": self.query_one("#ns-name", Input).value.strip(),
+            "cwd": self.query_one("#ns-cwd", Input).value.strip(),
+            "worktree": self.query_one("#ns-wt", Checkbox).value,
+            "worktree_name": self.query_one("#ns-wtname", Input).value.strip(),
+        }
 
 
 class ConfirmScreen(_PanelScreen):
@@ -494,6 +547,7 @@ class SessionExplorerApp(App):
         Binding("r", "rename", "Rename"),
         Binding("m", "move", "Move"),
         Binding("n", "new_folder", "New folder"),
+        Binding("c", "new_session", "New session"),
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
@@ -519,6 +573,8 @@ class SessionExplorerApp(App):
         self._projects_root = projects_root
         self._resume_target: str | None = None
         self._resume_cwd: str | None = None
+        self._new_session_argv: list[str] | None = None
+        self._new_session_cwd: str | None = None
         self._filter_needle: str = ""
         self._show_unnamed: bool = False
         # Flips after the first rescan so the empty-state can switch from
@@ -543,7 +599,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -1077,6 +1133,46 @@ class SessionExplorerApp(App):
 
         self.push_screen(NewFolderScreen(project, prefix), after)
 
+    def action_new_session(self) -> None:
+        project, prefix = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+        sessions = _index.load(self._index_path).get("sessions", {})
+        default_cwd = _derive_project_cwd(sessions, project) or os.path.expanduser("~")
+
+        def after(result: "dict | None") -> None:
+            if not result:
+                return
+            name = result["name"].strip()
+            if not name:
+                return
+            cwd = result["cwd"].strip() or os.path.expanduser("~")
+            # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
+            worktree = (result["worktree_name"] or "") if result["worktree"] else None
+            sid = _new_sid()
+
+            # Seed the chosen name now: claude writes no transcript (and thus no
+            # custom-title) until the first turn, so without this the session
+            # shows under (unnamed) until then. claude -n persists the identical
+            # title later, so there's no divergence.
+            _index.seed_new_session(self._index_path, sid, name, cwd)
+
+            # No tmux → exit and execvp claude (handled in run()).
+            if not self._tmux_enabled:
+                self._new_session_argv = _new_session_argv(sid, name, worktree)
+                self._new_session_cwd = cwd
+                self.exit()
+                return
+
+            _, display = split_path(name)
+            label = display or sid[:8]
+            _tmux.start_new_session_window(sid, cwd, name, worktree, label)
+            _tmux.select_window(sid)   # land straight in the new session
+            self._populate()           # show the newly-named session immediately
+            self._poll_live()
+
+        self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)
+
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project_label, prefix). prefix ends in '/' when the cursor sits
         on a folder so child creation is one segment away from done.
@@ -1502,9 +1598,61 @@ def _resume_argv(target: str) -> list[str]:
     return ["claude", f"--resume={target}"]
 
 
+def _new_sid() -> str:
+    """Fresh session UUID for a new session. Isolated so tests can stub it."""
+    return str(uuid.uuid4())
+
+
+def _derive_project_cwd(sessions: dict, project_label: str) -> "str | None":
+    """Launch cwd for a new session in `project_label`: the project_path of its
+    most-recently-active session, with any git-worktree suffix stripped back to
+    the repo root so `claude -w` branches from the real repository. None when the
+    project has no session with a usable path."""
+    best = None
+    best_key = ""
+    for s in sessions.values():
+        if s.get("project_label") != project_label:
+            continue
+        path = s.get("project_path")
+        if not path:
+            continue
+        key = s.get("last_active_at") or ""
+        # >= so the last session encountered wins on equal/missing timestamps;
+        # any recent path in the project is an acceptable cwd, so ties are fine.
+        if best is None or key >= best_key:
+            best, best_key = path, key
+    if not best:
+        return None
+    if _WORKTREE_MARKER in best:
+        best = best.split(_WORKTREE_MARKER, 1)[0]
+    return best
+
+
+def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> list[str]:
+    """argv for `os.execvp` to start a fresh session without tmux. A list (no
+    shell), so the name needs no quoting. `worktree`: None → no `-w`; "" → bare
+    `-w`; otherwise `-w <name>`."""
+    argv = ["claude", "--session-id", sid, "-n", name]
+    if worktree is not None:
+        argv.append("-w")
+        if worktree:
+            argv.append(worktree)
+    return argv
+
+
 def run() -> int:
     app = SessionExplorerApp()
     app.run()
+    new_argv = getattr(app, "_new_session_argv", None)
+    if new_argv:
+        # chdir into the chosen project dir so claude (and `-w`) operate in the
+        # right repo, then hand the window over to a fresh claude session.
+        cwd = getattr(app, "_new_session_cwd", None)
+        # Fail open: if the chosen dir no longer exists, start from cwd as-is
+        # rather than aborting the launch.
+        if cwd and os.path.isdir(cwd):
+            os.chdir(cwd)
+        os.execvp("claude", new_argv)
     target = getattr(app, "_resume_target", None)
     if target:
         # chdir into the session's original project so `claude --resume`
