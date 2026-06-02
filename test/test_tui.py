@@ -1504,6 +1504,7 @@ async def test_double_click_docks_like_enter(index_path, monkeypatch):
         await pilot.pause()
     assert calls.get("start") == "sid-1"
     assert calls.get("dock") == "sid-1"
+    assert app._docked_sid == "sid-1"
 
 
 def test_glyph_distinguishes_ownership():
@@ -1542,6 +1543,34 @@ async def test_enter_docks_a_running_background_session(index_path, monkeypatch)
         await pilot.pause()
     assert "start" not in calls              # already running → no re-start
     assert calls["dock"] == "sid-1"          # docked the existing window
+    assert app._docked_sid == "sid-1"
+
+
+async def test_enter_on_already_docked_session_refocuses_only(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # it's a pane, not a window
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: "%9")
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid: calls.setdefault("dock", sid) or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_pane",
+                        lambda pane: calls.setdefault("select", pane) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.press("down")            # session leaf (sid-1)
+        app._docked_sid = "sid-1"            # it's already the docked pane
+        await pilot.press("enter")
+        await pilot.pause()
+    assert "start" not in calls              # no re-start
+    assert "dock" not in calls               # no re-dock
+    assert calls["select"] == "%9"           # just refocused the docked pane
     assert app._docked_sid == "sid-1"
 
 
