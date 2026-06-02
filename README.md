@@ -30,6 +30,20 @@ Press `h` for the built-in help (it also auto-opens on first launch):
 
 ![The help overlay](docs/images/help.png)
 
+### Side by side with your session
+
+When tmux is available, resuming doesn't take over the terminal. The explorer
+stays in the **left** pane and the session you resume docks in a pane on the
+**right**, so you watch the tree and the running session at once. `F9` flips
+focus between the two panes (or click either one), `F12` zooms the focused pane
+fullscreen, and the tmux status line keeps those hints visible even when a pane
+is zoomed. Selecting a different session swaps it in; the others keep running
+off-screen. Press `c` to start a brand-new session, which docks the same way.
+
+![The explorer and a live claude session side by side](docs/images/split.png)
+
+Without tmux, resume instead hands the whole terminal straight to `claude`.
+
 ### Live sessions
 
 Sessions running right now are flagged in the left column — an animated green
@@ -120,7 +134,8 @@ session-explorer tui       # run the TUI in the current terminal
 |---|---|
 | `↑` `↓` | Move between rows |
 | `←` `→` | Collapse / expand the current folder or project |
-| `Enter` | Resume the selected session (`exec claude --resume <id>`) |
+| `Enter` | Resume the selected session — when tmux-hosted, docks it in a pane beside the tree and focuses it so you can type; without tmux, hands the terminal to `claude --resume <id>` |
+| `c` | Create a new session in the selected project (prompts for a name, working directory, and optional git worktree; docks it like a resume) |
 | `Space` | Toggle the preview pane (full name, project, folder, branch, age, created, messages, context, session id, notes, first prompt, path) |
 | `r` | Rename a session (also moves it between folders), or rename a folder's last segment in place — folder renames cascade across the whole subtree |
 | `n` | Create an empty folder |
@@ -130,14 +145,18 @@ session-explorer tui       # run the TUI in the current terminal
 | `u` | Toggle visibility of unnamed sessions (hidden by default) |
 | `g` | Toggle a live subscription-usage bar (current 5-hour limit) in the tmux status line — off by default, tmux-hosted only; toggling off then on is the manual force-refresh |
 | `F5` | Rescan `~/.claude/projects/` — import sessions not yet tracked (shows a progress bar) |
+| `F9` | *(tmux-hosted)* Switch focus between the explorer and the docked session pane — also by mouse click |
+| `F12` | *(tmux-hosted)* Zoom the focused pane fullscreen and back |
 | `/` | Live filter across name, notes, first prompt, summary |
 | `h` | Show help (auto-opens once on first launch) |
 | `Esc` | Close the preview pane / help (or clear an active filter) |
 | `q` | Quit |
 
 > The leftmost column shows live state: an animated spinner (working), a dim `○`
-> (idle), or blank (inactive). The rename / move / new-folder / notes dialogs now
-> appear as centered overlays matching the help screen.
+> (idle), or blank (inactive). The rename / move / new-folder / new-session /
+> notes dialogs appear as centered overlays matching the help screen. `F9` and
+> `F12` are tmux-server keybindings — they work from either pane (even a zoomed
+> one), and their hints live in the tmux status line.
 
 ## How sessions are organized
 
@@ -225,9 +244,11 @@ TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 live filtering; rescan (`F5`); opt-in `--gc` retention with a once-daily
 auto-trigger; `session-explorer uninstall`; model-aware context sizing;
 macOS/Linux/WSL launchers (native Windows out of scope); tmux-backed
-multi-session interaction (background windows, live preview snapshots,
-context-aware Enter, quit-guard); opt-in subscription-usage bar in the tmux
-status line (`g` toggle, 5-min refresh, `SESSION_EXPLORER_PROBE` hook bail-out).
+split-pane interaction (explorer left / docked claude right, `F9` switch focus,
+`F12` zoom fullscreen, background sessions, live preview snapshots,
+context-aware Enter, quit-guard); new-session creation from the tree (`c`);
+opt-in subscription-usage bar in the tmux status line (`g` toggle, 5-min
+refresh, `SESSION_EXPLORER_PROBE` hook bail-out).
 Tested by pytest + bats in CI on ubuntu + macOS across Python 3.11–3.13.
 
 ### Running the tests
