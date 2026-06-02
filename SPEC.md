@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.2.0**, installable from the Claude Code marketplace. All milestones below (M1–M6) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
+**Status:** Shipped — **v1.5.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
 
 ## Goals
 
@@ -352,6 +352,92 @@ Glyphs: **working** → animated green spinner; **open but idle** → steady dim
 
 **Uninstall** (`uninstall.sh` / `session-explorer uninstall`) removes all the new hook events; the registry file is volatile and can be left or cleaned.
 
+## tmux interaction layer
+
+The tmux interaction layer makes resume **non-destructive**: instead of `exec`-replacing the explorer process, the explorer stays alive as tmux window 0 and each resumed session runs as a sibling window. This enables multi-session background monitoring, live previews, and fluid in/out navigation — without an embedded terminal widget.
+
+Full design rationale, spike results, and build order live in `docs/superpowers/specs/2026-06-02-tmux-session-interaction-design.md`.
+
+### Process model and launch
+
+When tmux is available and not declined, `/open` launches the explorer inside a **dedicated tmux server**:
+
+```
+tmux -L session-explorer -f <generated.conf> new-session -A -s explorer 'exec session-explorer tui'
+```
+
+- **`-L session-explorer`** — fully isolated from the user's personal tmux server, config, and keybindings. The plugin never reads or writes `~/.tmux.conf`.
+- **`-A` (attach-or-create)** — relaunching `/open` reattaches to an existing server. Sessions started in a previous explorer window **survive closing and reopening** the explorer; `new-session -A` is also the reconciliation mechanism: on mount, the explorer calls `tmux list-windows` to rediscover any still-running session windows.
+- The explorer is **window 0**; each resumed session is a sibling window named by its session id (`tmux new-window -n <sid>`). The `session_id → window` mapping is the window name — no separate registry.
+- `launcher.py` wraps the existing `target_command` in the tmux invocation when `tmux.available()` is true; otherwise passes the command through unchanged.
+
+**No-tmux fallback:** when tmux is absent or declined, `tui.py:run` does `os.execvp("claude", …)` (today's behaviour). The feature is purely additive.
+
+### Interaction model
+
+| Key | Stopped session | Running session |
+|---|---|---|
+| **Enter** | `tmux new-window -d -n <sid> -c <cwd> 'claude --resume <sid>'`; explorer stays open | `tmux select-window -t <sid>` — flip in to interact |
+| **space** | static metadata preview (unchanged) | live snapshot in preview pane; stay in tree |
+
+- **Already live elsewhere** — if the selected session is live in the registry but is not one of our tmux windows (running in another terminal), Enter refuses with a warning and offers peek-only via transcript tail. Two `claude --resume` processes on one JSONL corrupts it.
+- **Switching back:** clickable status-bar tabs are the primary path (the generated config enables a tmux status bar with `[0 explorer] [1 feat/auth ●] …`). **F12** is the keyboard fallback — a no-prefix root binding `bind -n F12 select-window -t explorer`; configurable.
+- cwd/worktree handling carries over from the current `action_resume`: `tmux new-window -c <resolved cwd>` using `_resolve_resume_cwd`, dead-worktree warning fires before spawning.
+
+### Snapshot rendering
+
+A `set_interval` timer (~1 s, tunable) updates the preview pane for the **selected** live session via `snapshot.py`:
+
+- **Explorer-launched (tmux) window** → `tmux capture-pane -ep -t <sid>`. tmux maintains every background pane's screen buffer; the current claude frame is captured without flipping to it. `-e` preserves colour; rendered via `rich.text.Text.from_ansi`.
+- **Live-elsewhere session** (in `live.py` but not a tmux window) → **transcript tail**: parse the last few JSONL events via `jsonl.py` into latest prompt / latest assistant text / last tool call / working-vs-idle.
+- **Stopped session** → today's static metadata preview, unchanged.
+
+Only the selected session is polled for a full snapshot. Tree-wide liveness uses the existing `live.py` poll unchanged.
+
+### Live tree dots
+
+No new mechanism. A session started via `tmux new-window 'claude --resume …'` is an ordinary Claude session; the existing `session-live.sh` hook registers it in `session-explorer-live.json` and the TUI's existing poll renders the working/idle glyph.
+
+### Lifecycle and quit-guard
+
+**Quit (`q`) with live sessions** opens a guarded prompt listing running windows and offering:
+- **[s] shut down all and quit** — `tmux kill-server` → terminal closes cleanly.
+- **[b] leave running in the background** — sets the persist-flag (marker file) then detaches. The server and sessions stay alive headless.
+- **[c] cancel** — no action.
+
+No silent default. With zero live sessions, `q` quits cleanly with no prompt. Exited corpse windows are killed silently on quit regardless.
+
+**Abrupt window-close (red button / `Cmd+W`) — Option C sentinel.** An OS window close SIGHUPs the tmux *client*, which detaches without killing the server, by default leaving every claude session running headless. Resolution: a `client-detached` hook in the generated config runs server-side on any detach — `if persist-flag absent → tmux kill-server; else → persist`. Only the deliberate **[b] leave running** path sets the persist-flag before detaching; it is cleared on the next attach. Net: **red-button close shuts all sessions down**; **[b] persists** them. Killing the server SIGHUPs the claude processes, but transcripts are JSONL-streamed continuously so nothing is lost.
+
+Fallback if the `client-detached` self-kill proves flaky: `destroy-unattached on` (drops [b] persistence but never lingers).
+
+**Finished session** — the generated config sets `remain-on-exit on`. A session whose `claude` exits keeps its final frame; its tab is marked `exited`; dismissing it (or an explorer action) closes the window with `tmux kill-window`.
+
+### Generated tmux config
+
+A config file generated at launch (under the plugin's runtime dir), passed via `-f`, so the dedicated server is self-contained. Contents: status bar with window tabs, mouse on (clickable tabs + flip), `bind -n F12 select-window -t explorer`, `remain-on-exit on`, `set-hook -g client-detached` (kill-server unless persist-flag), status-bar auto-hide while only the explorer window exists (non-resuming users see an unchanged full-screen explorer). No rebinding of any user key outside this server.
+
+### tmux dependency — optional and consented
+
+- **Detect** at launch: `tmux -V`, require ~3.0+ (for `capture-pane -e`, root bindings, `remain-on-exit`, status styling). `tmux.py` owns detection and version parsing.
+- **Missing/too old** → one-time consent prompt mirroring the retention pattern: `[i] install now` (via detected package manager — `brew` on macOS without sudo; `apt`/`dnf`/`pacman`/… printed for user to run since they need sudo), `[s] show instructions`, `[n] not now`. Records the choice with a declined-marker (`~/.claude/.session-explorer.tmux-declined`) so the user is not re-nagged.
+- **No bundled binary.** Auto-install is package-manager-based only, never silent, never sudo-without-asking. Vendoring a static tmux binary is rejected — against the "one vendored dep" ethos.
+- **Declined or unavailable** → `execvp` fallback (§ *Process model*). The explorer remains fully functional; only background monitoring and interaction are disabled.
+
+### New files
+
+- **`bin/_pkg/tmux.py`** — thin CLI wrapper: `available()`/version, `ensure_server`, `start_session_window`, `select_window`, `capture_pane`, `list_windows`, `kill_window`, `generate_config`. Pure logic + injected command runner for unit tests.
+- **`bin/_pkg/snapshot.py`** — `snapshot(sid) -> renderable`: capture-pane path for tmux windows, transcript-tail path otherwise. Pure; testable with fixtures.
+
+### Tunables (defaults)
+
+| Knob | Default | Notes |
+|---|---|---|
+| Snapshot poll | 1 s | freshness vs. capture-pane churn |
+| tmux server socket | `session-explorer` | dedicated, isolated |
+| Back-to-explorer key | F12 | configurable; tab bar is primary |
+| tmux version floor | ~3.0 | `capture-pane -e`, root bindings, `remain-on-exit` |
+
 ## Disabling native auto-cleanup
 
 **Opt-in.** Modifying the user's `settings.json` without consent is a marketplace-review concern, so the plugin does NOT neutralise native cleanup automatically. The TUI asks on first launch (`tui.on_mount` → `retention.enable`/`retention.decline`); neither the `SessionStart` hook nor `install.sh` ever touches `settings.json`. Only when the user agrees is `cleanupPeriodDays` in `~/.claude/settings.json` set to `36500` (100 years) — with the prior value backed up — so Claude's expiry never touches user sessions and the plugin's `session-explorer index --gc` does deletion instead:
@@ -461,7 +547,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.2.0). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.5.0). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|
@@ -472,6 +558,7 @@ All milestones below are **shipped** (current release: v1.2.0). The table is kep
 | M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
 | M5 | Community-marketplace distribution. WSL launcher (`wt.exe` re-entry + fallback); native Windows out of scope. |
 | M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike validated (2026-05-29, macOS); end-to-end TUI smoke test optional (timers/animation covered by `run_test` tests). |
+| M7 | **tmux interaction layer** — `tmux.py` + `snapshot.py`; context-aware Enter (stop→background-window, running→flip-in, live-elsewhere→refuse); generated tmux config (tabs/F12/`remain-on-exit`/`client-detached` sentinel); quit-guard; snapshot preview for selected live session; optional consented tmux install with declined-marker; `execvp` fallback without tmux. |
 
 ## Design decisions (resolved)
 

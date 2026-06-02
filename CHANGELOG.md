@@ -3,6 +3,36 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.5.0
+
+### Added
+- **tmux-backed multi-session interaction.** The explorer now runs as window 0
+  of a dedicated `tmux -L session-explorer` server and stays alive while you
+  work. `Enter` on a stopped session starts it in a background tmux window;
+  `Enter` on a running session flips in to interact. `space` shows a live
+  snapshot of the selected session in the preview pane — `capture-pane` for
+  our tmux windows, transcript-tail for sessions running elsewhere. Switching
+  back uses clickable status-bar tabs (primary) or F12 (keyboard fallback).
+- **Context-aware Enter.** Stopped → launch in background and stay in explorer;
+  running → flip in; live-elsewhere (another terminal holds the transcript) →
+  refuse with a warning and offer peek-only, preventing duplicate `claude
+  --resume` processes on one JSONL.
+- **Quit-guard.** `q` with live sessions prompts: `[s]` shut down all and quit
+  (`tmux kill-server`), `[b]` leave running in the background (sets persist-flag
+  then detaches), or `[c]` cancel. Zero live sessions quit cleanly with no
+  prompt.
+- **Abrupt-close sentinel (Option C).** A `client-detached` hook in the
+  generated config kills the server on any unintentional detach (red button,
+  `Cmd+W`). Only the deliberate `[b]` leave-running path sets the persist-flag
+  beforehand, preventing orphaned sessions.
+- **Optional consented tmux install.** First launch without tmux shows a
+  one-time prompt (`[i]` install via detected package manager, `[s]` show
+  instructions, `[n]` not now); declined via a marker file so it is not
+  re-nagged. No binary bundling, no silent sudo.
+- **`execvp` fallback.** Without tmux (absent, too old, or declined), resume
+  behaves exactly as before (process-replace the explorer with `claude
+  --resume`). No regression for non-tmux users.
+
 ## 1.4.0
 
 ### Added
