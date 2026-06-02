@@ -542,6 +542,7 @@ class SessionExplorerApp(App):
         Binding("r", "rename", "Rename"),
         Binding("m", "move", "Move"),
         Binding("n", "new_folder", "New folder"),
+        Binding("c", "new_session", "New session"),
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("u", "toggle_unnamed", "Toggle unnamed"),
@@ -567,6 +568,8 @@ class SessionExplorerApp(App):
         self._projects_root = projects_root
         self._resume_target: str | None = None
         self._resume_cwd: str | None = None
+        self._new_session_argv: list[str] | None = None
+        self._new_session_cwd: str | None = None
         self._filter_needle: str = ""
         self._show_unnamed: bool = False
         # Flips after the first rescan so the empty-state can switch from
@@ -591,7 +594,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -1124,6 +1127,38 @@ class SessionExplorerApp(App):
             self._populate()
 
         self.push_screen(NewFolderScreen(project, prefix), after)
+
+    def action_new_session(self) -> None:
+        project, prefix = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+        sessions = _index.load(self._index_path).get("sessions", {})
+        default_cwd = _derive_project_cwd(sessions, project) or os.path.expanduser("~")
+
+        def after(result: "dict | None") -> None:
+            if not result:
+                return
+            name = result["name"].strip()
+            if not name:
+                return
+            cwd = result["cwd"].strip() or os.path.expanduser("~")
+            worktree = result["worktree_name"] if result["worktree"] else None
+            sid = _new_sid()
+
+            # No tmux → exit and execvp claude (handled in run()).
+            if not self._tmux_enabled:
+                self._new_session_argv = _new_session_argv(sid, name, worktree)
+                self._new_session_cwd = cwd
+                self.exit()
+                return
+
+            _, display = split_path(name)
+            label = display or sid[:8]
+            _tmux.start_new_session_window(sid, cwd, name, worktree, label)
+            _tmux.select_window(sid)   # land straight in the new session
+            self._poll_live()
+
+        self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project_label, prefix). prefix ends in '/' when the cursor sits

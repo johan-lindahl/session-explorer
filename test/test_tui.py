@@ -1751,3 +1751,37 @@ async def test_new_session_dialog_cancels_on_escape(index_path):
         await pilot.pause()
     assert result["called"] is True
     assert result["value"] is None
+
+
+async def test_new_session_tmux_starts_window(index_path, monkeypatch):
+    import _pkg.tui as tui_mod
+    import _pkg.tmux as tmux_mod
+    calls = {}
+    monkeypatch.setattr(tui_mod, "_new_sid", lambda: "fixed-sid")
+    monkeypatch.setattr(
+        tmux_mod, "start_new_session_window",
+        lambda *a, **k: calls.setdefault("start", (a, k)))
+    monkeypatch.setattr(
+        tmux_mod, "select_window", lambda t: calls.setdefault("select", t))
+
+    app = tui_mod.SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = True
+        app._poll_live = lambda: None
+        await pilot.press("down")  # demo project node
+        await pilot.press("down")  # planning/ folder node
+        await pilot.press("c")
+        await pilot.pause()
+        for ch in "sprint15":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    args, _kw = calls["start"]
+    # start_new_session_window(sid, cwd, name, worktree, label)
+    assert args[0] == "fixed-sid"
+    assert args[1] == "/tmp/demo-project"
+    assert args[2] == "planning/sprint15"   # folder prefix auto-applied
+    assert args[3] is None                  # no worktree
+    assert calls["select"] == "fixed-sid"
