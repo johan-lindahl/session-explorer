@@ -641,6 +641,10 @@ class SessionExplorerApp(App):
     def _maybe_offer_tmux(self) -> None:
         # Only when NOT tmux-hosted (tmux was absent at /open) and not already
         # declined. Mirrors the retention one-time prompt.
+        # Escape hatch for automated/non-interactive runs (CI, scripted launch):
+        # SESSION_EXPLORER_TMUX_NO_OFFER=1 suppresses the install nag entirely.
+        if os.environ.get("SESSION_EXPLORER_TMUX_NO_OFFER"):
+            return
         if self._tmux_enabled or os.path.exists(self._tmux_decline_marker()):
             return
         if _tmux.available():       # present now but launch wasn't wrapped; skip

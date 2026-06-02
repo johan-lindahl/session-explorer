@@ -33,7 +33,8 @@ def index_path(tmp_path):
     }, open(path, "w"))
     # Mark help as already seen AND retention as decided so neither first-launch
     # modal (help / retention prompt) pops over the tree these tests drive. Both
-    # have their own dedicated tests using marker-free index paths.
+    # have their own dedicated tests using marker-free index paths. (The tmux
+    # install offer is suppressed suite-wide via conftest's env guard.)
     (tmp_path / ".session-explorer.help-seen").write_text("")
     (tmp_path / ".session-explorer.retention-declined").write_text("")
     yield path
@@ -1586,6 +1587,8 @@ async def test_tmux_offer_shown_once_then_marked(tmp_path, monkeypatch):
     (tmp_path / ".session-explorer.help-seen").write_text("")
     (tmp_path / ".session-explorer.retention-declined").write_text("")
     monkeypatch.delenv("SESSION_EXPLORER_TMUX", raising=False)   # plain launch
+    # This test exercises the offer itself, so undo the suite-wide suppression.
+    monkeypatch.delenv("SESSION_EXPLORER_TMUX_NO_OFFER", raising=False)
     # Force "tmux not installed" regardless of the test machine, so the offer fires.
     monkeypatch.setattr(tuimod._tmux, "available", lambda which=None: False)
     app = SessionExplorerApp(index_path=path)
