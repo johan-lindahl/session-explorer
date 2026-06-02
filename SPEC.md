@@ -388,7 +388,7 @@ Enter always lands you *in* the session. To start several and watch them, jump i
 
 ### Snapshot rendering
 
-A `set_interval` timer (~1 s, tunable) updates the preview pane for the **selected** live session via `snapshot.py`:
+For a live session the preview shows the **full metadata block** (identical to a stopped session) followed by a `── live ──` divider and the snapshot (capped to the last `LIVE_PREVIEW_LINES` rows so the metadata stays visible). A `set_interval` timer (~1 s, tunable) refreshes it via `snapshot.py`:
 
 - **Explorer-launched (tmux) window** → `tmux capture-pane -ep -t <sid>`. tmux maintains every background pane's screen buffer; the current claude frame is captured without flipping to it. `-e` preserves colour; rendered via `rich.text.Text.from_ansi`.
 - **Live-elsewhere session** (in `live.py` but not a tmux window) → **transcript tail**: parse the last few JSONL events via `jsonl.py` into latest prompt / latest assistant text / last tool call / working-vs-idle.

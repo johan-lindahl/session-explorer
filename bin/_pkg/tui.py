@@ -44,6 +44,7 @@ OURS_GLYPH = "●"   # idle, accessible (running in our tmux — Enter to jump i
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
+LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 
 
 def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
@@ -1395,6 +1396,8 @@ class SessionExplorerApp(App):
         self._preview.update(_preview_text(data))
 
     def _render_live_preview(self, data: dict, sid: str):
+        """Full metadata block (same as a stopped session) followed by a live
+        section: the captured tmux frame for our windows, or a transcript tail."""
         from rich.console import Group
         from rich.text import Text
         text, is_ansi = _snapshot.snapshot(
@@ -1402,11 +1405,18 @@ class SessionExplorerApp(App):
             transcript_path=data.get("transcript_path", ""),
             tmux_window_names=_tmux.session_windows(),
             capture_fn=_tmux.capture_pane)
-        body = Text.from_ansi(text) if is_ansi else Text(text)
-        header = Text.from_markup(
-            f"[b]{data.get('name_cached') or sid[:8]}[/]  "
-            f"[green]{self._live_states.get(sid, '')}[/]\n[dim]── live ──[/]")
-        return Group(header, body)
+        meta = Text.from_markup(_preview_text(data))
+        state = self._live_states.get(sid, "")
+        divider = Text.from_markup(f"\n[dim]──[/] [green]live[/] [dim]({state}) ──────[/]\n")
+        # Keep the metadata block visible: cap the live section to its last lines
+        # (a full-screen capture-pane can be 40+ rows). Splitting on \n is safe
+        # for ANSI — escape sequences never span lines.
+        lines = text.rstrip("\n").splitlines()
+        if len(lines) > LIVE_PREVIEW_LINES:
+            lines = lines[-LIVE_PREVIEW_LINES:]
+        clipped = "\n".join(lines)
+        body = Text.from_ansi(clipped) if is_ansi else Text(clipped)
+        return Group(meta, divider, body)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._refresh_preview()
