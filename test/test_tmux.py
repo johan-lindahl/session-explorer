@@ -156,6 +156,18 @@ def test_build_dock_respects_custom_pct():
         "join-pane", "-h", "-l", "50%", "-s", "sid-1", "-t", "explorer"]
 
 
+def test_build_dock_focus_false_adds_dash_d():
+    # -d joins the pane WITHOUT selecting it, so the explorer keeps focus —
+    # used by cursor-follow sync (don't yank the user out of the tree).
+    assert tmux.build_dock("sid-1", focus=False) == [
+        "tmux", "-L", "session-explorer",
+        "join-pane", "-d", "-h", "-l", "65%", "-s", "sid-1", "-t", "explorer"]
+
+
+def test_build_dock_focus_true_is_default_and_omits_dash_d():
+    assert "-d" not in tmux.build_dock("sid-1")
+
+
 def test_build_dock_actually_joins_a_pane_on_real_tmux():
     # A pure-argv assertion can't catch a well-formed-but-wrong flag (the
     # original `-p 65` returned "size missing" yet looked fine in the unit

@@ -1470,7 +1470,7 @@ async def test_enter_starts_and_docks_when_stopped(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", (sid, cwd, label)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.setdefault("dock", sid) or 0)
+                        lambda sid, focus=True: calls.update(dock=sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1496,7 +1496,7 @@ async def test_double_click_docks_like_enter(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.setdefault("dock", sid) or 0)
+                        lambda sid, focus=True: calls.update(dock=sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1543,7 +1543,7 @@ async def test_enter_docks_a_running_background_session(index_path, monkeypatch)
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.setdefault("dock", sid) or 0)
+                        lambda sid, focus=True: calls.update(dock=sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1567,7 +1567,7 @@ async def test_enter_on_already_docked_session_refocuses_only(index_path, monkey
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.setdefault("dock", sid) or 0)
+                        lambda sid, focus=True: calls.update(dock=sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "select_pane",
                         lambda pane: calls.setdefault("select", pane) or 0)
     app = SessionExplorerApp(index_path=index_path)
@@ -1849,7 +1849,7 @@ async def test_new_session_tmux_starts_window(index_path, monkeypatch):
     monkeypatch.setattr(
         tmux_mod, "start_new_session_window",
         lambda *a, **k: calls.setdefault("start", (a, k)))
-    monkeypatch.setattr(tmux_mod, "dock", lambda sid: calls.setdefault("dock", sid))
+    monkeypatch.setattr(tmux_mod, "dock", lambda sid, focus=True: calls.update(dock=sid) or 0)
     monkeypatch.setattr(tmux_mod, "docked_pane", lambda self_pane: None)
 
     app = tui_mod.SessionExplorerApp(index_path=index_path)
@@ -1892,7 +1892,7 @@ async def test_new_session_docks_into_the_split(index_path, monkeypatch):
                         lambda sid, cwd, name, worktree, label=None:
                             calls.append(("new", sid, name)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.append(("dock", sid)) or 0)
+                        lambda sid, focus=True: calls.append(("dock", sid)) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -2000,7 +2000,7 @@ async def test_dock_helper_swaps_docked_session(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.append(("start", sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.append(("dock", sid)) or 0)
+                        lambda sid, focus=True: calls.append(("dock", sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "select_pane",
                         lambda pane: calls.append(("select", pane)) or 0)
     app = SessionExplorerApp(index_path=index_path)
@@ -2021,7 +2021,7 @@ async def test_dock_helper_refocuses_when_same_session(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "select_pane",
                         lambda pane: calls.append(("select", pane)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
-                        lambda sid: calls.append(("dock", sid)) or 0)
+                        lambda sid, focus=True: calls.append(("dock", sid)) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -2029,3 +2029,104 @@ async def test_dock_helper_refocuses_when_same_session(index_path, monkeypatch):
         app._dock("same", None, None, already_running=True)
     assert calls == [("select", "%9")]                  # refocus only, no re-dock
     assert app._docked_sid == "same"
+
+
+async def test_dock_failure_leaves_no_phantom_docked_sid(index_path, monkeypatch):
+    # A failed join-pane (rc != 0) must NOT record _docked_sid — otherwise the
+    # state lies (a later Enter would take the refocus path against a pane that
+    # isn't there) and the failure stays silent.
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "start_window", lambda sid, cwd, label=None: 0)
+    monkeypatch.setattr(tuimod._tmux, "dock", lambda sid, focus=True: 1)   # join-pane fails
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._dock("new", "/proj", "New", already_running=False)
+    assert app._docked_sid is None
+
+
+async def test_sync_docks_running_session_under_cursor_without_focus(index_path, monkeypatch):
+    # Cursor on a running background session → dock it, but keep focus in the
+    # tree (focus=False) so the user can keep navigating.
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])  # running, ours
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid, focus=True: calls.append(("dock", sid, focus)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app, "_selected_sid", lambda: "sid-1")
+        app._sync_dock_to_cursor()
+    assert calls == [("dock", "sid-1", False)]
+    assert app._docked_sid == "sid-1"
+
+
+async def test_sync_closes_pane_on_non_running_or_folder(index_path, monkeypatch):
+    # Cursor on a stopped session, a peek-only (elsewhere) session, or a folder
+    # (sid None) → undock whatever's shown so the explorer reclaims the width.
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])  # selected not a window
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: "%9")
+    monkeypatch.setattr(tuimod._tmux, "undock",
+                        lambda pane, sid: calls.append(("undock", pane, sid)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "old"
+        monkeypatch.setattr(app, "_selected_sid", lambda: None)   # folder node
+        app._sync_dock_to_cursor()
+    assert calls == [("undock", "%9", "old")]
+    assert app._docked_sid is None
+
+
+async def test_sync_noop_when_cursor_on_already_docked(index_path, monkeypatch):
+    # Cursor on the session that's already docked → do nothing (and crucially
+    # don't steal focus into claude).
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "dock", lambda sid, focus=True: calls.append("dock") or 0)
+    monkeypatch.setattr(tuimod._tmux, "undock", lambda pane, sid: calls.append("undock") or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_pane", lambda pane: calls.append("select") or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "sid-1"
+        monkeypatch.setattr(app, "_selected_sid", lambda: "sid-1")
+        app._sync_dock_to_cursor()
+    assert calls == []
+
+
+async def test_navigation_debounced_sync_docks_running_session(index_path, monkeypatch):
+    # End-to-end: moving the cursor onto a running session schedules a debounced
+    # sync that then docks it. Debounce shortened so the test isn't timing-flaky.
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod, "DOCK_SYNC_DEBOUNCE", 0.01)
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "dock",
+                        lambda sid, focus=True: calls.append((sid, focus)) or 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")   # project node
+        await pilot.press("down")   # folder node
+        await pilot.press("down")   # session leaf (sid-1)
+        await pilot.pause(0.1)      # let the (shortened) debounce fire
+    assert ("sid-1", False) in calls
+    assert app._docked_sid == "sid-1"

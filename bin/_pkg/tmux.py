@@ -83,15 +83,18 @@ def build_select_window(target: str) -> List[str]:
     return build_base() + ["select-window", "-t", target]
 
 
-def build_dock(sid: str, pct: int = DOCK_PCT) -> List[str]:
+def build_dock(sid: str, pct: int = DOCK_PCT, focus: bool = True) -> List[str]:
     """Join the background window `sid` into the explorer window as a right-hand
     pane. `-h` makes the split horizontal (side by side); the joined (claude)
     pane lands on the right at ~`pct`% width. Size is `-l <n>%`: `join-pane` has
     no `-p` flag (that belongs to `split-window` and is gone from modern tmux —
     `-p` yields "size missing"). The `%` suffix on `-l` needs tmux ≥ 3.1, which
-    is why VERSION_FLOOR is 3.1."""
-    return build_base() + [
-        "join-pane", "-h", "-l", f"{pct}%", "-s", sid, "-t", EXPLORER_WINDOW]
+    is why VERSION_FLOOR is 3.1. `focus=False` adds `-d` so the joined pane is
+    not selected — the explorer keeps focus (cursor-follow sync)."""
+    argv = ["join-pane", "-h", "-l", f"{pct}%", "-s", sid, "-t", EXPLORER_WINDOW]
+    if not focus:
+        argv.insert(1, "-d")              # join-pane -d: don't select the pane
+    return build_base() + argv
 
 
 def build_undock(pane_id: str, sid: str) -> List[str]:
@@ -229,11 +232,12 @@ def select_window(target: str) -> int:
     return _call(build_select_window(target))
 
 
-def dock(sid: str, pct: int = DOCK_PCT) -> int:
+def dock(sid: str, pct: int = DOCK_PCT, focus: bool = True) -> int:
     """Join the background window `sid` into the explorer window as the right
-    pane. join-pane consumes the source window and focuses the joined pane, so
-    the user lands in claude ready to type."""
-    return _call(build_dock(sid, pct))
+    pane. join-pane consumes the source window. With `focus=True` (Enter) it
+    selects the joined pane so the user lands in claude; with `focus=False`
+    (cursor-follow sync) it adds `-d` so focus stays in the explorer tree."""
+    return _call(build_dock(sid, pct, focus))
 
 
 def undock(pane_id: str, sid: str) -> int:
