@@ -1460,3 +1460,22 @@ async def test_enter_flips_into_running_window(index_path, monkeypatch):
         await pilot.press("enter")
         await pilot.pause()
     assert calls["select"] == "sid-1"
+
+
+async def test_preview_shows_snapshot_for_live_session(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
+    monkeypatch.setattr(tuimod._tmux, "capture_pane", lambda s: "LIVE FRAME for " + s)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._live_states = {"sid-1": "working"}
+        group = app._render_live_preview(
+            {"sid": "sid-1", "transcript_path": "/x", "name_cached": "planning/sprint14"},
+            "sid-1")
+    # Group.renderables is a list of rich Text objects; check the captured frame
+    # made it into the body.
+    bodies = " ".join(r.plain for r in group.renderables if hasattr(r, "plain"))
+    assert "LIVE FRAME for sid-1" in bodies

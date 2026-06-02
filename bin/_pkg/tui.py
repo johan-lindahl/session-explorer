@@ -18,6 +18,7 @@ from textual.widgets.option_list import Option
 
 from . import __version__
 from . import index as _index
+from . import snapshot as _snapshot
 from . import tmux as _tmux
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path
@@ -41,6 +42,7 @@ SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 IDLE_GLYPH = "○"
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
+SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 
 
 def _glyph(state: "str | None", frame: int) -> str:
@@ -565,6 +567,7 @@ class SessionExplorerApp(App):
         self._poll_live()
         self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
+        self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
 
     def _maybe_open_help(self) -> None:
         # First run only: pop the help overlay so newcomers learn the slash-
@@ -1270,10 +1273,27 @@ class SessionExplorerApp(App):
         node = self._tree.cursor_node
         data = node.data if node and node.data else {}
         if "sid" not in data:
-            # Cursor is on a project/folder node, not a session.
             self._preview.update("[dim]Select a session to preview.[/]")
             return
+        sid = data["sid"]
+        if self._tmux_enabled and sid in self._live_states:
+            self._preview.update(self._render_live_preview(data, sid))
+            return
         self._preview.update(_preview_text(data))
+
+    def _render_live_preview(self, data: dict, sid: str):
+        from rich.console import Group
+        from rich.text import Text
+        text, is_ansi = _snapshot.snapshot(
+            sid=sid,
+            transcript_path=data.get("transcript_path", ""),
+            tmux_window_names=_tmux.session_windows(),
+            capture_fn=_tmux.capture_pane)
+        body = Text.from_ansi(text) if is_ansi else Text(text)
+        header = Text.from_markup(
+            f"[b]{data.get('name_cached') or sid[:8]}[/]  "
+            f"[green]{self._live_states.get(sid, '')}[/]\n[dim]── live ──[/]")
+        return Group(header, body)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._refresh_preview()
