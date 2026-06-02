@@ -1612,6 +1612,7 @@ async def test_quit_with_live_sessions_shuts_down(index_path, monkeypatch):
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
     monkeypatch.setattr(tuimod._tmux, "kill_server", lambda: calls.setdefault("kill", True) or 0)
+    monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda text: 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1628,6 +1629,7 @@ async def test_quit_without_sessions_exits_directly(index_path, monkeypatch):
     from _pkg.tui import SessionExplorerApp
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda text: 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1646,6 +1648,7 @@ async def test_quit_with_only_a_docked_session_still_guards(index_path, monkeypa
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "kill_server", lambda: calls.setdefault("kill", True) or 0)
+    monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda text: 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1727,6 +1730,7 @@ async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
                         lambda p: calls.setdefault("flag", p))
     monkeypatch.setattr(tuimod._tmux, "detach_client",
                         lambda: calls.setdefault("detach", True) or 0)
+    monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda text: 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
