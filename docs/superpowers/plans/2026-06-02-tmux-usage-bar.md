@@ -40,6 +40,14 @@
 
 ## Task 0 (M0): Feasibility probe — capture a real `/usage` panel
 
+> **STATUS: SATISFIED (2026-06-02).** A real `/usage` capture confirmed the
+> approach: `/usage` opens directly on the Usage tab and renders inline as plain
+> text (no navigation), the `Current session` / `NN% used` / `Resets H:MMam (TZ)`
+> lines are present, and a fresh probe claude reports the true account 5-hour
+> window. Dismissal is `Escape` (modal Settings screen). The fixture
+> `test/fixtures/usage_panel.txt` is already saved. Steps below are retained as
+> the reproduction record; you may skip straight to Task 1.
+
 **This is a manual investigation gate, not automated. Everything downstream parses what this produces. If `/usage` needs interactive navigation we can't script, STOP and report back before building further.**
 
 **Files:**
@@ -141,7 +149,7 @@ def _panel() -> str:
 def test_parse_usage_reads_session_percent_and_reset():
     info = usage.parse_usage(_panel())
     assert info is not None
-    assert info.percent == 18                 # the SESSION bucket (first/anchored)
+    assert info.percent == 23                 # the SESSION bucket (first/anchored)
     assert info.reset_label == "1:29am"
 
 
@@ -568,9 +576,12 @@ def scrape_usage(claude_dir: str, window: str = None) -> Optional[UsageInfo]:
     except Exception:
         return None
     finally:
+        # /usage opens a modal Settings screen ("Esc to cancel"), so dismiss it
+        # with Escape rather than typing /exit at a prompt; kill-window is the
+        # hard backstop that terminates the throwaway claude either way.
         try:
-            _tmux.send_keys(window, "/exit", "Enter")
-            time.sleep(0.3)
+            _tmux.send_keys(window, "Escape")
+            time.sleep(0.2)
         except Exception:
             pass
         try:
