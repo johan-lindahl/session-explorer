@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.6.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
+**Status:** Shipped — **v1.7.0**, installable from the Claude Code marketplace. All milestones below (M1–M7) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record.
 
 ## Goals
 

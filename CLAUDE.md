@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Implemented and released (**v1.6.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, the tmux interaction layer, new-session creation (`c`), and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
+Implemented and released (**v1.7.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, the split-pane tmux interaction layer (explorer left / active session docked right, F9 switch, F12 fullscreen), new-session creation (`c`), and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
 
 ## What this project is
 
