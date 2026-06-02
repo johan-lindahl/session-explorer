@@ -5,6 +5,7 @@ scrape coordinator at the bottom is thin and verified manually (see the
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -14,7 +15,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # date-style reset ("Jun 9, 12:00pm") still matches as a time, and so plain
 # numbers in the bar can't be mistaken for a reset.
 _TIME = re.compile(r"(\d{1,2}:\d{2}\s*[apAP][mM])")
-_PERCENT = re.compile(r"(\d{1,3})\s*%\s*used", re.IGNORECASE)
+_PERCENT = re.compile(r"(?<![0-9\-])(\d{1,3})\s*%\s*used", re.IGNORECASE)
 
 
 @dataclass
@@ -57,14 +58,14 @@ CELLS = 12
 
 
 def render_bar(info: UsageInfo, cells: int = CELLS) -> str:
-    """A compact ` [████░░░░] 18% ↺1:29am ` string for tmux status-left. Single
+    """A compact ` [████░░░░] 18% ↺1:29am` string for tmux status-left. Single
     colour (v1) so the visible length is predictable for status-left-length."""
     n = max(0, min(cells, round(info.percent / 100 * cells)))
     bar = FILL * n + EMPTY * (cells - n)
     return f" [{bar}] {info.percent}% ↺{info.reset_label}"
 
 
-import os
+# --- coordinator helpers (called by the scrape coordinator in a later task) ---
 
 PROBE_DIRNAME = ".session-explorer-probe"
 

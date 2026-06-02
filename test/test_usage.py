@@ -48,6 +48,8 @@ def test_render_bar_clamps_rounding():
     # 99% of 10 cells rounds to 10 filled but must not exceed cells
     s = usage.render_bar(usage.UsageInfo(99, "9:00am"), cells=10)
     assert s.count("█") <= 10
+    assert s.startswith(" [")
+    assert "99% ↺9:00am" in s
 
 
 def test_has_usage_panel_detects_percent_line():
@@ -59,6 +61,16 @@ def test_looks_like_trust_prompt():
     assert usage.looks_like_trust_prompt(
         "Do you trust the files in this folder?") is True
     assert usage.looks_like_trust_prompt("normal prompt") is False
+
+
+def test_parse_usage_returns_none_when_percent_but_no_time():
+    assert usage.parse_usage("Current session\n23% used\nResets someday") is None
+
+
+def test_parse_usage_rejects_out_of_range_percent():
+    # 4-digit and negative percents violate the 0-100 contract -> no match
+    assert usage.parse_usage("Current session\n1000% used\nResets 1:00am") is None
+    assert usage.parse_usage("Current session\n-5% used\nResets 1:00am") is None
 
 
 def test_probe_cwd_under_claude_dir():
