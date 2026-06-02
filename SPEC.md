@@ -377,8 +377,10 @@ tmux -L session-explorer -f <generated.conf> new-session -A -s explorer 'exec se
 
 | Key | Stopped session | Running session |
 |---|---|---|
-| **Enter** | `tmux new-window -d -n <sid> -c <cwd> 'claude --resume <sid>'`; explorer stays open | `tmux select-window -t <sid>` — flip in to interact |
+| **Enter** | start it (`tmux new-window -d -n <sid> …`) **and switch straight into it** (`select-window`) — one keypress, no double-Enter | `tmux select-window -t <sid>` — flip in to interact |
 | **space** | static metadata preview (unchanged) | live snapshot in preview pane; stay in tree |
+
+Enter always lands you *in* the session. To start several and watch them, jump in, press F12/click `[0 explorer]` to come back (the session keeps running), move to the next, Enter again; `space` peeks at any of them without switching.
 
 - **Already live elsewhere** — if the selected session is live in the registry but is not one of our tmux windows (running in another terminal), Enter refuses with a warning and offers peek-only via transcript tail. Two `claude --resume` processes on one JSONL corrupts it.
 - **Switching back:** clickable status-bar tabs are the primary path (the generated config enables a tmux status bar with `[0 explorer] [1 feat/auth ●] …`). **F12** is the keyboard fallback — a no-prefix root binding `bind -n F12 select-window -t explorer`; configurable.
@@ -396,7 +398,9 @@ Only the selected session is polled for a full snapshot. Tree-wide liveness uses
 
 ### Live tree dots
 
-No new mechanism. A session started via `tmux new-window 'claude --resume …'` is an ordinary Claude session; the existing `session-live.sh` hook registers it in `session-explorer-live.json` and the TUI's existing poll renders the working/idle glyph.
+No new liveness mechanism. A session started via `tmux new-window 'claude --resume …'` is an ordinary Claude session; the existing `session-live.sh` hook registers it in `session-explorer-live.json` and the TUI's existing poll renders the working/idle glyph.
+
+When tmux-hosted, the glyph also encodes **accessibility** — whether the live session is one of *our* tmux windows (you can flip into it) or running in a separate terminal (peek-only). `_poll_live` caches the set of our windows (`session_windows()`); `_glyph(state, frame, ours)` renders: **accessible** → green spinner (working) / solid green `●` (idle); **elsewhere** → dim spinner / hollow `○`. Without tmux (`ours=None`) the legacy look (green spinner / dim `○`) is preserved exactly.
 
 ### Lifecycle and quit-guard
 
@@ -558,7 +562,7 @@ All milestones below are **shipped** (current release: v1.5.0). The table is kep
 | M4 | ✅ pytest suite + focused bats suite (install/uninstall/hook); GitHub Actions CI (ubuntu + macos × Python 3.11–3.13); README quickstart with both install paths. CLI subcommands are covered by pytest via subprocess, so bats doesn't duplicate them. |
 | M5 | Community-marketplace distribution. WSL launcher (`wt.exe` re-entry + fallback); native Windows out of scope. |
 | M6 | **Live-session indicator** — live registry sidecar + `session-live.sh` hooks + `live.py` (poll/death-detection) + TUI spinner/poll timers + `live_ids` unnamed-surfacing. PID-capture spike validated (2026-05-29, macOS); end-to-end TUI smoke test optional (timers/animation covered by `run_test` tests). |
-| M7 | **tmux interaction layer** — `tmux.py` + `snapshot.py`; context-aware Enter (stop→background-window, running→flip-in, live-elsewhere→refuse); generated tmux config (tabs/F12/`client-detached` sentinel); quit-guard; snapshot preview for selected live session; optional consented tmux install with declined-marker; `execvp` fallback without tmux. |
+| M7 | **tmux interaction layer** — `tmux.py` + `snapshot.py`; context-aware Enter (stop→start+switch-in, running→flip-in, live-elsewhere→refuse); accessible-vs-elsewhere live glyphs; generated tmux config (tabs/F12/`client-detached` sentinel); quit-guard; snapshot preview for selected live session; optional consented tmux install with declined-marker; `execvp` fallback without tmux. |
 
 ## Design decisions (resolved)
 

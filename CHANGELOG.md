@@ -8,15 +8,20 @@ follows [semantic versioning](https://semver.org/).
 ### Added
 - **tmux-backed multi-session interaction.** The explorer now runs as window 0
   of a dedicated `tmux -L session-explorer` server and stays alive while you
-  work. `Enter` on a stopped session starts it in a background tmux window;
+  work. `Enter` on a stopped session starts it and switches you straight in;
   `Enter` on a running session flips in to interact. `space` shows a live
   snapshot of the selected session in the preview pane — `capture-pane` for
   our tmux windows, transcript-tail for sessions running elsewhere. Switching
   back uses clickable status-bar tabs (primary) or F12 (keyboard fallback).
-- **Context-aware Enter.** Stopped → launch in background and stay in explorer;
-  running → flip in; live-elsewhere (another terminal holds the transcript) →
-  refuse with a warning and offer peek-only, preventing duplicate `claude
-  --resume` processes on one JSONL.
+  The status bar shows each session's human name, not its raw id.
+- **Context-aware Enter.** Stopped → start the session and switch into it
+  (single keypress); running → flip in; live-elsewhere (another terminal holds
+  the transcript) → refuse with a warning and offer peek-only, preventing
+  duplicate `claude --resume` processes on one JSONL.
+- **Accessibility-aware live glyphs.** When tmux-hosted, the tree distinguishes
+  sessions running in *our* tmux (green spinner / solid `●` — press Enter to
+  jump in) from sessions running in a separate terminal (dim spinner / hollow
+  `○` — peek-only).
 - **Quit-guard.** `q` with live sessions prompts: `[s]` shut down all and quit
   (`tmux kill-server`), `[b]` leave running in the background (sets persist-flag
   then detaches), or `[c]` cancel. Zero live sessions quit cleanly with no

@@ -1423,7 +1423,7 @@ def test_help_text_documents_live_sessions():
     assert "active" in txt.lower()
 
 
-async def test_enter_starts_background_window_when_stopped(index_path, monkeypatch):
+async def test_enter_starts_and_switches_when_stopped(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp
     calls = {}
@@ -1431,6 +1431,8 @@ async def test_enter_starts_background_window_when_stopped(index_path, monkeypat
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # nothing running
     monkeypatch.setattr(tuimod._tmux, "start_window",
                         lambda sid, cwd, label=None: calls.setdefault("start", (sid, cwd, label)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "select_window",
+                        lambda t: calls.setdefault("select", t) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1439,9 +1441,25 @@ async def test_enter_starts_background_window_when_stopped(index_path, monkeypat
         await pilot.press("down")            # session leaf (sid-1)
         await pilot.press("enter")
         await pilot.pause()
-    assert calls["start"][0] == "sid-1"      # started in the background
+    assert calls["start"][0] == "sid-1"      # started the session
     assert calls["start"][2] == "sprint14"   # human label, not the sid (name_cached planning/sprint14)
+    assert calls["select"] == "sid-1"        # auto-switched into it (no second Enter)
     assert app._resume_target is None        # did NOT exit-to-resume
+
+
+def test_glyph_distinguishes_ownership():
+    from _pkg.tui import _glyph
+    # legacy (no tmux distinction): green spinner / dim hollow ○
+    assert "green" in _glyph("working", 0, None)
+    assert "○" in _glyph("idle", 0, None)
+    # accessible (our tmux window): solid ● for idle, green spinner for working
+    assert "●" in _glyph("idle", 0, True)
+    assert "green" in _glyph("working", 0, True)
+    # elsewhere (peek-only): hollow ○ for idle, dim spinner for working
+    assert "○" in _glyph("idle", 0, False)
+    assert "dim" in _glyph("working", 0, False)
+    # not live → blank cell
+    assert _glyph(None, 0, True).strip() == ""
 
 
 async def test_enter_flips_into_running_window(index_path, monkeypatch):

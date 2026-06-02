@@ -39,22 +39,32 @@ NAME_W = 24
 GUIDE_DEPTH = 4  # cells Textual indents per tree level (Tree.guide_depth)
 GLYPH_W = 2  # leading cells reserved on every row for the live-state glyph
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-IDLE_GLYPH = "○"
+IDLE_GLYPH = "○"   # idle, peek-only (running in a separate terminal)
+OURS_GLYPH = "●"   # idle, accessible (running in our tmux — Enter to jump in)
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 
 
-def _glyph(state: "str | None", frame: int) -> str:
+def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
     """A GLYPH_W-wide leading cell for a row's live state. Returns Textual
     console markup (rendered by Tree.process_label). Pure for unit testing.
+
+    `ours` distinguishes a session running in *our* tmux (accessible — press
+    Enter to jump in) from one running in a separate terminal (peek-only):
+      None  → no tmux distinction (legacy look: green spinner / dim ○)
+      True  → accessible: green spinner / solid green ●
+      False → elsewhere:  dim spinner  / dim ○
 
     Display width is always GLYPH_W cells after markup is stripped (the markup
     glyph is 1 cell + 1 separating space), so stat columns stay aligned."""
     if state == "working":
         ch = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-        return f"[green]{ch}[/] "
+        color = "dim" if ours is False else "green"
+        return f"[{color}]{ch}[/] "
     if state == "idle":
+        if ours is True:
+            return f"[green]{OURS_GLYPH}[/] "
         return f"[dim]{IDLE_GLYPH}[/] "
     return " " * GLYPH_W
 
@@ -508,6 +518,9 @@ class SessionExplorerApp(App):
         # tmux-hosted interaction layer (spec §1). The launcher sets this env
         # var only when it wrapped the explorer in our dedicated tmux server.
         self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
+        # sids that are live windows in *our* tmux server (accessible via flip),
+        # refreshed by _poll_live. Distinct from sessions live in other terminals.
+        self._our_windows: set = set()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -726,7 +739,8 @@ class SessionExplorerApp(App):
         def render(parent, project_label, segments, node, child_depth):
             for sid, s in node["_sessions"]:
                 if self._matches(sid, s):
-                    glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
+                    glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
+                                   self._ours_flag(sid))
                     leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph),
                                            data={"sid": sid, **s})
                     self._row_nodes[sid] = (leaf, child_depth)
@@ -787,12 +801,13 @@ class SessionExplorerApp(App):
                 "This session is already running in another terminal.\n"
                 "Showing its progress here; press space to peek. (y/esc)"))
             return
-        # Stopped → start in a background tmux window, stay in the explorer.
+        # Stopped → start the session in a tmux window and switch straight into it.
         if _dead_worktree_repo(project_path):
             def after(ok: bool) -> None:
                 if ok:
                     cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
                     _tmux.start_window(sid, cwd, label)
+                    _tmux.select_window(sid)   # auto-switch into the new session
                     self._poll_live()
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
@@ -801,6 +816,7 @@ class SessionExplorerApp(App):
         else:
             cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
             _tmux.start_window(sid, cwd, label)
+            _tmux.select_window(sid)   # auto-switch into the new session
             self._poll_live()
 
     def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:
@@ -1170,10 +1186,20 @@ class SessionExplorerApp(App):
             new_states = _live.poll(self._live_path())
         except Exception:
             return  # never let the indicator break the UI
-        if new_states != self._live_states:
+        # Which live sessions are *our* tmux windows (accessible) vs elsewhere.
+        new_ours: set = set()
+        if self._tmux_enabled:
+            try:
+                new_ours = set(_tmux.session_windows())
+            except Exception:
+                new_ours = self._our_windows  # keep last good on a tmux hiccup
+        states_changed = new_states != self._live_states
+        ours_changed = new_ours != self._our_windows
+        if states_changed or ours_changed:
             old = self._live_states
             self._live_states = new_states
-            if self._visibility_changed(old, new_states):
+            self._our_windows = new_ours
+            if states_changed and self._visibility_changed(old, new_states):
                 sid = self._selected_sid()
                 self._populate()
                 self._restore_cursor_to_sid(sid)
@@ -1182,6 +1208,13 @@ class SessionExplorerApp(App):
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
+
+    def _ours_flag(self, sid: str) -> "bool | None":
+        """For _glyph: None when not tmux-hosted (no accessibility distinction),
+        else True if `sid` is one of our tmux windows, False if live elsewhere."""
+        if not self._tmux_enabled:
+            return None
+        return sid in self._our_windows
 
     def _selected_sid(self) -> "str | None":
         """The sid of the currently-selected row, or None if on a non-session node."""
@@ -1232,7 +1265,8 @@ class SessionExplorerApp(App):
         """Rewrite glyphs for all rows currently tracked, without rebuilding."""
         for sid, (leaf, depth) in self._row_nodes.items():
             data = leaf.data or {}
-            glyph = _glyph(self._live_states.get(sid), self._spinner_frame)
+            glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
+                           self._ours_flag(sid))
             leaf.set_label(_row_label(sid, data, depth, glyph))
 
     def _do_live_metadata_refresh(self) -> None:
@@ -1291,7 +1325,8 @@ class SessionExplorerApp(App):
                 continue
             leaf, depth = node
             leaf.set_label(_row_label(sid, leaf.data or {}, depth,
-                                      _glyph(state, self._spinner_frame)))
+                                      _glyph(state, self._spinner_frame,
+                                             self._ours_flag(sid))))
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread
