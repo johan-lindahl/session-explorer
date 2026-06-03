@@ -25,3 +25,22 @@ def test_info_plist_escapes_name():
     xml = macapp.build_info_plist(name="A & B", version="1.9.0")
     assert "A &amp; B" in xml
     assert "A & B" not in xml.replace("A &amp; B", "")
+
+
+def test_launcher_repairs_path_for_tmux():
+    sh = macapp.build_launcher_script()
+    # /opt/homebrew/bin must be on PATH or tmux.available() returns False in the
+    # GUI launch context and `launch` drops its tmux behaviour.
+    assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"' in sh
+    assert sh.startswith("#!/bin/zsh")
+
+
+def test_launcher_resolves_binary_with_fallbacks():
+    sh = macapp.build_launcher_script()
+    # Marketplace install path (versioned, changes on update) resolved at run time,
+    # then PATH lookup, then the plain-install symlink.
+    assert "installed_plugins.json" in sh
+    assert "session-explorer@session-explorer" in sh
+    assert "command -v session-explorer" in sh
+    assert "$HOME/.local/bin/session-explorer" in sh
+    assert 'exec "$CLI" launch' in sh
