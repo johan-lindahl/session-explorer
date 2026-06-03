@@ -95,3 +95,20 @@ PY
 [ -x "$CLI" ] || CLI="$HOME/.local/bin/session-explorer"
 exec "$CLI" launch
 '''
+
+
+def app_already_pinned(persistent_apps: list, app_path: str) -> bool:
+    """True if any dock entry's file URL points at app_path. Tolerant of the
+    malformed/partial entries real Dock plists accumulate."""
+    target = os.path.realpath(app_path).rstrip("/")
+    for entry in persistent_apps or []:
+        try:
+            url = entry["tile-data"]["file-data"]["_CFURLString"]
+        except (TypeError, KeyError):
+            continue
+        if not isinstance(url, str) or not url.startswith("file://"):
+            continue
+        path = unquote(url[len("file://"):]).rstrip("/")
+        if os.path.realpath(path).rstrip("/") == target:
+            return True
+    return False

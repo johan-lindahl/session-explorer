@@ -44,3 +44,23 @@ def test_launcher_resolves_binary_with_fallbacks():
     assert "command -v session-explorer" in sh
     assert "$HOME/.local/bin/session-explorer" in sh
     assert 'exec "$CLI" launch' in sh
+
+
+def test_app_already_pinned_true_when_path_present():
+    persistent = [
+        {"tile-data": {"file-data": {"_CFURLString": "file:///Applications/Safari.app/"}}},
+        {"tile-data": {"file-data": {"_CFURLString": "file:///Users/x/Applications/Session%20Explorer.app/"}}},
+    ]
+    assert macapp.app_already_pinned(persistent, "/Users/x/Applications/Session Explorer.app")
+
+
+def test_app_already_pinned_false_when_absent():
+    persistent = [
+        {"tile-data": {"file-data": {"_CFURLString": "file:///Applications/Safari.app/"}}},
+    ]
+    assert not macapp.app_already_pinned(persistent, "/Users/x/Applications/Session Explorer.app")
+
+
+def test_app_already_pinned_tolerates_malformed_entries():
+    persistent = [{}, {"tile-data": {}}, "garbage", None]
+    assert not macapp.app_already_pinned(persistent, "/Users/x/Applications/Session Explorer.app")
