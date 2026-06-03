@@ -64,3 +64,39 @@ def test_app_already_pinned_false_when_absent():
 def test_app_already_pinned_tolerates_malformed_entries():
     persistent = [{}, {"tile-data": {}}, "garbage", None]
     assert not macapp.app_already_pinned(persistent, "/Users/x/Applications/Session Explorer.app")
+
+
+import os as _os
+import plistlib
+
+
+def test_build_bundle_creates_full_structure(tmp_path):
+    icon = tmp_path / "src-icon.icns"
+    icon.write_bytes(b"icns-bytes")
+    app = macapp.build_bundle(
+        dest=str(tmp_path / "Applications"),
+        name="Session Explorer",
+        version="1.9.0",
+        icon_src=str(icon),
+    )
+    assert app.endswith("/Session Explorer.app")
+    launcher = _os.path.join(app, "Contents", "MacOS", "session-explorer-launch")
+    assert _os.path.exists(launcher)
+    assert _os.access(launcher, _os.X_OK)               # chmod 0755
+    icns = _os.path.join(app, "Contents", "Resources", "icon.icns")
+    assert _os.path.exists(icns)
+    with open(_os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        pl = plistlib.load(f)
+    assert pl["CFBundleIconFile"] == "icon"
+    assert "CFBundleIconName" not in pl
+
+
+def test_build_bundle_is_idempotent(tmp_path):
+    icon = tmp_path / "src-icon.icns"
+    icon.write_bytes(b"icns-bytes")
+    args = dict(dest=str(tmp_path / "Applications"), name="Session Explorer",
+                version="1.9.0", icon_src=str(icon))
+    macapp.build_bundle(**args)
+    macapp.build_bundle(**args)                          # must not raise / duplicate
+    apps = list((tmp_path / "Applications").glob("*.app"))
+    assert len(apps) == 1

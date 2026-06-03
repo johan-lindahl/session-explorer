@@ -97,6 +97,31 @@ exec "$CLI" launch
 '''
 
 
+def build_bundle(*, dest: str, name: str, version: str, icon_src: str) -> str:
+    """Create <dest>/<name>.app with Info.plist, launcher, and icon. Idempotent:
+    an existing bundle at the path is removed first. Returns the .app path."""
+    dest = os.path.expanduser(dest)
+    app = os.path.join(dest, f"{name}.app")
+    if os.path.exists(app):
+        shutil.rmtree(app)
+    contents = os.path.join(app, "Contents")
+    macos = os.path.join(contents, "MacOS")
+    resources = os.path.join(contents, "Resources")
+    os.makedirs(macos)
+    os.makedirs(resources)
+
+    with open(os.path.join(contents, "Info.plist"), "w", encoding="utf-8") as f:
+        f.write(build_info_plist(name=name, version=version))
+
+    launcher = os.path.join(macos, EXECUTABLE_NAME)
+    with open(launcher, "w", encoding="utf-8") as f:
+        f.write(build_launcher_script())
+    os.chmod(launcher, 0o755)
+
+    shutil.copyfile(icon_src, os.path.join(resources, "icon.icns"))
+    return app
+
+
 def app_already_pinned(persistent_apps: list, app_path: str) -> bool:
     """True if any dock entry's file URL points at app_path. Tolerant of the
     malformed/partial entries real Dock plists accumulate."""
