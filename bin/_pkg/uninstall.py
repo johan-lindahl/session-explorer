@@ -120,7 +120,6 @@ def teardown(*, claude_dir: str, settings_path: "str | None" = None,
 
     # 4c. Remove the macOS Dock launcher app (best-effort; macOS only in practice
     #     but path-driven so it is testable cross-platform).
-    home = os.path.dirname(os.path.abspath(claude_dir))
     apps_dir = mac_apps_dir or os.path.join(home, "Applications")
     app = os.path.join(apps_dir, "Session Explorer.app")
     if os.path.isdir(app):
@@ -129,7 +128,7 @@ def teardown(*, claude_dir: str, settings_path: "str | None" = None,
         # Unpin from the Dock (best-effort; only meaningful on macOS).
         try:
             from . import macapp
-            macapp._unpin_from_dock(app)  # added below
+            macapp._unpin_from_dock(app)
         except Exception:
             pass
 

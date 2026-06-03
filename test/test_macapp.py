@@ -101,10 +101,6 @@ def test_build_bundle_is_idempotent(tmp_path):
     assert len(apps) == 1
 
 
-import subprocess as _sp
-import sys as _sys
-
-
 def test_cli_install_app_is_macos_guarded(monkeypatch):
     """On non-Darwin the subcommand must refuse cleanly (exit 1), not traceback.
     We assert the guard message rather than the platform so it passes on CI Linux
