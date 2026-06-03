@@ -137,3 +137,91 @@ def app_already_pinned(persistent_apps: list, app_path: str) -> bool:
         if os.path.realpath(path).rstrip("/") == target:
             return True
     return False
+
+
+def _icon_asset_path() -> str:
+    """assets/app-icon.icns at the repo/plugin root (……/bin/_pkg/macapp.py → root)."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    root = os.path.normpath(os.path.join(here, "..", ".."))
+    return os.path.join(root, "assets", "app-icon.icns")
+
+
+def _refresh_icon_cache(app: str) -> None:
+    """Best-effort: re-register the bundle and clear the user icon cache so the
+    new icon shows immediately. Never raises."""
+    lsreg = ("/System/Library/Frameworks/CoreServices.framework/Versions/A/"
+             "Frameworks/LaunchServices.framework/Versions/A/Support/lsregister")
+    for cmd in (["/usr/bin/touch", app], [lsreg, "-f", app]):
+        try:
+            subprocess.run(cmd, check=False, capture_output=True)
+        except Exception:
+            pass
+    try:
+        cache = subprocess.run(["getconf", "DARWIN_USER_CACHE_DIR"],
+                               capture_output=True, text=True).stdout.strip()
+        if cache:
+            store = os.path.join(cache, "com.apple.iconservices.store")
+            shutil.rmtree(store, ignore_errors=True)
+    except Exception:
+        pass
+    _killall("Dock")
+
+
+def _killall(proc: str) -> None:
+    try:
+        subprocess.run(["killall", proc], check=False, capture_output=True)
+    except Exception:
+        pass
+
+
+def _pin_to_dock(app: str) -> bool:
+    """Append a persistent-apps entry unless one already points at `app`.
+    Returns True if pinned (or already pinned), False if the attempt failed."""
+    try:
+        raw = subprocess.run(
+            ["defaults", "export", "com.apple.dock", "-"],
+            capture_output=True, check=True).stdout
+        plist = plistlib.loads(raw)
+        if app_already_pinned(plist.get("persistent-apps", []), app):
+            return True
+        entry = (
+            '<dict><key>tile-data</key><dict><key>file-data</key><dict>'
+            '<key>_CFURLString</key><string>file://%s/</string>'
+            '<key>_CFURLStringType</key><integer>0</integer>'
+            '</dict></dict></dict>' % app
+        )
+        subprocess.run(
+            ["defaults", "write", "com.apple.dock", "persistent-apps",
+             "-array-add", entry],
+            check=True, capture_output=True)
+        _killall("Dock")
+        return True
+    except Exception:
+        return False
+
+
+def install_app(*, dest: str = "~/Applications", name: str = "Session Explorer",
+                pin_dock: bool = True) -> int:
+    """Build the bundle and (best-effort) refresh the icon cache + pin to Dock.
+    macOS-only. Returns a process exit code."""
+    if platform.system() != "Darwin":
+        print("install-app is macOS-only.", file=sys.stderr)
+        return 1
+    from . import __version__
+    icon = _icon_asset_path()
+    if not os.path.exists(icon):
+        print(f"icon asset missing: {icon}", file=sys.stderr)
+        return 1
+    dest_abs = os.path.expanduser(dest)
+    os.makedirs(dest_abs, exist_ok=True)
+    app = build_bundle(dest=dest_abs, name=name, version=__version__, icon_src=icon)
+    print(f"Created {app}")
+    _refresh_icon_cache(app)
+    if pin_dock:
+        if _pin_to_dock(app):
+            print("Pinned to the Dock.")
+        else:
+            print(f"Could not pin automatically — drag {app} to your Dock to pin it.")
+    else:
+        print(f"Drag {app} to your Dock to pin it.")
+    return 0
