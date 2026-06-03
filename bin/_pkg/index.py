@@ -152,14 +152,24 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
         tokens = _jsonl.tokens_estimate(transcript_path)
         model = _jsonl.latest_model(transcript_path)
         window = _context_window(model, tokens)
+        # Name selection. The transcript's LAST custom-title normally wins, BUT a
+        # live Claude session re-emits its in-memory title every turn, so after an
+        # explorer rename Claude's next re-emit puts the OLD title back as the last
+        # line. `set_name` records those superseded titles as "shadows"; we ignore
+        # a last-title that's shadowed and keep the user's chosen name instead. A
+        # genuinely new title (e.g. /rename inside the resumed session) isn't
+        # shadowed, so it's still adopted. Fall back to the last-known name when the
+        # transcript yields none (a just-created `claude -n` session has no
+        # transcript until its first turn; append-only means absent != removed).
+        jsonl_title = _jsonl.session_name(transcript_path)
+        shadows = set(existing.get("name_shadows") or [])
+        if jsonl_title and jsonl_title not in shadows:
+            name_cached = jsonl_title
+        else:
+            name_cached = existing.get("name_cached")
         new_entry = {
-            **existing,  # preserve notes and other user-edited fields
-            # Fall back to the last-known name when the transcript yields none:
-            # a just-created (`claude -n`) session has no transcript until its
-            # first turn, and the transcript is append-only, so an absent title
-            # means "not written yet", never "name removed". Without this the
-            # 2s live-refresh would blank a seeded name on every poll.
-            "name_cached": _jsonl.session_name(transcript_path) or existing.get("name_cached"),
+            **existing,  # preserve notes, name_shadows, and other user-edited fields
+            "name_cached": name_cached,
             "first_prompt": _jsonl.first_user_prompt(transcript_path),
             "message_count": _jsonl.message_count(transcript_path),
             "bytes": file_bytes,
@@ -207,6 +217,33 @@ def seed_new_session(index_path: str, session_id: str, name: str,
             "created_at": existing.get("created_at", now),
             "last_active_at": now,
         }
+        return data
+    return mutate(index_path, mutator)
+
+
+def set_name(index_path: str, session_id: str, new_name: str,
+             transcript_path: "str | None" = None) -> dict:
+    """Record an explorer-driven rename as authoritative.
+
+    Sets `name_cached` to `new_name` and adds every OTHER custom-title currently
+    in the transcript to the entry's `name_shadows`. A live Claude session keeps
+    re-emitting its in-memory title, so without shadows its next re-emit of the
+    pre-rename title would revert the name on the next `record_session` (the
+    "rename reverts after a while" bug). Call AFTER appending the new
+    custom-title — `new_name` is excluded from the shadow set, so its presence in
+    the transcript is harmless. Shadowing every prior title (not just the
+    immediate predecessor) also covers chained renames and re-emits of any
+    earlier title.
+    """
+    titles = set(_jsonl.all_custom_titles(transcript_path)) if transcript_path else set()
+
+    def mutator(data: dict) -> dict:
+        entry = data["sessions"].setdefault(session_id, {})
+        shadows = set(entry.get("name_shadows") or []) | titles
+        shadows.discard(new_name)
+        if shadows:
+            entry["name_shadows"] = sorted(shadows)
+        entry["name_cached"] = new_name
         return data
     return mutate(index_path, mutator)
 

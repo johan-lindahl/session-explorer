@@ -66,12 +66,19 @@ across ~50 transcripts in ~/.claude/projects/):
   - 100% of 389 sampled lines had exactly the key set
     {"type","customTitle","sessionId"} with no variation.
   - sessionId on the custom-title line matches the JSONL filename's UUID.
-  - Multiple custom-title lines may appear in one file (observed up to 27).
-    Within a single file the value never drifted across the entire corpus
-    (0/~50 multi-line files showed distinct customTitle values), so in
-    practice first==last. The spec rule "LAST custom-title wins" is still
-    the safe semantic and is what session_name() implements.
+  - Multiple custom-title lines may appear in one file (observed up to 60+).
   - User title overrides ai-title.
+
+CORRECTION (2026-06): the original ~50-file sample concluded the customTitle
+"never drifted (first==last)". That was wrong. A LIVE Claude session re-writes
+its in-memory custom-title roughly every turn, so after an *external* rename
+(this plugin appending a custom-title) Claude's next re-emit puts the OLD title
+back as the file's LAST line. A re-survey of current transcripts found drift in
+19 files, 3 with the exact rename-then-revert signature. session_name() still
+implements "LAST custom-title wins" (correct for sessions only Claude renames),
+but the explorer no longer trusts it blindly: index.set_name records superseded
+titles as "shadows" and record_session ignores a shadowed last-title. See
+all_custom_titles() and SPEC.md → "Design decisions (resolved)".
 """
 
 import json
@@ -130,6 +137,26 @@ def session_name(path: str) -> Optional[str]:
             if v:
                 last_custom = v
     return last_custom
+
+
+def all_custom_titles(path: str) -> list:
+    """Every `customTitle` value in the transcript, in file order (dups kept).
+
+    A live Claude session re-writes its in-memory custom-title each turn, so a
+    transcript can carry the same title many times and, after an *external*
+    rename (this plugin appending a custom-title), Claude's next re-emit puts the
+    OLD title back as the last line. `session_name()` (last-wins) would then read
+    the stale name. The explorer uses this full history to record those prior
+    titles as "shadows" so a later re-emit can't revert a rename. See
+    `index.set_name` / `index.record_session`.
+    """
+    titles = []
+    for msg in _iter_messages(path):
+        if msg.get("type") == "custom-title":
+            v = msg.get("customTitle")
+            if v:
+                titles.append(v)
+    return titles
 
 
 def tokens_estimate(path: str) -> int:

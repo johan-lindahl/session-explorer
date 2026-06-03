@@ -29,6 +29,25 @@ def test_session_name_named_returns_custom_title():
     assert name == "planning-sprint14-custom"
 
 
+def test_all_custom_titles_returns_every_value_in_order(tmp_path):
+    """Used to shadow stale re-emits: a live Claude session re-writes its
+    in-memory custom-title each turn, so the full history (with drift) matters,
+    not just the last value session_name() returns."""
+    p = tmp_path / "drift.jsonl"
+    p.write_text(
+        '{"type":"custom-title","customTitle":"old","sessionId":"X"}\n'
+        '{"type":"custom-title","customTitle":"new","sessionId":"X"}\n'
+        '{"type":"custom-title","customTitle":"old","sessionId":"X"}\n'
+    )
+    assert jsonl.all_custom_titles(str(p)) == ["old", "new", "old"]
+
+
+def test_all_custom_titles_empty_when_none(tmp_path):
+    p = tmp_path / "none.jsonl"
+    p.write_text('{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    assert jsonl.all_custom_titles(str(p)) == []
+
+
 def test_session_name_ignores_ai_title(tmp_path):
     """ai-title alone does NOT count as a session name — only /rename does.
 
