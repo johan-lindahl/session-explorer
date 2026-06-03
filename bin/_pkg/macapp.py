@@ -93,6 +93,10 @@ PY
 )"
 [ -x "$CLI" ] || CLI="$(command -v session-explorer)"
 [ -x "$CLI" ] || CLI="$HOME/.local/bin/session-explorer"
+if [ ! -x "$CLI" ]; then
+  osascript -e 'display alert "Session Explorer" message "session-explorer binary not found. Reinstall the plugin."' >/dev/null 2>&1
+  exit 1
+fi
 exec "$CLI" launch
 '''
 
@@ -164,7 +168,6 @@ def _refresh_icon_cache(app: str) -> None:
             shutil.rmtree(store, ignore_errors=True)
     except Exception:
         pass
-    _killall("Dock")
 
 
 def _killall(proc: str) -> None:
@@ -188,13 +191,12 @@ def _pin_to_dock(app: str) -> bool:
             '<dict><key>tile-data</key><dict><key>file-data</key><dict>'
             '<key>_CFURLString</key><string>file://%s/</string>'
             '<key>_CFURLStringType</key><integer>0</integer>'
-            '</dict></dict></dict>' % app
+            '</dict></dict></dict>' % escape(app)
         )
         subprocess.run(
             ["defaults", "write", "com.apple.dock", "persistent-apps",
              "-array-add", entry],
             check=True, capture_output=True)
-        _killall("Dock")
         return True
     except Exception:
         return False
@@ -224,4 +226,5 @@ def install_app(*, dest: str = "~/Applications", name: str = "Session Explorer",
             print(f"Could not pin automatically — drag {app} to your Dock to pin it.")
     else:
         print(f"Drag {app} to your Dock to pin it.")
+    _killall("Dock")
     return 0

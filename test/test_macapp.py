@@ -1,5 +1,8 @@
 """Unit tests for the pure builders in macapp (cross-platform; no FS/Dock)."""
 
+import os
+import plistlib
+
 from _pkg import macapp
 
 
@@ -66,10 +69,6 @@ def test_app_already_pinned_tolerates_malformed_entries():
     assert not macapp.app_already_pinned(persistent, "/Users/x/Applications/Session Explorer.app")
 
 
-import os as _os
-import plistlib
-
-
 def test_build_bundle_creates_full_structure(tmp_path):
     icon = tmp_path / "src-icon.icns"
     icon.write_bytes(b"icns-bytes")
@@ -80,12 +79,12 @@ def test_build_bundle_creates_full_structure(tmp_path):
         icon_src=str(icon),
     )
     assert app.endswith("/Session Explorer.app")
-    launcher = _os.path.join(app, "Contents", "MacOS", "session-explorer-launch")
-    assert _os.path.exists(launcher)
-    assert _os.access(launcher, _os.X_OK)               # chmod 0755
-    icns = _os.path.join(app, "Contents", "Resources", "icon.icns")
-    assert _os.path.exists(icns)
-    with open(_os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+    launcher = os.path.join(app, "Contents", "MacOS", "session-explorer-launch")
+    assert os.path.exists(launcher)
+    assert os.access(launcher, os.X_OK)                  # chmod 0755
+    icns = os.path.join(app, "Contents", "Resources", "icon.icns")
+    assert os.path.exists(icns)
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
         pl = plistlib.load(f)
     assert pl["CFBundleIconFile"] == "icon"
     assert "CFBundleIconName" not in pl
