@@ -202,6 +202,25 @@ def _pin_to_dock(app: str) -> bool:
         return False
 
 
+def _unpin_from_dock(app: str) -> None:
+    """Best-effort: drop any persistent-apps entry pointing at `app`. Never raises."""
+    try:
+        raw = subprocess.run(
+            ["defaults", "export", "com.apple.dock", "-"],
+            capture_output=True, check=True).stdout
+        plist = plistlib.loads(raw)
+        apps = plist.get("persistent-apps", [])
+        kept = [e for e in apps if not app_already_pinned([e], app)]
+        if len(kept) == len(apps):
+            return
+        plist["persistent-apps"] = kept
+        subprocess.run(["defaults", "import", "com.apple.dock", "-"],
+                       input=plistlib.dumps(plist), check=True, capture_output=True)
+        _killall("Dock")
+    except Exception:
+        pass
+
+
 def install_app(*, dest: str = "~/Applications", name: str = "Session Explorer",
                 pin_dock: bool = True) -> int:
     """Build the bundle and (best-effort) refresh the icon cache + pin to Dock.
