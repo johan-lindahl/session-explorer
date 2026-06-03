@@ -99,3 +99,18 @@ def test_build_bundle_is_idempotent(tmp_path):
     macapp.build_bundle(**args)                          # must not raise / duplicate
     apps = list((tmp_path / "Applications").glob("*.app"))
     assert len(apps) == 1
+
+
+import subprocess as _sp
+import sys as _sys
+
+
+def test_cli_install_app_is_macos_guarded(monkeypatch):
+    """On non-Darwin the subcommand must refuse cleanly (exit 1), not traceback.
+    We assert the guard message rather than the platform so it passes on CI Linux
+    and is a documented contract on macOS dev machines."""
+    import platform
+    from _pkg import macapp
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    rc = macapp.install_app(dest="/tmp/se-doesnotmatter", pin_dock=False)
+    assert rc == 1
