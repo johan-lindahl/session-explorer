@@ -1901,8 +1901,12 @@ async def test_new_session_docks_into_the_split(index_path, monkeypatch):
     async with app.run_test() as pilot:
         await pilot.pause()
         app._do_new_session("sid-new", "/proj", "feat/x", None, "feat/x")
-    assert calls == [("new", "sid-new", "feat/x"), ("dock", "sid-new")]
-    assert app._docked_sid == "sid-new"
+        # Assert the synchronous post-condition of _do_new_session here, with no
+        # `await` in between: yielding to the event loop lets the debounced
+        # _sync_dock_to_cursor timer fire and undock (the cursor isn't on the new
+        # session), which would reset _docked_sid to None and flake the test.
+        assert calls == [("new", "sid-new", "feat/x"), ("dock", "sid-new")]
+        assert app._docked_sid == "sid-new"
 
 
 async def test_new_session_no_tmux_seeds_name(index_path, monkeypatch):
