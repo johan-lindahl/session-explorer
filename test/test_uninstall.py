@@ -187,3 +187,33 @@ def test_teardown_removes_tmux_artifacts(tmp_path):
                  ".session-explorer.tmux-persist",
                  ".session-explorer.tmux-declined"):
         assert not (claude / name).exists()
+
+
+def test_teardown_removes_mac_app(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    apps = tmp_path / "Applications"
+    app = apps / "Session Explorer.app" / "Contents" / "MacOS"
+    app.mkdir(parents=True)
+    (app / "session-explorer-launch").write_text("#!/bin/zsh\n")
+
+    actions = uninstall.teardown(
+        claude_dir=str(claude_dir),
+        settings_path=str(claude_dir / "settings.json"),
+        mac_apps_dir=str(apps),
+    )
+    assert not (apps / "Session Explorer.app").exists()
+    assert any("Session Explorer.app" in a for a in actions)
+
+
+def test_teardown_no_mac_app_is_noop(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    apps = tmp_path / "Applications"
+    apps.mkdir()
+    actions = uninstall.teardown(
+        claude_dir=str(claude_dir),
+        settings_path=str(claude_dir / "settings.json"),
+        mac_apps_dir=str(apps),
+    )
+    assert not any("Session Explorer.app" in a for a in actions)

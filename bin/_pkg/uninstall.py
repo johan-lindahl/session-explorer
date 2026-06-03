@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 _HOOK_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh")
 # Lifecycle events the plugin registers the live dispatcher on (plus SessionStart).
@@ -43,7 +44,7 @@ def _is_our_hook(entry: object) -> bool:
 
 
 def teardown(*, claude_dir: str, settings_path: "str | None" = None,
-             purge_data: bool = False) -> list[str]:
+             purge_data: bool = False, mac_apps_dir: "str | None" = None) -> list[str]:
     """Restore `cleanupPeriodDays`, strip the SessionStart hook, remove the
     `~/.local/bin` symlink, and delete sidecars. With `purge_data`, also delete
     the index and folder store. Returns a list of human-readable actions taken."""
@@ -116,6 +117,20 @@ def teardown(*, claude_dir: str, settings_path: "str | None" = None,
             _tmux.kill_server()
     except Exception:
         pass
+
+    # 4c. Remove the macOS Dock launcher app (best-effort; macOS only in practice
+    #     but path-driven so it is testable cross-platform).
+    apps_dir = mac_apps_dir or os.path.join(home, "Applications")
+    app = os.path.join(apps_dir, "Session Explorer.app")
+    if os.path.isdir(app):
+        shutil.rmtree(app, ignore_errors=True)
+        actions.append("removed Session Explorer.app")
+        # Unpin from the Dock (best-effort; only meaningful on macOS).
+        try:
+            from . import macapp
+            macapp._unpin_from_dock(app)
+        except Exception:
+            pass
 
     # 5. User data (opt-in).
     if purge_data:

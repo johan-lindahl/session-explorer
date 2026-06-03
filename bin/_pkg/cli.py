@@ -64,6 +64,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--purge", action="store_true",
         help="Also delete the session index and folder store (names re-derive "
              "from JSONLs on reindex; notes and empty folders are lost).")
+
+    app_p = sub.add_parser(
+        "install-app",
+        help="(macOS) Create a Dock launcher app in ~/Applications.")
+    app_p.add_argument("--dest", default="~/Applications",
+                       help="Parent directory for the .app (default ~/Applications).")
+    app_p.add_argument("--name", default="Session Explorer",
+                       help="App display name (default 'Session Explorer').")
+    app_p.add_argument("--no-dock", action="store_true",
+                       help="Create the app but do not pin it to the Dock.")
     return p
 
 
@@ -200,6 +210,12 @@ def _cmd_launch() -> int:
     return _launcher.launch(target)
 
 
+def _cmd_install_app(args) -> int:
+    from . import macapp
+    return macapp.install_app(dest=args.dest, name=args.name,
+                              pin_dock=not args.no_dock)
+
+
 def main(argv: list[str] | None = None) -> int:
     from . import folder_store as _fs
     parser = build_parser()
@@ -232,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_list()
     if args.cmd == "launch":
         return _cmd_launch()
+    if args.cmd == "install-app":
+        return _cmd_install_app(args)
     if args.cmd == "tui":
         from .tui import run
         return run()

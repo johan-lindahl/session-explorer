@@ -560,6 +560,29 @@ Opt-in state (all under `~/.claude/`):
 - `/plugin uninstall` has no teardown hook. Restoring `cleanupPeriodDays` is a documented one-liner and a `session-explorer uninstall` CLI subcommand.
 - Plugin updates land via `/plugin update`. The plugin tolerates being upgraded between two session starts.
 
+### macOS Dock launcher (`install-app`)
+
+`session-explorer install-app` builds a hand-rolled `.app` under
+`~/Applications` (no Automator/Xcode) and best-effort pins it to the Dock.
+
+- **Bundle:** `Contents/Info.plist` (authored by us), `Contents/MacOS/
+  session-explorer-launch` (generated zsh script, 0755), `Contents/Resources/
+  icon.icns` (copied from `assets/app-icon.icns`).
+- **Why a custom launcher and not Automator.** Two traps. (1) **PATH** — a
+  GUI-launched Automator *Run Shell Script* inherits a stripped PATH without
+  `/opt/homebrew/bin`, so `tmux.available()` returns False and `launch` silently
+  drops its tmux behaviour. The generated launcher prepends the Homebrew paths.
+  (2) **Icon override** — Automator applets carry a compiled `Assets.car` and a
+  `CFBundleIconName` key, which modern macOS prefers over a replaced loose
+  `.icns`. Our `Info.plist` sets `CFBundleIconFile` and **never**
+  `CFBundleIconName`.
+- **Binary resolution** is done at run time inside the launcher (read
+  `installed_plugins.json` → versioned `installPath`, else `command -v`, else
+  the `~/.local/bin` symlink) so it survives plugin version bumps.
+- **Idempotent / best-effort.** Re-running rebuilds the bundle and reconciles a
+  single Dock entry; every Dock/icon-cache call degrades to a printed
+  drag-to-Dock instruction on failure. `uninstall` removes the app and unpins it.
+
 ## File-level layout (repository)
 
 ```

@@ -3,6 +3,17 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.9.0
+
+### Added
+- **macOS Dock launcher (`session-explorer install-app`).** Builds a clickable
+  `~/Applications/Session Explorer.app` with the explorer icon and pins it to the
+  Dock. The bundled launcher repairs `PATH` so it opens **with tmux**, and
+  resolves the binary at run time so it survives plugin updates. `uninstall`
+  removes the app and unpins it. The build is hand-rolled (no Automator), which
+  avoids the `CFBundleIconName`/`Assets.car` icon-override and stripped-`PATH`
+  traps of an Automator applet.
+
 ## 1.5.0
 
 ### Added

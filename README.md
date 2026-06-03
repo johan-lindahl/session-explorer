@@ -103,6 +103,25 @@ explorer asks the first time you open it. See
 > platform, the command to run is printed so you can paste it into a terminal
 > yourself. Native (non-WSL) Windows is not supported.
 
+### Add to your Dock (macOS)
+
+Once installed (either path above), create a clickable Dock launcher:
+
+```
+session-explorer install-app
+```
+
+This builds `~/Applications/Session Explorer.app` with the explorer icon and
+pins it to your Dock. Clicking it opens the explorer in a new Terminal window —
+**with tmux**, the same as `/session-explorer:open`. If automatic pinning
+doesn't take, drag the app from `~/Applications` onto your Dock yourself.
+
+To remove it later, run the uninstall (it removes the app and unpins it):
+
+```
+session-explorer uninstall
+```
+
 ## Usage
 
 After install, start any new Claude Code session in any project. The hook
