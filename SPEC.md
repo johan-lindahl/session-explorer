@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.8.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 adds a subscription-usage progress bar in the tmux status line.
+**Status:** Shipped — **v1.9.1**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*).
 
 ## Goals
 
@@ -62,9 +62,9 @@ A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**Key idea — derive, don't store.** The plugin caches metadata for browse-speed but treats the JSONL as authoritative. Folder/name parsing happens at render time from the session's user-assigned name (slash-separated). "Kept" is `name != null`.
+**Key idea — derive, don't store.** The plugin caches metadata for browse-speed but treats the JSONL as authoritative for names *with one exception*: a live Claude session re-writes its in-memory `custom-title` every turn, so after the explorer renames a running session, Claude's next re-emit puts the **old** title back as the JSONL's last line. Naïve "last-`custom-title`-wins" would then revert the rename. The explorer therefore records the superseded title(s) as **shadows** (`name_shadows[]`) on the index entry, and a shadowed last-title is ignored in favour of the user's chosen `name_cached`. Folder/name parsing happens at render time from the session's user-assigned name (slash-separated). "Kept" is `name != null`.
 
-**What counts as a name.** Only `/rename` and `claude -n <name>` count — both write a `custom-title` event to the JSONL. The `ai-title` events that Claude emits automatically as a session evolves (refining its own descriptive summary) **do NOT** make a session "named" in this plugin's sense. The session-explorer treats those auto-generated titles as if they didn't exist, so the index's `name_cached` is populated only by explicit user intent.
+**What counts as a name.** Only `/rename` and `claude -n <name>` count — both write a `custom-title` event to the JSONL. The `ai-title` events that Claude emits automatically as a session evolves (refining its own descriptive summary) **do NOT** make a session "named" in this plugin's sense. The session-explorer treats those auto-generated titles as if they didn't exist, so the index's `name_cached` is populated only by explicit user intent. A *new* (unshadowed) `custom-title` is still adopted — e.g. a `/rename` run inside the resumed session — so only re-emits of previously-seen titles are filtered, not genuine renames.
 
 ## Naming and folders
 
@@ -150,16 +150,16 @@ These are pure caches in the index. The `SessionStart` hook refreshes them on ev
 
 ### Rename and move
 
-Both write a rename event to the session's JSONL in the same shape Claude's own `/rename` writes (a `custom-title` event), reverse-engineered from a real renamed transcript.
+Both write a rename event to the session's JSONL in the same shape Claude's own `/rename` writes (a `custom-title` event), reverse-engineered from a real renamed transcript, **then** record the rename in the index via `index.set_name`, which sets `name_cached` and adds every other `custom-title` currently in the transcript to `name_shadows[]`. Writing to the JSONL keeps Claude's native picker in sync; the shadow makes the index authoritative against the re-emit problem (a live session re-writes its in-memory title each turn, which would otherwise revert the rename — see *Key idea*). `name_shadows` excludes the new name, so re-renaming back to a shadowed value still works (the explorer-set `name_cached` is the fallback whenever the JSONL's last title is shadowed).
 
-**Fallback** if Claude's format proves volatile or undocumented: store an authoritative `display_name` in the index that overrides whatever the JSONL says. v1 prefers writing to the JSONL so Claude's native picker reflects the new name.
+> **Historical note.** Earlier specs proposed an *optional* `display_name` override "if Claude's format proves volatile." It did prove volatile — not in shape, but in ordering: Claude's per-turn re-emit means the last `custom-title` is not reliably the user's latest rename for live sessions. `name_shadows` is the concrete realization of that override, scoped to exactly the stale values rather than overriding the JSONL wholesale.
 
 #### Folder rename and move
 
 A folder has no record of its own — its identity is the segment-prefix shared by the session names under it plus any folder-store entry. So renaming or moving a folder is a **cascade**, not a single write:
 
 - The new folder segments are computed from the action — `r` swaps the folder's last segment in place (`team/planning` → `team/strategy`); `m` keeps the leaf and swaps the parent (`team/planning` → `archive/planning`, or top-level via `(ungroup)`).
-- Every session in the project whose folder path has the old segments as a **segment-wise prefix** is rewritten: the old prefix is replaced with the new one and the display name plus any deeper sub-segments are preserved. Each rewrite appends a `custom-title` event to that session's JSONL; all `name_cached` updates land in a single index write. Segment-wise matching means `planning` never captures a sibling named `planning-extra`.
+- Every session in the project whose folder path has the old segments as a **segment-wise prefix** is rewritten: the old prefix is replaced with the new one and the display name plus any deeper sub-segments are preserved. Each rewrite appends a `custom-title` event to that session's JSONL, then records the new name via `index.set_name` (one call per affected session, so each shadows its own prior title against re-emit reversion). Segment-wise matching means `planning` never captures a sibling named `planning-extra`.
 - Folder-store entries equal to or under the old path are re-prefixed in one `folder_store.rename_subtree` call, so empty (store-only) subfolders move too.
 - The whole cascade is gated behind one confirmation that names the affected session count. Re-parenting a folder into itself or a descendant is rejected; renaming/moving onto an existing target path merges into it (duplicate store entries collapse).
 
@@ -189,11 +189,13 @@ until the session's first turn, so a freshly-created, never-messaged session wou
 otherwise appear under `(unnamed)`. To avoid that, creation seeds `name_cached`
 into the index immediately (`index.seed_new_session`) and repopulates the tree.
 This does not violate "JSONL is authoritative": `claude -n` persists the identical
-`custom-title` on the first turn, and `record_session` only falls back to the
-seeded name while the transcript yields none (`session_name() or existing
-name_cached`) — since the transcript is append-only, an absent title always means
+`custom-title` on the first turn, and `record_session` falls back to the existing
+`name_cached` whenever the transcript yields no name **or** yields only a shadowed
+(re-emitted) one — since the transcript is append-only, an absent title always means
 "not written yet", never "name removed", so a known name is never blanked by the
-2 s live-refresh.
+2 s live-refresh. Precisely: `record_session` adopts the transcript's last
+`custom-title` only when it is non-empty **and not in `name_shadows`**; otherwise it
+keeps `name_cached`.
 
 If the chosen directory is not a git repository and a worktree was requested,
 `claude -w` reports the error inside the session window; v1 does not pre-validate.
@@ -236,7 +238,8 @@ Auto-detection logic, first match wins:
   "version": 2,
   "sessions": {
     "01HXYZ…uuid": {
-      "name_cached": "planning/sprint14",       // last-seen Claude name; JSONL is authoritative
+      "name_cached": "planning/sprint14",       // current name; JSONL last-title wins unless shadowed
+      "name_shadows": ["sprint14"],             // prior titles to ignore as stale live re-emits (optional)
       "notes": "production audit of billing modules\nfollow-up Q1",
       "project_path": "/Users/you/code/acme-api",  // cwd; resume chdir's here
       "project_label": "acme-api",                  // grouping key; worktrees collapse to the parent repo
@@ -255,7 +258,7 @@ Auto-detection logic, first match wins:
 }
 ```
 
-`name_cached`, `last_active_at`, `message_count` are pure perf caches — refreshed by the hook on session start and by `session-explorer index --refresh` on demand. **No `tag` field. No `kept` field. No `folders` field.** "Kept" is `name_cached != null`. Folder data lives in the separate folder store below.
+`name_cached`, `last_active_at`, `message_count` are pure perf caches — refreshed by the hook on session start and by `session-explorer index --refresh` on demand. `name_shadows` is the one naming field that is **not** a regenerable cache: it records which `custom-title` values to treat as stale live re-emits, written only by `index.set_name` on an explorer rename (absent until then; an empty result is omitted). It survives refresh via the `**existing` carry-over in `record_session`. **No `tag` field. No `kept` field. No `folders` field.** "Kept" is `name_cached != null`. Folder data lives in the separate folder store below.
 
 ### Folder store — `~/.claude/session-explorer-folders.json`
 
@@ -638,7 +641,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.8.0). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.9.1). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|
@@ -657,6 +660,7 @@ All milestones below are **shipped** (current release: v1.8.0). The table is kep
 A log of decisions that were open during design and have since been settled. Two items remain deliberately deferred (in-place compaction, empty-folder pruning — see Non-goals and edge case #7).
 
 - **Claude's `/rename` JSONL format.** Reverse-engineered from a real renamed transcript: a `custom-title` event. The index can fall back to a `display_name` override only if the format ever proves volatile.
+- **Live re-emit of `custom-title` → rename reverts (FIXED).** A live Claude session re-writes its in-memory `custom-title` roughly every turn. After an *external* (explorer) rename, Claude's next re-emit appends the **old** title as the JSONL's last line, so naïve last-wins reverted the name "after a while". The early assumption that `custom-title` never drifts within a file (sampled from ~50 transcripts) was wrong — observed drift in 19/many transcripts, 3 with the exact rename-then-revert signature. Fix: `index.set_name` records superseded titles in `name_shadows[]`; `record_session` ignores a shadowed last-title and keeps the user's `name_cached`. A genuinely new (unshadowed) title is still adopted, so an in-session `/rename` still flows through. **Existing poisoned sessions self-heal on the next explorer rename** — there's no automatic backfill because a past revert can't be told apart from a deliberate rename-back.
 - **Exact `message.usage` field path.** Confirmed against real transcripts: read `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active.
 - **Model-aware context window.** `message.model` *is* present on every assistant line. The denominator reads the latest model id and maps it through `MODEL_WINDOWS` (default 200K), promoting to 1M when observed tokens exceed the standard window (the 1M tier isn't encoded in the model id, so it's inferred from usage). Nuance: a 1M-context session that has used <200K is still measured against 200K until it grows past it; acceptable and self-correcting.
 - **In-place compaction.** *Still deferred* (see Non-goals). Reconsider once Claude Code ships a `claude --compact <id>` flag or a stable Agent SDK pattern for one-shot non-interactive compaction.

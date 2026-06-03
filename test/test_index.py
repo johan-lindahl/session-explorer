@@ -123,6 +123,76 @@ def test_seed_new_session_records_name_before_transcript(tmp_path):
     assert "created_at" in s
 
 
+def test_explorer_rename_survives_live_reemit_of_old_title(tmp_path):
+    """Root cause of the 'rename reverts after a while' bug: a live Claude
+    session re-emits its in-memory (old) custom-title each turn. After an
+    explorer rename records a shadow for the old title, that stale re-emit must
+    NOT revert name_cached."""
+    from _pkg.rename import append_custom_title
+    transcript = str(tmp_path / "S.jsonl")
+    with open(transcript, "w") as f:
+        f.write('{"type":"custom-title","customTitle":"old","sessionId":"S"}\n')
+    idx = str(tmp_path / "index.json")
+
+    index.record_session(idx, "S", transcript, "/p")
+    assert index.load(idx)["sessions"]["S"]["name_cached"] == "old"
+
+    # Explorer rename: append the new title, then record it (captures shadow).
+    append_custom_title(transcript, "S", "new")
+    index.set_name(idx, "S", "new", transcript)
+    assert index.load(idx)["sessions"]["S"]["name_cached"] == "new"
+
+    # Live Claude re-emits its stale title; a refresh re-records the session.
+    append_custom_title(transcript, "S", "old")
+    index.record_session(idx, "S", transcript, "/p")
+    assert index.load(idx)["sessions"]["S"]["name_cached"] == "new"  # not reverted
+
+
+def test_in_claude_rename_after_explorer_rename_is_adopted(tmp_path):
+    """Only re-emits of previously-seen titles are ignored. A genuinely new
+    title (e.g. /rename inside the resumed session) is still picked up."""
+    from _pkg.rename import append_custom_title
+    transcript = str(tmp_path / "S.jsonl")
+    with open(transcript, "w") as f:
+        f.write('{"type":"custom-title","customTitle":"old","sessionId":"S"}\n')
+    idx = str(tmp_path / "index.json")
+    index.record_session(idx, "S", transcript, "/p")
+    append_custom_title(transcript, "S", "new")
+    index.set_name(idx, "S", "new", transcript)
+
+    append_custom_title(transcript, "S", "fresh")
+    index.record_session(idx, "S", transcript, "/p")
+    assert index.load(idx)["sessions"]["S"]["name_cached"] == "fresh"
+
+
+def test_record_session_without_shadows_keeps_last_custom_title(tmp_path):
+    """Backward-compat: with no explorer rename (no shadows recorded), the last
+    custom-title still wins exactly as before."""
+    transcript = str(tmp_path / "S.jsonl")
+    with open(transcript, "w") as f:
+        f.write('{"type":"custom-title","customTitle":"a","sessionId":"S"}\n')
+        f.write('{"type":"custom-title","customTitle":"b","sessionId":"S"}\n')
+    idx = str(tmp_path / "index.json")
+    index.record_session(idx, "S", transcript, "/p")
+    assert index.load(idx)["sessions"]["S"]["name_cached"] == "b"
+
+
+def test_set_name_shadows_old_titles_but_not_the_new_one(tmp_path):
+    from _pkg.rename import append_custom_title
+    transcript = str(tmp_path / "S.jsonl")
+    with open(transcript, "w") as f:
+        f.write('{"type":"custom-title","customTitle":"old","sessionId":"S"}\n')
+    idx = str(tmp_path / "index.json")
+    index.record_session(idx, "S", transcript, "/p")
+    append_custom_title(transcript, "S", "new")
+    index.set_name(idx, "S", "new", transcript)
+
+    s = index.load(idx)["sessions"]["S"]
+    assert s["name_cached"] == "new"
+    assert "old" in s["name_shadows"]
+    assert "new" not in s["name_shadows"]  # current name is never self-shadowed
+
+
 def test_record_session_idempotent(tmp_path):
     """Calling record twice updates last_active_at but doesn't duplicate."""
     transcript = str(tmp_path / "01ABC.jsonl")

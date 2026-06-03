@@ -1082,12 +1082,11 @@ class SessionExplorerApp(App):
                 return
             from .rename import append_custom_title
             append_custom_title(transcript, session_id=sid, new_name=new_name)
-            # Update cache immediately so the UI reflects the new name pre-hook.
+            # Record the rename as authoritative: a live session re-emits its old
+            # in-memory title every turn, so set_name shadows the prior title(s)
+            # to stop the next re-emit reverting the name (see index.set_name).
             from . import index as _index
-            def _mut(d: dict) -> dict:
-                d["sessions"].setdefault(sid, {})["name_cached"] = new_name
-                return d
-            _index.mutate(self._index_path, _mut)
+            _index.set_name(self._index_path, sid, new_name, transcript)
             self._populate()
 
         self.push_screen(RenameScreen(current), after)
@@ -1116,12 +1115,10 @@ class SessionExplorerApp(App):
             for sid, transcript, new_name in affected:
                 if transcript:
                     append_custom_title(transcript, session_id=sid, new_name=new_name)
-
-            def _mut(d: dict) -> dict:
-                for sid, _t, new_name in affected:
-                    d["sessions"].setdefault(sid, {})["name_cached"] = new_name
-                return d
-            _index.mutate(self._index_path, _mut)
+            # set_name per session so each shadows its own prior title(s); this
+            # keeps a live session's re-emit from reverting the cascade rename.
+            for sid, transcript, new_name in affected:
+                _index.set_name(self._index_path, sid, new_name, transcript)
             # An empty folder lives only in the store; populated ones are implied
             # by their (now-rewritten) session names. rename_subtree handles both
             # by moving any store entries under the old path.
@@ -1179,10 +1176,9 @@ class SessionExplorerApp(App):
             append_custom_title(transcript, session_id=sid, new_name=new_name)
             if target:
                 _fs.add(fs_path, project, target)
-            def _mut(d: dict) -> dict:
-                d["sessions"].setdefault(sid, {})["name_cached"] = new_name
-                return d
-            _index.mutate(self._index_path, _mut)
+            # Authoritative rename (shadows the prior title so a live re-emit
+            # can't revert the move — see index.set_name).
+            _index.set_name(self._index_path, sid, new_name, transcript)
             self._populate()
 
         self.push_screen(MoveScreen(project, sorted(paths), current_folder), after)
