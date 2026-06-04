@@ -2352,3 +2352,25 @@ async def test_node_toggle_in_normal_mode_does_not_track(index_path):
         proj.expand()
         await pilot.pause()
         assert app._expanded == set()  # handlers no-op outside collapse mode
+
+
+def test_worktree_state_root_is_none(tmp_path):
+    from _pkg.tui import _worktree_state
+    # A normal checkout path (no worktree marker) -> not a worktree.
+    assert _worktree_state(str(tmp_path)) is None
+    assert _worktree_state(None) is None
+    assert _worktree_state("") is None
+
+
+def test_worktree_state_live_when_dir_exists(tmp_path):
+    from _pkg.tui import _worktree_state
+    wt = tmp_path / "repo" / ".claude" / "worktrees" / "feature-x"
+    wt.mkdir(parents=True)
+    assert _worktree_state(str(wt)) == "live"
+
+
+def test_worktree_state_dead_when_dir_missing(tmp_path):
+    from _pkg.tui import _worktree_state
+    # Marker present in the path, but the directory was never created.
+    gone = tmp_path / "repo" / ".claude" / "worktrees" / "deleted"
+    assert _worktree_state(str(gone)) == "dead"

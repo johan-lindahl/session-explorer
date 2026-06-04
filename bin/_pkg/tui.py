@@ -1842,6 +1842,18 @@ def _dead_worktree_repo(project_path: "str | None") -> "str | None":
     return root if os.path.isdir(root) else None
 
 
+def _worktree_state(project_path: "str | None") -> "str | None":
+    """Classify a session's working dir for the worktree indicator column.
+
+    Returns None for a root checkout (no worktree marker), "live" for a git
+    worktree whose directory still exists, "dead" for a worktree whose directory
+    has been removed. Pure except for the single isdir stat — callers cache the
+    result so the spinner/poll re-renders never hit the filesystem."""
+    if not project_path or _WORKTREE_MARKER not in project_path:
+        return None
+    return "live" if os.path.isdir(project_path) else "dead"
+
+
 def _resolve_resume_cwd(project_path: "str | None") -> "str | None":
     """Directory to chdir into before `claude --resume`.
 
