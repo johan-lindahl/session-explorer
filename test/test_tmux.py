@@ -146,9 +146,7 @@ def test_build_new_session_window_blank_name_omits_dash_n():
     # The inner `claude` command is the last element (a shlex-joined string).
     # The tmux window is still named with the sid via the new-window flags, but
     # the inner command must carry no `-n` (so claude starts unnamed).
-    inner = argv[-1]
-    assert "claude --session-id sid-9" in inner
-    assert " -n " not in f" {inner} "
+    assert argv[-1] == "exec claude --session-id sid-9"
 
 
 def test_build_new_session_window_named_still_has_dash_n():

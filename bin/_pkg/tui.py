@@ -1284,7 +1284,9 @@ class SessionExplorerApp(App):
                 # identical title later, so there's no divergence.
                 _index.seed_new_session(self._index_path, sid, name, cwd)
 
-            self._pending_select_sid = sid  # jump to it once its row exists
+            # Remember the new sid so the cursor jumps to its row once it
+            # appears in the tree (consumed by _populate; see select-on-create).
+            self._pending_select_sid = sid
 
             # No tmux → exit and execvp claude (handled in run()).
             if not self._tmux_enabled:
