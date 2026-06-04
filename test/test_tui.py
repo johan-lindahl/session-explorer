@@ -465,6 +465,26 @@ async def test_tab_cycles_view_modes(index_path):
         assert "unnamed-xyz" not in _collect_leaf_sids(app._tree.root)
 
 
+async def test_tab_does_not_cycle_view_while_filter_focused(index_path):
+    """Tab is a priority binding; it must be suppressed while the filter Input
+    is focused so the user can Tab-complete or navigate inside the filter
+    without accidentally cycling the view mode."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("slash")   # open and focus the filter Input
+        await pilot.pause()
+        assert app._filter.has_focus, "filter Input should be focused after pressing slash"
+        before = app._view_mode
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == before, (
+            f"Tab cycled view mode from {before} to {app._view_mode} "
+            "while the filter Input was focused"
+        )
+
+
 async def test_active_only_mode_shows_live_named_and_unnamed(index_path):
     import json
     data = json.load(open(index_path))

@@ -629,6 +629,11 @@ class SessionExplorerApp(App):
         # keystroke belongs in the filter text, not the global quit binding.
         if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
+        # Tab is a priority binding (it must beat Textual's focus traversal), so
+        # explicitly suppress it while the filter Input is focused — there, Tab
+        # should not cycle the view.
+        if action == "cycle_view" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+            return False
         # The usage bar only exists in the tmux-hosted layout.
         if action == "toggle_usage" and not self._tmux_enabled:
             return False
