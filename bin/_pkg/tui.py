@@ -551,6 +551,7 @@ class SessionExplorerApp(App):
     BINDINGS = [
         Binding("enter", "resume", "Resume", priority=True),
         Binding("r", "rename", "Rename"),
+        Binding("f2", "rename", "Rename", key_display="F2", show=False),
         Binding("m", "move", "Move"),
         Binding("n", "new_folder", "New folder"),
         Binding("c", "new_session", "New session"),

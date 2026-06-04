@@ -108,6 +108,19 @@ async def test_rename_updates_index(index_path, tmp_path):
     assert last == {"type": "custom-title", "customTitle": "renamed", "sessionId": "sid-1"}
 
 
+async def test_f2_opens_rename_dialog(index_path):
+    from _pkg.tui import SessionExplorerApp, RenameScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")  # project node
+        await pilot.press("down")  # folder node
+        await pilot.press("down")  # session leaf
+        await pilot.press("f2")
+        await pilot.pause()
+        assert isinstance(app.screen, RenameScreen)
+
+
 async def test_move_changes_folder(index_path, tmp_path):
     """Moving a session to folder 'release' rewrites its custom-title to release/<display>."""
     import json
