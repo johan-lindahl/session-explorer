@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.9.1**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*).
+**Status:** Shipped — **v1.10.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create.
 
 ## Goals
 
@@ -660,7 +660,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.9.1). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.10.0). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|
