@@ -73,7 +73,7 @@ The session's Claude-assigned name encodes folder path + display name via `/`:
 ```
 <segment>/<segment>/…/<display>   → all but the last segment → folder path; last → display name
 <just-a-name>  (no /)             → at project root; display = name
-(no name)                         → hidden by default; toggle with [u] to surface for renaming or deletion
+(no name)                         → hidden by default; cycle view with Tab to surface for renaming or deletion
 ```
 
 Empty segments (from `foo//bar`, leading/trailing `/`, or whitespace-only
@@ -94,7 +94,7 @@ segments) are dropped during parsing. Dashes have no special meaning —
 Built on **Textual** (Python). Launched in a new terminal window by the `/session-explorer:open` slash command. Single tree view:
 
 ```
-session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (u)               / filter
+session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (Tab)             / filter
 
 ▼ acme-web (3)
     planning/
@@ -108,7 +108,12 @@ session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (u)      
 ▶ session-explorer (4)
 ```
 
-Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Unnamed sessions are hidden by default** — only "kept" sessions (those with a Claude-assigned name) appear in the default view, mirroring the spec's "kept ⇔ named" rule and cutting the visual noise from stub records (sessions started but never used). Press `u` to surface unnamed sessions when you need to rename or delete them; they then appear under an `(unnamed)` sub-group per project. The header advertises the hidden count. When the visible tree is empty, the tree pane shows an actionable empty-state instead of blank space — prompting `F5` to scan when nothing is indexed yet, or `u` when sessions exist but are all unnamed/hidden.
+Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Three view modes, cycled with `Tab`:**
+- **Mode 0 (default):** named sessions only, plus any currently-live/active session regardless of name — cutting the visual noise from stub records. The header advertises the hidden unnamed count.
+- **Mode 1 (active only):** sessions that carry the live `●` glyph (working or idle), named or unnamed. Useful for a quick "what's running" overview.
+- **Mode 2 (all):** every session including unnamed ones; they appear under an `(unnamed)` sub-group per project, available for renaming or deletion.
+
+When the visible tree is empty, the tree pane shows an actionable empty-state instead of blank space — prompting `F5` to scan when nothing is indexed yet, or `Tab` to cycle to a broader view when sessions exist but are all unnamed/hidden.
 
 ### Keybindings
 
@@ -118,17 +123,18 @@ Outer level: project (`project_label`, auto-grouped from cwd; git worktrees unde
 | `←` `→` | Collapse / expand the current folder or project |
 | `Enter` | Resume the selected session — see *Resume flow* |
 | `Space` | Toggle the preview pane. Headline is the session's full (un-truncated) name; body shows project, folder, branch, age, created date, message count, context size, session id, notes, first prompt, and transcript path. `Esc` also closes it. |
-| `r` | Rename. On a **session**: rename (= retag = move to a different folder), prompts for the new name. On a **folder**: rename its last segment in place, prompts prefilled with that segment — cascades to every session and subfolder under it (see *Folder rename and move*). |
+| `r` `F2` | Rename. On a **session**: rename (= retag = move to a different folder), prompts for the new name. On a **folder**: rename its last segment in place, prompts prefilled with that segment — cascades to every session and subfolder under it (see *Folder rename and move*). `F2` is an alias for `r`. |
 | `n` | New folder (prompts for path under the current project; cursor on a folder pre-fills the prefix). Created empty; persisted in the folder store. |
-| `c` | New session. On a **project** or **folder** node (or a session leaf, treated as its container): opens a dialog to name a new Claude session, pick its working directory, and optionally create a git worktree. Launches `claude --session-id <uuid> -n <name> [-w [<wt>]]` as a sibling tmux window (or via `execvp` without tmux). |
+| `c` | New session. On a **project** or **folder** node (or a session leaf, treated as its container): opens a dialog to name a new Claude session, pick its working directory, and optionally create a git worktree. Launches `claude --session-id <uuid> -n <name> [-w [<wt>]]` as a sibling tmux window (or via `execvp` without tmux). **Leaving the name blank** starts a temporary unnamed session — it writes no `custom-title`, stays hidden by default (visible only in mode 2 or while live), and is reaped by `--gc` on the normal retention schedule. After creation (tmux path) the explorer moves the tree cursor to the new session's row once it appears — immediately for a named session (seeded into the tree), or when the live indicator first detects it for an unnamed one. |
 | `m` | Move. On a **session**: move within its project (lists existing paths; type a new path to create it). On a **folder**: re-parent the whole subtree under a chosen path (or `(ungroup)` → top level), keeping its leaf name. Candidate parents exclude the folder and its own descendants. |
 | `d` | Delete the selected session (confirms). Removes the JSONL **and** the index entry. |
 | `e` | Edit notes for the selected session (opens `$EDITOR` or an inline multi-line input). |
-| `u` | Toggle visibility of unnamed sessions (hidden by default). |
+| `Tab` | Cycle the view mode: **mode 0** (named + active, default) → **mode 1** (active/live only) → **mode 2** (all, including unnamed) → back to mode 0. The header advertises the hidden unnamed count in modes 0 and 1. |
+| `z` | Toggle collapse-to-roots: collapses the tree so only project root nodes are visible; pressing again restores the previous expand state. Drill-down into a project is remembered across tree rebuilds within a session (not persisted across restarts). |
 | `g` | Toggle the subscription-usage bar in the tmux status line (off by default; tmux-hosted only). Enable fires an immediate probe and starts a 5-min refresh interval; disable clears the bar. Off-then-on is the manual force-refresh. Inert without tmux. |
 | `F5` | Rescan: import any sessions under `~/.claude/projects/` not yet tracked and refresh cached fields (runs `index.reindex` in a background worker, with a determinate progress bar shown in a modal panel — the same centered `_PanelScreen` styling as the other dialogs, overlaid on the dimmed tree). Use after a fresh install to pull in pre-existing sessions. |
 | `/` | Live filter across name, notes, first prompt, summary. |
-| `h` | Show the help overlay (slash-folder naming, the named-only default + `u`, full key list, author credit). Auto-opens once on first launch, then only on demand. |
+| `h` | Show the help overlay (slash-folder naming, view-mode cycle with `Tab`, full key list, author credit). Auto-opens once on first launch, then only on demand. |
 | `Esc` | Close the preview pane, the help overlay, or clear an active filter. Does **not** quit. |
 | `q` | Quit. |
 
@@ -196,6 +202,19 @@ This does not violate "JSONL is authoritative": `claude -n` persists the identic
 2 s live-refresh. Precisely: `record_session` adopts the transcript's last
 `custom-title` only when it is non-empty **and not in `name_shadows`**; otherwise it
 keeps `name_cached`.
+
+**Blank name → temporary unnamed session.** If the user leaves the name field empty
+and confirms, the session is launched with no `-n` flag, so Claude writes no
+`custom-title`. The session starts with `name_cached = null` (unnamed), is hidden
+in mode 0 unless live, and is subject to `--gc` deletion on the normal retention
+schedule. No special deletion mechanism is added — the existing GC criteria
+(`name_cached IS NULL` + age) cover it.
+
+**Select-on-create (tmux path).** After launching the new session window, the
+explorer moves the tree cursor to the new session's row: immediately (on the next
+repopulate) for a named session (whose row is seeded into the tree before Claude's
+first turn), or as soon as the live-registry poll first detects the session alive
+for an unnamed one.
 
 If the chosen directory is not a git repository and a worktree was requested,
 `claude -w` reports the error inside the session window; v1 does not pre-validate.
@@ -283,7 +302,7 @@ at every CLI entry point.
 
 **`session-explorer index --backfill`** populates the index from every JSONL under `~/.claude/projects/` that isn't already tracked. Pre-install sessions don't fire the `SessionStart` hook, so without backfill they'd be invisible. Backfill recovers `cwd` per session from the JSONL's envelope lines (via `jsonl.session_cwd()`) since the hook payload isn't available retrospectively. Existing entries are left untouched — backfill is additive; use `--refresh` to recompute caches for already-tracked sessions. Safe to re-run.
 
-`index.reindex()` combines the two (refresh then backfill, so each session is touched once; accepts a `progress(done, total)` callback for the TUI's progress bar) and is what the TUI's `F5` key calls. This is the user-facing way to populate a fresh install — nothing imports pre-install sessions automatically (the `SessionStart` hook deliberately stays out of the scan path so it never blocks startup). A freshly-installed explorer shows an empty-state prompting `F5`; after a rescan the imported sessions are unnamed, so the empty-state then prompts `u` to surface them.
+`index.reindex()` combines the two (refresh then backfill, so each session is touched once; accepts a `progress(done, total)` callback for the TUI's progress bar) and is what the TUI's `F5` key calls. This is the user-facing way to populate a fresh install — nothing imports pre-install sessions automatically (the `SessionStart` hook deliberately stays out of the scan path so it never blocks startup). A freshly-installed explorer shows an empty-state prompting `F5`; after a rescan the imported sessions are unnamed, so the empty-state then prompts `Tab` to cycle to a broader view to surface them.
 
 ## Hooks
 
@@ -377,7 +396,7 @@ Two `set_interval` timers, neither of which re-reads JSONLs or reindexes (that s
 
 Glyphs: **working** → animated green spinner; **open but idle** → steady dim `○`; **inactive** → nothing. The subtitle shows the active count, e.g. `· ● N active`.
 
-**Live sessions surface even when unnamed.** Unnamed sessions are hidden by default, but a currently-live one (working *or* idle) is shown regardless of the unnamed filter — `build_nested_tree()` takes a `live_ids` escape hatch. When a live unnamed session dies it reverts to hidden on the next poll; that visibility change drives a full repopulate (rather than an in-place label rewrite) which preserves the cursor. This is orthogonal to the `u` toggle and to "kept": liveness is "shown", never "named", and never affects retention.
+**Live sessions surface even when unnamed.** Unnamed sessions are hidden by default (in view mode 0), but a currently-live one (working *or* idle) is always shown in mode 0 — `build_nested_tree()` takes a `live_ids` escape hatch. When a live unnamed session dies it reverts to hidden on the next poll; that visibility change drives a full repopulate (rather than an in-place label rewrite) which preserves the cursor. This is orthogonal to the view-mode cycle (`Tab`) and to "kept": liveness is "shown", never "named", and never affects retention.
 
 ### Tunables (defaults)
 
