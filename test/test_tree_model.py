@@ -5,6 +5,13 @@ def _idx(sessions):
     return {"version": 1, "sessions": sessions}
 
 
+def _all_sessions(node):
+    out = list(node["_sessions"])
+    for child in node["_folders"].values():
+        out.extend(_all_sessions(child))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # split_path tests
 # ---------------------------------------------------------------------------
@@ -285,3 +292,25 @@ def test_build_nested_tree_live_named_session_routes_to_its_folder_not_unnamed()
     assert "(unnamed)" not in t["proj"]["_folders"]
     team = t["proj"]["_folders"]["team"]
     assert any(sid == "n1" for sid, _ in team["_sessions"])
+
+
+def test_build_nested_tree_live_only_keeps_only_live_sessions():
+    idx = {"sessions": {
+        "named-live": {"project_label": "p", "name_cached": "feature"},
+        "named-dead": {"project_label": "p", "name_cached": "other"},
+        "unnamed-live": {"project_label": "p", "name_cached": None},
+        "unnamed-dead": {"project_label": "p", "name_cached": None},
+    }}
+    t = build_nested_tree(idx, {"projects": {}}, live_only=True,
+                          live_ids={"named-live", "unnamed-live"})
+    flat = {sid for proj in t.values()
+            for sid, _ in _all_sessions(proj)}
+    assert flat == {"named-live", "unnamed-live"}
+
+
+def test_build_nested_tree_live_only_empty_when_nothing_live():
+    idx = {"sessions": {
+        "a": {"project_label": "p", "name_cached": "x"},
+    }}
+    assert build_nested_tree(idx, {"projects": {}}, live_only=True,
+                             live_ids=set()) == {}
