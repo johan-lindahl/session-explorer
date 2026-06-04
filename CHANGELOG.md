@@ -3,6 +3,41 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.10.0
+
+### Added
+- **`F2` renames** the selected node, aliased to `r` (conventional system
+  rename key).
+- **Blank-name temporary sessions.** Leaving the name empty on `c` starts a
+  throwaway *unnamed* Claude session (launch omits `-n`, no index seeding). It
+  stays hidden by default and is reaped by the existing `--gc` — no new deletion
+  mechanism.
+- **Select-the-new-session on create.** After `c`, the tree cursor jumps to the
+  new session's row once it appears (immediately for a named session; on the
+  next live poll for an unnamed one).
+- **`z` collapse-to-roots.** Collapse the tree to project roots and drill into
+  the one you want; the drill-down sticks across tree rebuilds within the session.
+
+### Changed
+- **`Tab` cycles three view modes**, replacing the old `u` toggle: **named +
+  active** (default) → **active only** (just the live `●` sessions) → **all
+  incl. unnamed** → back. `Tab` is suppressed while the `/` filter input is
+  focused.
+
+## 1.9.1
+
+### Fixed
+- **Explorer renames no longer revert.** A live Claude session re-writes its
+  in-memory `custom-title` roughly once per turn, so renaming a *running*
+  session was overwritten on Claude's next turn (names are read "last
+  `custom-title` wins"). The index is now authoritative for explorer renames:
+  `index.set_name` records superseded titles in a new `name_shadows[]` field,
+  and `record_session` adopts the JSONL's last title only when it is **not**
+  shadowed. All three rename paths (rename, folder-cascade, move) route through
+  `set_name`. Backward compatible — sessions never renamed via the explorer have
+  no shadows, so last-wins is unchanged. Already-reverted sessions self-heal on
+  the next explorer rename.
+
 ## 1.9.0
 
 ### Added
@@ -13,6 +48,51 @@ follows [semantic versioning](https://semver.org/).
   removes the app and unpins it. The build is hand-rolled (no Automator), which
   avoids the `CFBundleIconName`/`Assets.car` icon-override and stripped-`PATH`
   traps of an Automator applet.
+
+## 1.8.0
+
+### Added
+- **Subscription usage bar in the tmux status line (`g`).** Renders the same
+  5-hour "Current session" percentage as Claude Code's `/usage` —
+  `[████░░░░] 31% ↺1:30am` — in the (previously empty) `status-left`. Off by
+  default, toggled with `g` and persisted; enabling fires an immediate probe
+  then refreshes every 5 minutes. The %/reset live only in Anthropic's response
+  headers (no local cache, no `claude usage` subcommand), so a hidden throwaway
+  `claude` is driven through `/usage` on the dedicated `-L session-explorer`
+  server and the panel is `capture-pane`d and parsed. The probe leaves no trace
+  (both hooks bail out for it, its transcript is cleaned up each run) and
+  degrades silently (not logged in / no tmux / parse miss → bar unchanged).
+
+## 1.7.0
+
+### Changed
+- **Split-pane resume replaces window-flipping.** The explorer stays in the left
+  pane and the active Claude session docks in the right pane, side by side.
+  `Enter` docks a session and focuses it (entering another swaps it in, the
+  previous keeps running in the background); double-click == Enter. **F9**
+  toggles focus between panes (mouse-click also focuses); **F12** zooms the
+  focused pane fullscreen and back. Navigating the tree cursor-follows: landing
+  on a running session of ours docks it without stealing focus, landing on a
+  stopped/peek-only session or folder closes the pane (debounced ~0.2s). The
+  tree is the only session switcher — no window-tab status bar — and a
+  persistent `F9 ⇄ switch · F12 ⤢ full` hint lives in the tmux status line so it
+  survives the zoomed-fullscreen case.
+
+## 1.6.0
+
+### Added
+- **Create new sessions from the explorer (`c`).** A `c` on a project or folder
+  node creates a new Claude session — naming it directly and optionally spinning
+  up a git worktree — without leaving the explorer. A modal collects the name
+  (prefilled with the folder prefix so a slash-path nests it), the working
+  directory (derived from the project's most-recently-active session, worktree
+  suffix stripped to the repo root; editable), and an optional git worktree.
+  Launches `claude --session-id <uuid> -n <name> [-w [<wt>]]` — Claude writes
+  the `custom-title` and owns all worktree/branch creation. Under tmux it starts
+  as a sibling window; without tmux it falls back to `execvp`. Creation seeds
+  `name_cached` immediately and `record_session` preserves a known name when the
+  transcript yields none, so a just-created session never flickers as
+  `(unnamed)`.
 
 ## 1.5.0
 

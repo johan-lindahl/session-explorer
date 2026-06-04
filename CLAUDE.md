@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Implemented and released (**v1.7.0**, installable from the Claude Code marketplace). The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, the split-pane tmux interaction layer (explorer left / active session docked right, F9 switch, F12 fullscreen), new-session creation (`c`), and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
+Implemented and released, installable from the Claude Code marketplace. The hook, manifest, index core, Textual TUI, `--gc` retention, uninstall, launchers, the live-session indicator, the split-pane tmux interaction layer (explorer left / active session docked right, F9 switch, F12 fullscreen), new-session creation (`c`), and CI are all shipped. **`SPEC.md` is the authoritative source for architecture, data model, TUI behavior, install layout, and edge-case decisions** — read it before proposing or writing any code. If a change would contradict the spec, update the spec in the same change rather than silently diverging.
 
 ## What this project is
 
@@ -50,6 +50,7 @@ These are the constraints to preserve — violating any breaks the spec's contra
 - **Install (dev, plain path):** `./install.sh` registers the hook in `~/.claude/settings.json` and symlinks `bin/session-explorer` to `~/.local/bin/`. It does NOT touch `cleanupPeriodDays` (retention is opt-in via the TUI prompt).
 - **Install (marketplace path):** `/plugin marketplace add <this-repo>` then `/plugin install session-explorer`. The plugin's `bin/` is on the Bash-tool PATH automatically.
 - **Uninstall:** `./uninstall.sh` (plain) or `session-explorer uninstall` (marketplace, since `/plugin uninstall` has no teardown hook). Both restore `cleanupPeriodDays` from the backup.
+- **Releasing:** every iteration of changes that ships needs a version bump and a GitHub release. **Follow the `cutting-a-release` skill (`.claude/skills/cutting-a-release/SKILL.md`) — it is the authoritative checklist** (bump `__init__.py` + `plugin.json`, update README/SPEC status lines and the help-screen keybindings if they changed, add a `CHANGELOG.md` section, then `gh release create vX.Y.Z`). Don't ship version-affecting work without running through it.
 
 ## Implementation order
 
