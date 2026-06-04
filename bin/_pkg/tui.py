@@ -40,9 +40,11 @@ def _index_path() -> str:
 NAME_W = 24
 GUIDE_DEPTH = 4  # cells Textual indents per tree level (Tree.guide_depth)
 GLYPH_W = 2  # leading cells reserved on every row for the live-state glyph
+WT_W = 4  # display width of the worktree-indicator column (after the name field)
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 IDLE_GLYPH = "○"   # idle, peek-only (running in a separate terminal)
 OURS_GLYPH = "●"   # idle, accessible (running in our tmux — Enter to jump in)
+WT_GLYPH = "⎇"  # marks a git-worktree session (blank = normal "root" checkout)
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
@@ -50,8 +52,6 @@ SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
                           # docked pane follows it (coalesces hold-scroll churn)
-WT_W = 4  # display width of the worktree-indicator column (after the name field)
-WT_GLYPH = "⎇"  # marks a git-worktree session (blank = normal "root" checkout)
 
 
 def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
