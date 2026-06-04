@@ -383,7 +383,7 @@ def test_row_label_columns_align_across_depth():
     absolute screen column. In the bare row string this means the stat suffix
     sits at `name_w` in each, and that `name_w` differs by GUIDE_DEPTH, which
     exactly equals one tree-indent level."""
-    from _pkg.tui import _row_label, _stat_suffix, NAME_W, GUIDE_DEPTH, GLYPH_W
+    from _pkg.tui import _row_label, _stat_suffix, _wt_cell, NAME_W, GUIDE_DEPTH, GLYPH_W
     s = {"name_cached": "x", "last_active_at": None,
          "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 7,
          "first_prompt": "hello"}
@@ -394,18 +394,18 @@ def test_row_label_columns_align_across_depth():
     name_w_grouped = GLYPH_W + NAME_W
     name_w_ungrouped = GLYPH_W + NAME_W + GUIDE_DEPTH
     assert grouped[name_w_grouped:] == ungrouped[name_w_ungrouped:]
-    assert grouped[name_w_grouped:] == _stat_suffix("—", "~0", "(0%)", "7", "msgs", "hello")
+    assert grouped[name_w_grouped:] == _wt_cell(None) + _stat_suffix("—", "~0", "(0%)", "7", "msgs", "hello")
 
 
 def test_column_header_offset_matches_grouped_leaf():
-    from _pkg.tui import _column_header, _stat_suffix, NAME_W, GUIDE_DEPTH, GLYPH_W
+    from _pkg.tui import _column_header, _stat_suffix, _wt_cell, NAME_W, GUIDE_DEPTH, GLYPH_W
     header = _column_header()
     name_region = GLYPH_W + NAME_W + 2 * GUIDE_DEPTH
     # Left region is the GLYPH_W glyph cells + NAME label; the stat labels begin
     # at the same absolute column a grouped leaf's stats do (prefix GLYPH_W +
     # 2*GUIDE_DEPTH + NAME_W).
     assert header[:name_region].strip() == "NAME"
-    assert header[name_region:] == _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
+    assert header[name_region:] == _wt_cell(None) + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
 def test_long_name_truncates_to_field_width():
@@ -2374,3 +2374,25 @@ def test_worktree_state_dead_when_dir_missing(tmp_path):
     # Marker present in the path, but the directory was never created.
     gone = tmp_path / "repo" / ".claude" / "worktrees" / "deleted"
     assert _worktree_state(str(gone)) == "dead"
+
+
+def test_wt_cell_width_and_colors():
+    from _pkg.tui import _wt_cell, WT_W
+    from rich.text import Text
+    # Each cell renders to exactly WT_W display cells regardless of state.
+    for state in (None, "live", "dead"):
+        assert Text.from_markup(_wt_cell(state)).cell_len == WT_W
+    # Root is blank; live is dark green; dead is red.
+    assert _wt_cell(None).strip() == ""
+    assert "dark_green" in _wt_cell("live") and "⎇" in _wt_cell("live")
+    assert "red" in _wt_cell("dead") and "⎇" in _wt_cell("dead")
+
+
+def test_row_label_includes_wt_glyph():
+    from _pkg.tui import _row_label
+    s = {"name_cached": "x", "last_active_at": None, "tokens_estimate": 0,
+         "tokens_window_pct": 0, "message_count": 0, "first_prompt": ""}
+    assert "⎇" in _row_label("sid", s, depth=2, wt_state="live")
+    assert "⎇" in _row_label("sid", s, depth=2, wt_state="dead")
+    assert "⎇" not in _row_label("sid", s, depth=2, wt_state=None)
+    assert "⎇" not in _row_label("sid", s, depth=2)  # default = root

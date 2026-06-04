@@ -50,6 +50,8 @@ SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
                           # docked pane follows it (coalesces hold-scroll churn)
+WT_W = 4  # display width of the worktree-indicator column (after the name field)
+WT_GLYPH = "⎇"  # marks a git-worktree session (blank = normal "root" checkout)
 
 
 def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
@@ -77,13 +79,30 @@ def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
     return " " * GLYPH_W
 
 
+def _wt_glyph(state: "str | None") -> str:
+    """Inner markup for the worktree column: dark-green glyph for a live
+    worktree, red for a deleted one, a single space for a root checkout. Always
+    one display cell wide after markup is stripped. Pure for unit testing."""
+    if state == "live":
+        return f"[dark_green]{WT_GLYPH}[/]"
+    if state == "dead":
+        return f"[red]{WT_GLYPH}[/]"
+    return " "
+
+
+def _wt_cell(state: "str | None") -> str:
+    """A WT_W-wide column cell: one space of gap, the worktree glyph, then
+    padding out to WT_W. Inserted between the name field and the stat block."""
+    return " " + _wt_glyph(state) + " " * (WT_W - 2)
+
+
 def _stat_suffix(age: str, tok: str, pct: str, msgs: str, msgs_unit: str, prompt: str) -> str:
     """Render the stat block after the name field. Used for both data rows and
     the header line so the columns line up by construction."""
     return f" {age:>4}  {tok:>6} {pct:>5}  {msgs:>4} {msgs_unit}   {prompt}"
 
 
-def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ") -> str:
+def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ", wt_state: "str | None" = None) -> str:
     """Leaf row. `depth` is the number of tree levels above the leaf
     (project = 1 level above ungrouped leaves; folder above that = 2 levels;
     etc.). Used to choose the name_field width so stat columns align.
@@ -103,7 +122,7 @@ def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ") -> str:
     pct = fmt_pct(s.get("tokens_window_pct", 0))
     msgs = str(s.get("message_count", 0))
     prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
-    return glyph + f"{display:<{name_w}}" + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
+    return glyph + f"{display:<{name_w}}" + _wt_cell(wt_state) + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
 
 
 def _column_header() -> str:
@@ -111,7 +130,7 @@ def _column_header() -> str:
     leaf's absolute stat offset (GLYPH_W glyph cells + 2 levels of guide ×
     GUIDE_DEPTH + NAME_W)."""
     name_region = NAME_W + 2 * GUIDE_DEPTH
-    return " " * GLYPH_W + f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
+    return " " * GLYPH_W + f"{'NAME':<{name_region}}" + " " * WT_W + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
 def _preview_text(s: dict) -> str:
