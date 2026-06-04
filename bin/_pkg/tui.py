@@ -609,6 +609,8 @@ class SessionExplorerApp(App):
         self._pending_select_sid: str | None = None
         # Collapse-to-roots view: when on, projects/folders render collapsed
         # except those the user has drilled into (tracked in _expanded by key).
+        # Stale keys (renamed/deleted nodes) are benign — they never match and
+        # accumulate at most O(projects × folder-depth) per session.
         self._collapse_mode: bool = False
         self._expanded: set[str] = set()
         # tmux-hosted interaction layer (spec §1). The launcher sets this env
@@ -896,7 +898,7 @@ class SessionExplorerApp(App):
                 fkey = self._node_key(project_label, child_segs)
                 folder_node = parent.add(
                     f"{name}/",
-                    expand=(not self._collapse_mode or fkey in self._expanded),
+                    expand=self._should_expand(fkey),
                     data={"project": project_label, "segments": child_segs},
                 )
                 render(folder_node, project_label, child_segs, child, child_depth + 1)
@@ -905,7 +907,7 @@ class SessionExplorerApp(App):
             node = tree[project]
             proj_node = root.add(
                 f"{project} ({count(node)})",
-                expand=(not self._collapse_mode or project in self._expanded),
+                expand=self._should_expand(project),
                 data={"project": project, "segments": []},
             )
             # Project sits at tree depth 0 (show_root=False); its direct
@@ -1490,6 +1492,11 @@ class SessionExplorerApp(App):
         return project_label if not segments else \
             project_label + "\x00" + "/".join(segments)
 
+    def _should_expand(self, key: str) -> bool:
+        """A node renders expanded unless we're collapsed and it isn't one of
+        the keys the user drilled into."""
+        return not self._collapse_mode or key in self._expanded
+
     def action_toggle_collapse(self) -> None:
         self._collapse_mode = not self._collapse_mode
         if self._collapse_mode:
@@ -1800,6 +1807,8 @@ class SessionExplorerApp(App):
         self._schedule_dock_sync()
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        if not self._collapse_mode:
+            return
         # Track user-opened nodes so they survive a _populate() rebuild.
         # Session leaf nodes have data={"sid": ...} (no "project" key) —
         # the guard below ensures only project/folder nodes are tracked.
@@ -1808,6 +1817,8 @@ class SessionExplorerApp(App):
             self._expanded.add(self._node_key(data["project"], data.get("segments") or []))
 
     def on_tree_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
+        if not self._collapse_mode:
+            return
         data = getattr(event.node, "data", None) or {}
         if "project" in data:
             self._expanded.discard(self._node_key(data["project"], data.get("segments") or []))

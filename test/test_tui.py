@@ -2315,3 +2315,40 @@ async def test_pending_select_expands_ancestors_in_collapse_mode(index_path):
         await pilot.pause()
         node = app._tree.cursor_node
         assert node is not None and node.data and node.data.get("sid") == "sid-1"
+
+
+@pytest.mark.asyncio
+async def test_expanding_node_in_collapse_mode_records_it(index_path):
+    """Interactively expanding a project in collapse mode records it in
+    _expanded (via the NodeExpanded handler) and keeps it open across a rebuild."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("z")  # collapse to roots
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        assert not proj.is_expanded
+        proj.expand()           # posts NodeExpanded -> handler records the key
+        await pilot.pause()
+        assert "demo" in app._expanded
+        app._populate()         # rebuild; the project must stay open
+        await pilot.pause()
+        assert app._tree.root.children[0].is_expanded
+
+
+@pytest.mark.asyncio
+async def test_node_toggle_in_normal_mode_does_not_track(index_path):
+    """Expanding/collapsing nodes outside collapse mode must not record into
+    _expanded (verifies the handler guard added by Fix 1)."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._collapse_mode is False
+        proj = app._tree.root.children[0]
+        proj.collapse()
+        await pilot.pause()
+        proj.expand()
+        await pilot.pause()
+        assert app._expanded == set()  # handlers no-op outside collapse mode
