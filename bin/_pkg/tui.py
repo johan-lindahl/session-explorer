@@ -81,12 +81,12 @@ def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
 
 def _wt_glyph(state: "str | None") -> str:
     """Inner markup for the worktree column: dark-green glyph for a live
-    worktree, red for a deleted one, a single space for a root checkout. Always
-    one display cell wide after markup is stripped. Pure for unit testing."""
+    worktree, dark red for a deleted one, a single space for a root checkout.
+    Always one display cell wide after markup is stripped. Pure for unit testing."""
     if state == "live":
         return f"[dark_green]{WT_GLYPH}[/]"
     if state == "dead":
-        return f"[red]{WT_GLYPH}[/]"
+        return f"[dark_red]{WT_GLYPH}[/]"
     return " "
 
 
@@ -250,7 +250,7 @@ def _help_text() -> str:
         "",
         "[b]Worktrees[/]",
         "A [dark_green]⎇[/] after the name marks a session running in a git",
-        "worktree; it turns [red]⎇[/] if that worktree directory was deleted.",
+        "worktree; it turns [dark_red]⎇[/] if that worktree directory was deleted.",
         "Plain (no glyph) means a normal checkout. Updated on rescan ([b]F5[/]).",
         "",
         "[b]Running sessions in tmux[/]",
