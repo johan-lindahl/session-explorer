@@ -1083,6 +1083,17 @@ def test_new_session_argv_name_with_space_is_one_token():
     assert argv[4] == "my session"
 
 
+def test_new_session_argv_blank_name_omits_dash_n():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "") == ["claude", "--session-id", "sid-9"]
+
+
+def test_new_session_argv_blank_name_with_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "", worktree="wt1") == [
+        "claude", "--session-id", "sid-9", "-w", "wt1"]
+
+
 def test_preview_text_shows_model():
     from _pkg.tui import _preview_text
     s = {"sid": "x", "name_cached": "n", "tokens_estimate": 620000,
@@ -2013,6 +2024,30 @@ async def test_new_session_no_tmux_sets_argv(index_path, monkeypatch):
         await pilot.pause()
     assert app._new_session_argv == ["claude", "--session-id", "fixed-sid", "-n", "feature"]
     assert app._new_session_cwd == "/tmp/demo-project"
+
+
+async def test_blank_name_creates_unnamed_session_no_tmux(index_path, monkeypatch):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    import _pkg.index as idxmod
+
+    seeded = []
+    monkeypatch.setattr(idxmod, "seed_new_session",
+                        lambda *a, **k: seeded.append(a))
+
+    app = SessionExplorerApp(index_path=index_path)  # tmux disabled by default
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Navigate to the demo project node (like test_new_session_no_tmux_seeds_name)
+        await pilot.press("down")  # demo project node
+        app.action_new_session()
+        await pilot.pause()
+        assert isinstance(app.screen, NewSessionScreen)
+        app.screen.dismiss({"name": "", "cwd": "/tmp/demo-project",
+                            "worktree": False, "worktree_name": ""})
+        await pilot.pause()
+    assert seeded == []
+    assert app._new_session_argv is not None
+    assert "-n" not in app._new_session_argv
 
 
 def test_run_execvps_new_session(monkeypatch, tmp_path):

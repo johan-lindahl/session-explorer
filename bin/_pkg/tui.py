@@ -1269,18 +1269,22 @@ class SessionExplorerApp(App):
             if not result:
                 return
             name = result["name"].strip()
-            if not name:
-                return
             cwd = result["cwd"].strip() or os.path.expanduser("~")
             # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
             worktree = (result["worktree_name"] or "") if result["worktree"] else None
             sid = _new_sid()
 
-            # Seed the chosen name now: claude writes no transcript (and thus no
-            # custom-title) until the first turn, so without this the session
-            # shows under (unnamed) until then. claude -n persists the identical
-            # title later, so there's no divergence.
-            _index.seed_new_session(self._index_path, sid, name, cwd)
+            # A blank name starts a *temporary* unnamed session: claude writes no
+            # custom-title, so it stays unnamed (hidden by default) and --gc reaps
+            # it on the retention schedule. Don't seed a name in that case.
+            if name:
+                # Seed the chosen name now: claude writes no transcript (and thus
+                # no custom-title) until the first turn, so without this the
+                # session shows under (unnamed) until then. claude -n persists the
+                # identical title later, so there's no divergence.
+                _index.seed_new_session(self._index_path, sid, name, cwd)
+
+            self._pending_select_sid = sid  # jump to it once its row exists
 
             # No tmux → exit and execvp claude (handled in run()).
             if not self._tmux_enabled:
@@ -1838,8 +1842,11 @@ def _derive_project_cwd(sessions: dict, project_label: str) -> "str | None":
 def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> list[str]:
     """argv for `os.execvp` to start a fresh session without tmux. A list (no
     shell), so the name needs no quoting. `worktree`: None → no `-w`; "" → bare
-    `-w`; otherwise `-w <name>`."""
-    argv = ["claude", "--session-id", sid, "-n", name]
+    `-w`; otherwise `-w <name>`. An empty `name` omits `-n`, starting an unnamed
+    (temporary) session that stays hidden by default and is reaped by `--gc`."""
+    argv = ["claude", "--session-id", sid]
+    if name:
+        argv += ["-n", name]
     if worktree is not None:
         argv.append("-w")
         if worktree:
