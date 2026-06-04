@@ -2382,10 +2382,10 @@ def test_wt_cell_width_and_colors():
     # Each cell renders to exactly WT_W display cells regardless of state.
     for state in (None, "live", "dead"):
         assert Text.from_markup(_wt_cell(state)).cell_len == WT_W
-    # Root is blank; live is dark green; dead is red.
+    # Root is blank; live is dark green; dead is dark red.
     assert _wt_cell(None).strip() == ""
     assert "dark_green" in _wt_cell("live") and "⎇" in _wt_cell("live")
-    assert "red" in _wt_cell("dead") and "⎇" in _wt_cell("dead")
+    assert "dark_red" in _wt_cell("dead") and "⎇" in _wt_cell("dead")
 
 
 def test_row_label_includes_wt_glyph():

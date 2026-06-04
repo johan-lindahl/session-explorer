@@ -3,6 +3,13 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.11.1
+
+### Changed
+- **Deleted-worktree glyph is now `dark_red`** instead of bright `red`, so the
+  red `⎇` matches the muted darkness of the live-worktree `dark_green` `⎇`.
+  Purely cosmetic — no behavior change.
+
 ## 1.11.0
 
 ### Added
