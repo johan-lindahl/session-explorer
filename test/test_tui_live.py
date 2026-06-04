@@ -262,3 +262,99 @@ async def test_refresh_live_metadata_worker_updates_row(tmp_path):
         await pilot.pause()
         leaf, _ = app._row_nodes["live1"]
         assert leaf.data.get("first_prompt") == "the real first prompt"
+
+
+@pytest.mark.asyncio
+async def test_apply_live_metadata_preserves_worktree_state(tmp_path):
+    """_apply_live_metadata must re-merge the cached worktree_state from
+    leaf.data when it rebuilds leaf.data from the index snapshot.  The index
+    snapshot carries NO `worktree_state` key (it is computed at build-time by
+    _worktree_state()), so without the explicit re-merge the key is lost and
+    _relabel_live_rows renders a blank cell instead of the ⎇ glyph.
+
+    Mutation proof: if the `"worktree_state": (leaf.data or {}).get("worktree_state")`
+    line were removed from _apply_live_metadata, leaf.data["worktree_state"]
+    would be absent after the call and this test would fail.
+    """
+    # Build a real worktree directory so _worktree_state() classifies it "live".
+    repo = tmp_path / "repo"
+    live_wt = repo / ".claude" / "worktrees" / "feat"
+    live_wt.mkdir(parents=True)
+
+    # Write a JSONL transcript for the live session so _do_live_metadata_refresh
+    # has something to parse (same shape as the helper above).
+    tp = tmp_path / "wt-live.jsonl"
+    _write_jsonl(tp, "first prompt from worktree")
+
+    # Write the index; project_path is the live worktree dir so the tree-build
+    # classifies it as "live".  A second non-worktree session gives the tree
+    # at least two rows (needed for a stable cursor position) and distinct
+    # last_active_at timestamps (all-None breaks tree sort).
+    idx = tmp_path / "session-explorer-index.json"
+    idx.write_text(json.dumps({"version": 2, "sessions": {
+        "wt_live": {
+            "project_label": "repo", "project_path": str(live_wt),
+            "name_cached": "wt-session",
+            "last_active_at": "2026-06-04T10:00:00+00:00",
+            "tokens_estimate": 0, "tokens_window_pct": 0,
+            "message_count": 0, "first_prompt": None,
+            "transcript_path": str(tp),
+        },
+        "normal": {
+            "project_label": "repo", "project_path": str(repo),
+            "name_cached": "normal-session",
+            "last_active_at": "2026-06-04T09:00:00+00:00",
+            "tokens_estimate": 0, "tokens_window_pct": 0,
+            "message_count": 0, "first_prompt": "earlier prompt",
+            "transcript_path": str(tmp_path / "normal.jsonl"),
+        },
+    }}))
+
+    # Live registry — sibling of the index file (live.default_path_for).
+    # last_seen=now + this process's pid keeps it inside live.poll's TTL/PID gate
+    # so the background poll doesn't overwrite _live_states back to empty.
+    from datetime import datetime, timezone
+    live_reg = tmp_path / "session-explorer-live.json"
+    live_reg.write_text(json.dumps({"version": 1, "sessions": {
+        "wt_live": {
+            "state": "working",
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "transcript_path": str(tp),
+            "cwd": str(live_wt),
+            "pid": os.getpid(),
+        },
+    }}))
+
+    (tmp_path / ".session-explorer.help-seen").touch()
+    (tmp_path / ".session-explorer.retention-declined").touch()
+
+    app = SessionExplorerApp(index_path=str(idx))
+    app._live_states = {"wt_live": "working"}
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # Verify the tree was built with the glyph initially present.
+        leaf, _ = app._row_nodes["wt_live"]
+        assert leaf.data["worktree_state"] == "live", (
+            "Precondition: tree build must classify the live worktree as 'live'"
+        )
+        assert "⎇" in str(leaf.label), (
+            "Precondition: glyph must appear in the initial label"
+        )
+
+        # Drive the live-metadata refresh (same pattern as
+        # test_apply_live_metadata_updates_row_without_repopulate).
+        app._do_live_metadata_refresh()
+        app._apply_live_metadata()
+        await pilot.pause()
+
+        leaf, _ = app._row_nodes["wt_live"]
+        # The re-merge must have preserved the worktree classification.
+        assert leaf.data.get("worktree_state") == "live", (
+            "worktree_state was lost from leaf.data after _apply_live_metadata"
+        )
+        # The visible label must still carry the ⎇ glyph.
+        assert "⎇" in str(leaf.label), (
+            "⎇ glyph disappeared from label after _apply_live_metadata"
+        )

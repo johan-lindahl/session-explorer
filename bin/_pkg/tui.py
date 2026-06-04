@@ -40,9 +40,11 @@ def _index_path() -> str:
 NAME_W = 24
 GUIDE_DEPTH = 4  # cells Textual indents per tree level (Tree.guide_depth)
 GLYPH_W = 2  # leading cells reserved on every row for the live-state glyph
+WT_W = 4  # display width of the worktree-indicator column (after the name field)
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 IDLE_GLYPH = "○"   # idle, peek-only (running in a separate terminal)
 OURS_GLYPH = "●"   # idle, accessible (running in our tmux — Enter to jump in)
+WT_GLYPH = "⎇"  # marks a git-worktree session (blank = normal "root" checkout)
 SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
@@ -77,13 +79,30 @@ def _glyph(state: "str | None", frame: int, ours: "bool | None" = None) -> str:
     return " " * GLYPH_W
 
 
+def _wt_glyph(state: "str | None") -> str:
+    """Inner markup for the worktree column: dark-green glyph for a live
+    worktree, red for a deleted one, a single space for a root checkout. Always
+    one display cell wide after markup is stripped. Pure for unit testing."""
+    if state == "live":
+        return f"[dark_green]{WT_GLYPH}[/]"
+    if state == "dead":
+        return f"[red]{WT_GLYPH}[/]"
+    return " "
+
+
+def _wt_cell(state: "str | None") -> str:
+    """A WT_W-wide column cell: one space of gap, the worktree glyph, then
+    padding out to WT_W. Inserted between the name field and the stat block."""
+    return " " + _wt_glyph(state) + " " * (WT_W - 2)
+
+
 def _stat_suffix(age: str, tok: str, pct: str, msgs: str, msgs_unit: str, prompt: str) -> str:
     """Render the stat block after the name field. Used for both data rows and
     the header line so the columns line up by construction."""
     return f" {age:>4}  {tok:>6} {pct:>5}  {msgs:>4} {msgs_unit}   {prompt}"
 
 
-def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ") -> str:
+def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ", wt_state: "str | None" = None) -> str:
     """Leaf row. `depth` is the number of tree levels above the leaf
     (project = 1 level above ungrouped leaves; folder above that = 2 levels;
     etc.). Used to choose the name_field width so stat columns align.
@@ -103,7 +122,7 @@ def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ") -> str:
     pct = fmt_pct(s.get("tokens_window_pct", 0))
     msgs = str(s.get("message_count", 0))
     prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
-    return glyph + f"{display:<{name_w}}" + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
+    return glyph + f"{display:<{name_w}}" + _wt_cell(wt_state) + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
 
 
 def _column_header() -> str:
@@ -111,7 +130,7 @@ def _column_header() -> str:
     leaf's absolute stat offset (GLYPH_W glyph cells + 2 levels of guide ×
     GUIDE_DEPTH + NAME_W)."""
     name_region = NAME_W + 2 * GUIDE_DEPTH
-    return " " * GLYPH_W + f"{'NAME':<{name_region}}" + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
+    return " " * GLYPH_W + f"{'NAME':<{name_region}}" + " " * WT_W + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
 def _preview_text(s: dict) -> str:
@@ -228,6 +247,11 @@ def _help_text() -> str:
         "transcript about every 2s, so the first prompt, message count, tokens",
         "and context % fill in and tick up as the agent works. Live sessions",
         "show even when unnamed.",
+        "",
+        "[b]Worktrees[/]",
+        "A [dark_green]⎇[/] after the name marks a session running in a git",
+        "worktree; it turns [red]⎇[/] if that worktree directory was deleted.",
+        "Plain (no glyph) means a normal checkout. Updated on rescan ([b]F5[/]).",
         "",
         "[b]Running sessions in tmux[/]",
         "When launched with tmux, the explorer stays in the left pane and the",
@@ -889,8 +913,9 @@ class SessionExplorerApp(App):
                 if self._matches(sid, s):
                     glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                                    self._ours_flag(sid))
-                    leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph),
-                                           data={"sid": sid, **s})
+                    wt = _worktree_state(s.get("project_path"))
+                    leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph, wt),
+                                           data={"sid": sid, **s, "worktree_state": wt})
                     self._row_nodes[sid] = (leaf, child_depth)
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
@@ -1655,7 +1680,7 @@ class SessionExplorerApp(App):
             data = leaf.data or {}
             glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                            self._ours_flag(sid))
-            leaf.set_label(_row_label(sid, data, depth, glyph))
+            leaf.set_label(_row_label(sid, data, depth, glyph, data.get("worktree_state")))
 
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /
@@ -1698,7 +1723,8 @@ class SessionExplorerApp(App):
             return
         for sid, (leaf, _depth) in self._row_nodes.items():
             if sid in self._live_states and sid in data:
-                leaf.data = {"sid": sid, **data[sid]}
+                leaf.data = {"sid": sid, **data[sid],
+                             "worktree_state": (leaf.data or {}).get("worktree_state")}
         self._relabel_live_rows()
         self._refresh_preview()
 
@@ -1714,7 +1740,8 @@ class SessionExplorerApp(App):
             leaf, depth = node
             leaf.set_label(_row_label(sid, leaf.data or {}, depth,
                                       _glyph(state, self._spinner_frame,
-                                             self._ours_flag(sid))))
+                                             self._ours_flag(sid)),
+                                      (leaf.data or {}).get("worktree_state")))
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread
@@ -1840,6 +1867,18 @@ def _dead_worktree_repo(project_path: "str | None") -> "str | None":
         return None
     root = project_path.split(_WORKTREE_MARKER, 1)[0]
     return root if os.path.isdir(root) else None
+
+
+def _worktree_state(project_path: "str | None") -> "str | None":
+    """Classify a session's working dir for the worktree indicator column.
+
+    Returns None for a root checkout (no worktree marker), "live" for a git
+    worktree whose directory still exists, "dead" for a worktree whose directory
+    has been removed. Pure except for the single isdir stat — callers cache the
+    result so the spinner/poll re-renders never hit the filesystem."""
+    if not project_path or _WORKTREE_MARKER not in project_path:
+        return None
+    return "live" if os.path.isdir(project_path) else "dead"
 
 
 def _resolve_resume_cwd(project_path: "str | None") -> "str | None":

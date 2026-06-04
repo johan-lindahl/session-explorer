@@ -3,6 +3,18 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.11.0
+
+### Added
+- **Worktree indicator column.** A narrow column between the session name and
+  its age shows a `⎇` glyph for sessions running in a git worktree
+  (`<repo>/.claude/worktrees/<name>`): **dark-green** when the worktree
+  directory still exists, **red** when it was deleted. Normal "root" checkouts
+  stay blank. Deliberately a separate column from the left-edge live-session
+  glyph so the two are never confused. The directory check runs once at
+  tree-build time and is cached, so a worktree deleted while the TUI is open
+  turns red on the next rescan.
+
 ## 1.10.0
 
 ### Added
