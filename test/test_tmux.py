@@ -140,6 +140,21 @@ def test_build_new_session_window_named_worktree():
     assert argv[-1] == "exec claude --session-id sid-9 -n feature -w wt1"
 
 
+def test_build_new_session_window_blank_name_omits_dash_n():
+    from _pkg.tmux import build_new_session_window
+    argv = build_new_session_window("sid-9", "/tmp/p", "")
+    # The inner `claude` command is the last element (a shlex-joined string).
+    # The tmux window is still named with the sid via the new-window flags, but
+    # the inner command must carry no `-n` (so claude starts unnamed).
+    assert argv[-1] == "exec claude --session-id sid-9"
+
+
+def test_build_new_session_window_named_still_has_dash_n():
+    from _pkg.tmux import build_new_session_window
+    inner = build_new_session_window("sid-9", "/tmp/p", "feature")[-1]
+    assert "-n feature" in inner
+
+
 def test_build_dock_joins_session_into_explorer_on_the_right():
     # -h = horizontal split (side by side); source window `sid` becomes the
     # right pane of the `explorer` window. `-l 65%` sizes the joined (claude)

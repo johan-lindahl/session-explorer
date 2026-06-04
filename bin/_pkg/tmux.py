@@ -62,8 +62,12 @@ def build_new_session_window(sid: str, cwd: str, name: str,
     existing resume/live machinery applies unchanged. `claude -n` writes the
     custom-title; `claude -w` owns worktree creation. `worktree` is None for no
     worktree, "" for a bare `-w` (claude auto-names), or a name for `-w <name>`.
+    An empty `name` omits `-n`, starting an unnamed (temporary) session that
+    stays hidden by default and is reaped by `--gc`.
     """
-    inner = ["exec", "claude", "--session-id", sid, "-n", name]
+    inner = ["exec", "claude", "--session-id", sid]
+    if name:
+        inner += ["-n", name]
     if worktree is not None:
         inner.append("-w")
         if worktree:

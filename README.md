@@ -154,14 +154,15 @@ session-explorer tui       # run the TUI in the current terminal
 | `↑` `↓` | Move between rows |
 | `←` `→` | Collapse / expand the current folder or project |
 | `Enter` | Resume the selected session — when tmux-hosted, docks it in a pane beside the tree and focuses it so you can type; without tmux, hands the terminal to `claude --resume <id>` |
-| `c` | Create a new session in the selected project (prompts for a name, working directory, and optional git worktree; docks it like a resume) |
+| `c` | Create a new session in the selected project (prompts for a name, working directory, and optional git worktree; docks it like a resume). **Leave the name blank** to start a throwaway *unnamed* session — it's hidden by default and auto-reaped by `--gc`. The tree cursor jumps to the new session once it appears. |
 | `Space` | Toggle the preview pane (full name, project, folder, branch, age, created, messages, context, session id, notes, first prompt, path) |
-| `r` | Rename a session (also moves it between folders), or rename a folder's last segment in place — folder renames cascade across the whole subtree |
+| `r` / `F2` | Rename a session (also moves it between folders), or rename a folder's last segment in place — folder renames cascade across the whole subtree |
 | `n` | Create an empty folder |
 | `m` | Move a session to a folder, or re-parent a whole folder under another path (`(ungroup)` for top level) |
 | `d` | Delete the selected session (confirms; removes the JSONL too), or an empty folder (refuses if it still contains sessions) |
 | `e` | Edit notes (Ctrl+S to save) |
-| `u` | Toggle visibility of unnamed sessions (hidden by default) |
+| `Tab` | Cycle the view: **named + active** (default) → **active only** (just the running sessions) → **all** (including unnamed) → back |
+| `z` | Collapse the tree to project roots, then drill into the one you want; press again to expand everything. Drill-down sticks across refreshes |
 | `g` | Toggle a live subscription-usage bar (current 5-hour limit) in the tmux status line — off by default, tmux-hosted only; toggling off then on is the manual force-refresh |
 | `F5` | Rescan `~/.claude/projects/` — import sessions not yet tracked (shows a progress bar) |
 | `F9` | *(tmux-hosted)* Switch focus between the explorer and the docked session pane — also by mouse click |
@@ -255,7 +256,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.9.1.** Released and installable from the Claude Code marketplace. Textual
+**v1.10.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders

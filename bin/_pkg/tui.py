@@ -173,20 +173,24 @@ def _folder_has_sessions(index_data: dict, project: str, folder_segments: list) 
 
 
 def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
-                      filter_active: bool, scanned: bool) -> "str | None":
+                      filter_active: bool, scanned: bool,
+                      view_mode: int = 0) -> "str | None":
     """Message for the tree pane when no rows are visible, else None.
 
     Pure so it can be unit-tested. Branch order is deliberate: an active filter
-    explains itself first (the user is mid-search), then hidden-unnamed, then
-    the empty-index prompts — split by whether a rescan has already run, so a
-    fruitless scan doesn't keep telling the user to "press F5"."""
+    explains itself first (the user is mid-search), then the active-only mode,
+    then hidden-unnamed, then the empty-index prompts — split by whether a
+    rescan has already run, so a fruitless scan doesn't keep telling the user
+    to "press F5"."""
     if visible > 0:
         return None
     if filter_active:
         return "No sessions match the current filter.\nPress Esc to clear it."
+    if view_mode == 1:
+        return "No active sessions right now.\nPress Tab to show all sessions."
     if unnamed_hidden > 0:
         return (f"{unnamed_hidden} unnamed session(s) hidden.\n"
-                "Press u to show them, then r to name one.")
+                "Press Tab to cycle views, then r to name one.")
     if total_indexed == 0:
         if scanned:
             return "No sessions found under ~/.claude/projects/."
@@ -213,8 +217,8 @@ def _help_text() -> str:
         "Rename (r) or move (m) to re-file a session — there are no separate tags.",
         "",
         "[b]What you see[/]",
-        "Only named (renamed) sessions show by default. Unnamed stubs are hidden;",
-        "press [b]u[/] to toggle them on so you can rename or delete them.",
+        "Only named (renamed) sessions show by default. Press [b]Tab[/] to cycle",
+        "the view: named+active → active only → all (incl. unnamed) → back.",
         "",
         "[b]Live sessions[/]",
         "Sessions running right now are flagged in the left column:",
@@ -245,13 +249,14 @@ def _help_text() -> str:
         key("Space", "Peek a live snapshot / toggle the preview pane"),
         key("F9", "Switch focus between the explorer tree and the session"),
         key("F12", "Zoom the focused pane fullscreen (toggle)"),
-        key("r", "Rename a session (re-files it) or a folder (renames its subtree)"),
+        key("r / F2", "Rename a session (re-files it) or a folder (renames its subtree)"),
         key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
-        key("c", "New session in the current project/folder (names it; optional worktree)"),
+        key("c", "New session (blank name → temporary unnamed; optional worktree)"),
         key("d", "Delete the selected session, or an empty folder (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
-        key("u", "Toggle visibility of unnamed sessions"),
+        key("Tab", "Cycle view: named+active → active only → all"),
+        key("z", "Collapse the tree to project roots (toggle)"),
         key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
         key("/", "Live filter across name, notes, first prompt"),
         key("h", "Show this help"),
@@ -551,12 +556,14 @@ class SessionExplorerApp(App):
     BINDINGS = [
         Binding("enter", "resume", "Resume", priority=True),
         Binding("r", "rename", "Rename"),
+        Binding("f2", "rename", "Rename", key_display="F2", show=False),
         Binding("m", "move", "Move"),
         Binding("n", "new_folder", "New folder"),
         Binding("c", "new_session", "New session"),
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
-        Binding("u", "toggle_unnamed", "Toggle unnamed"),
+        Binding("tab", "cycle_view", "Cycle view", key_display="Tab", priority=True),
+        Binding("z", "toggle_collapse", "Collapse tree"),
         Binding("g", "toggle_usage", "Usage bar"),
         Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
@@ -583,7 +590,9 @@ class SessionExplorerApp(App):
         self._new_session_argv: list[str] | None = None
         self._new_session_cwd: str | None = None
         self._filter_needle: str = ""
-        self._show_unnamed: bool = False
+        # Display mode cycled by Tab: 0 = named + active (default),
+        # 1 = active only, 2 = all (incl. unnamed).
+        self._view_mode: int = 0
         # Flips after the first rescan so the empty-state can switch from
         # "press F5 to scan" to "no sessions found".
         self._scanned: bool = False
@@ -595,6 +604,15 @@ class SessionExplorerApp(App):
         # sid -> (TreeNode, child_depth) for in-place glyph updates without a
         # full rebuild. Rebuilt by _populate.
         self._row_nodes: dict[str, tuple] = {}
+        # sid to move the cursor to on the next populate where its row exists
+        # (set after creating a new session). Cleared once honored.
+        self._pending_select_sid: str | None = None
+        # Collapse-to-roots view: when on, projects/folders render collapsed
+        # except those the user has drilled into (tracked in _expanded by key).
+        # Stale keys (renamed/deleted nodes) are benign — they never match and
+        # accumulate at most O(projects × folder-depth) per session.
+        self._collapse_mode: bool = False
+        self._expanded: set[str] = set()
         # tmux-hosted interaction layer (spec §1). The launcher sets this env
         # var only when it wrapped the explorer in our dedicated tmux server.
         self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
@@ -615,11 +633,16 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
         if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+            return False
+        # Tab is a priority binding (it must beat Textual's focus traversal), so
+        # explicitly suppress it while the filter Input is focused — there, Tab
+        # should not cycle the view.
+        if action == "cycle_view" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # The usage bar only exists in the tmux-hosted layout.
         if action == "toggle_usage" and not self._tmux_enabled:
@@ -784,10 +807,17 @@ class SessionExplorerApp(App):
         self._row_nodes = {}
         data = _index.load(self._index_path)
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
-        tree = build_nested_tree(data, fs_data, include_unnamed=self._show_unnamed,
-                                 live_ids=set(self._live_states))
+        live_ids = set(self._live_states)
+        tree = build_nested_tree(
+            data, fs_data,
+            include_unnamed=(self._view_mode == 2),
+            live_ids=live_ids,
+            live_only=(self._view_mode == 1),
+        )
+        # Only mode 0 hides unnamed stubs; surface the count so the subtitle and
+        # empty-state can advertise the Tab cycle.
         unnamed_hidden = 0
-        if not self._show_unnamed:
+        if self._view_mode == 0:
             unnamed_hidden = sum(
                 1 for s in data.get("sessions", {}).values() if not s.get("name_cached")
             )
@@ -800,9 +830,16 @@ class SessionExplorerApp(App):
         total = sum(count(p) for p in tree.values())
         active = len(self._live_states)
         active_suffix = f" · ● {active} active" if active else ""
-        if unnamed_hidden:
+        if self._view_mode == 1:
+            # In active-only mode `total` already counts only live sessions, so
+            # active_suffix would just repeat it — omit it here.
+            self.sub_title = f"Active only — {total} sessions (Tab)"
+        elif self._view_mode == 2:
+            self.sub_title = (f"All sessions incl. unnamed — {total} across "
+                              f"{len(tree)} projects{active_suffix} (Tab)")
+        elif unnamed_hidden:
             self.sub_title = (f"{total} sessions across {len(tree)} projects · "
-                              f"{unnamed_hidden} unnamed hidden (u){active_suffix}")
+                              f"{unnamed_hidden} unnamed hidden (Tab){active_suffix}")
         else:
             self.sub_title = f"{total} sessions across {len(tree)} projects{active_suffix}"
 
@@ -819,6 +856,7 @@ class SessionExplorerApp(App):
             unnamed_hidden=unnamed_hidden,
             filter_active=bool(self._filter_needle),
             scanned=self._scanned,
+            view_mode=self._view_mode,
         )
         if msg is None:
             self._empty.display = False
@@ -857,8 +895,10 @@ class SessionExplorerApp(App):
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
                 child_segs = segments + [name]
+                fkey = self._node_key(project_label, child_segs)
                 folder_node = parent.add(
-                    f"{name}/", expand=True,
+                    f"{name}/",
+                    expand=self._should_expand(fkey),
                     data={"project": project_label, "segments": child_segs},
                 )
                 render(folder_node, project_label, child_segs, child, child_depth + 1)
@@ -866,13 +906,29 @@ class SessionExplorerApp(App):
         for project in sorted(tree):
             node = tree[project]
             proj_node = root.add(
-                f"{project} ({count(node)})", expand=True,
+                f"{project} ({count(node)})",
+                expand=self._should_expand(project),
                 data={"project": project, "segments": []},
             )
             # Project sits at tree depth 0 (show_root=False); its direct
             # children — both ungrouped sessions and top-level folders — are at
             # tree depth 1.
             render(proj_node, project, [], node, child_depth=1)
+
+        # Honor a pending select (e.g. just-created session) once its row exists.
+        if self._pending_select_sid and self._pending_select_sid in self._row_nodes:
+            leaf = self._row_nodes[self._pending_select_sid][0]
+            # Open every ancestor so the row is visible before moving the cursor
+            # (needed when collapse mode collapsed the enclosing project/folder).
+            anc = leaf.parent
+            while anc is not None and anc is not self._tree.root:
+                anc.expand()
+                d = anc.data or {}
+                if "project" in d:
+                    self._expanded.add(self._node_key(d["project"], d.get("segments") or []))
+                anc = anc.parent
+            self._restore_cursor_to_sid(self._pending_select_sid)
+            self._pending_select_sid = None
 
     def action_expand_node(self) -> None:
         node = self._tree.cursor_node
@@ -1241,18 +1297,24 @@ class SessionExplorerApp(App):
             if not result:
                 return
             name = result["name"].strip()
-            if not name:
-                return
             cwd = result["cwd"].strip() or os.path.expanduser("~")
             # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
             worktree = (result["worktree_name"] or "") if result["worktree"] else None
             sid = _new_sid()
 
-            # Seed the chosen name now: claude writes no transcript (and thus no
-            # custom-title) until the first turn, so without this the session
-            # shows under (unnamed) until then. claude -n persists the identical
-            # title later, so there's no divergence.
-            _index.seed_new_session(self._index_path, sid, name, cwd)
+            # A blank name starts a *temporary* unnamed session: claude writes no
+            # custom-title, so it stays unnamed (hidden by default) and --gc reaps
+            # it on the retention schedule. Don't seed a name in that case.
+            if name:
+                # Seed the chosen name now: claude writes no transcript (and thus
+                # no custom-title) until the first turn, so without this the
+                # session shows under (unnamed) until then. claude -n persists the
+                # identical title later, so there's no divergence.
+                _index.seed_new_session(self._index_path, sid, name, cwd)
+
+            # Remember the new sid so the cursor jumps to its row once it
+            # appears in the tree (consumed by _populate; see select-on-create).
+            self._pending_select_sid = sid
 
             # No tmux → exit and execvp claude (handled in run()).
             if not self._tmux_enabled:
@@ -1419,8 +1481,26 @@ class SessionExplorerApp(App):
             # None → cancel: stay in the explorer.
         self.push_screen(QuitScreen(running), after)
 
-    def action_toggle_unnamed(self) -> None:
-        self._show_unnamed = not self._show_unnamed
+    def action_cycle_view(self) -> None:
+        self._view_mode = (self._view_mode + 1) % 3
+        self._populate()
+
+    @staticmethod
+    def _node_key(project_label: str, segments: "list[str]") -> str:
+        # \x00 cannot appear in a project label or folder segment, so it is a
+        # safe separator for "<project>\x00<seg/seg>" folder keys.
+        return project_label if not segments else \
+            project_label + "\x00" + "/".join(segments)
+
+    def _should_expand(self, key: str) -> bool:
+        """A node renders expanded unless we're collapsed and it isn't one of
+        the keys the user drilled into."""
+        return not self._collapse_mode or key in self._expanded
+
+    def action_toggle_collapse(self) -> None:
+        self._collapse_mode = not self._collapse_mode
+        if self._collapse_mode:
+            self._expanded.clear()  # collapse everything to project roots
         self._populate()
 
     def _usage_marker(self) -> str:
@@ -1502,7 +1582,10 @@ class SessionExplorerApp(App):
             self._live_states = new_states
             self._our_windows = new_ours
             if states_changed and self._visibility_changed(old, new_states):
-                sid = self._selected_sid()
+                # A pending select (just-created session not yet visible) wins
+                # over preserving the old cursor, so the jump isn't clobbered
+                # when the new row first surfaces on this very poll.
+                sid = self._pending_select_sid or self._selected_sid()
                 self._populate()
                 self._restore_cursor_to_sid(sid)
             else:
@@ -1547,13 +1630,16 @@ class SessionExplorerApp(App):
             pass
 
     def _visibility_changed(self, old: dict, new: dict) -> bool:
-        """True if any session whose membership depends on liveness flipped.
+        """True if a live-set change alters which rows are visible.
 
-        Only unnamed sessions are conditionally visible, and only while not
-        showing all unnamed. A named session is always present regardless of
-        live state, so its appearance never forces a repopulate."""
-        if self._show_unnamed:
+        Mode 1 (active only) is purely liveness-driven, so any flip matters.
+        Mode 2 (all) always shows every session, so liveness never changes
+        membership. Mode 0 only conditionally shows *unnamed* live sessions, so
+        only an unnamed flip matters (a named session is always present)."""
+        if self._view_mode == 2:
             return False
+        if self._view_mode == 1:
+            return set(old) != set(new)
         data = _index.load(self._index_path)
         sessions = data.get("sessions", {})
         flipped = set(old) ^ set(new)  # sids that entered or left the live set
@@ -1723,6 +1809,23 @@ class SessionExplorerApp(App):
         self._refresh_preview()
         self._schedule_dock_sync()
 
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        if not self._collapse_mode:
+            return
+        # Track user-opened nodes so they survive a _populate() rebuild.
+        # Session leaf nodes have data={"sid": ...} (no "project" key) —
+        # the guard below ensures only project/folder nodes are tracked.
+        data = getattr(event.node, "data", None) or {}
+        if "project" in data:
+            self._expanded.add(self._node_key(data["project"], data.get("segments") or []))
+
+    def on_tree_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
+        if not self._collapse_mode:
+            return
+        data = getattr(event.node, "data", None) or {}
+        if "project" in data:
+            self._expanded.discard(self._node_key(data["project"], data.get("segments") or []))
+
 
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
@@ -1807,8 +1910,11 @@ def _derive_project_cwd(sessions: dict, project_label: str) -> "str | None":
 def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> list[str]:
     """argv for `os.execvp` to start a fresh session without tmux. A list (no
     shell), so the name needs no quoting. `worktree`: None → no `-w`; "" → bare
-    `-w`; otherwise `-w <name>`."""
-    argv = ["claude", "--session-id", sid, "-n", name]
+    `-w`; otherwise `-w <name>`. An empty `name` omits `-n`, starting an unnamed
+    (temporary) session that stays hidden by default and is reaped by `--gc`."""
+    argv = ["claude", "--session-id", sid]
+    if name:
+        argv += ["-n", name]
     if worktree is not None:
         argv.append("-w")
         if worktree:

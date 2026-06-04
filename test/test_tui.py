@@ -108,6 +108,19 @@ async def test_rename_updates_index(index_path, tmp_path):
     assert last == {"type": "custom-title", "customTitle": "renamed", "sessionId": "sid-1"}
 
 
+async def test_f2_opens_rename_dialog(index_path):
+    from _pkg.tui import SessionExplorerApp, RenameScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")  # project node
+        await pilot.press("down")  # folder node
+        await pilot.press("down")  # session leaf
+        await pilot.press("f2")
+        await pilot.pause()
+        assert isinstance(app.screen, RenameScreen)
+
+
 async def test_move_changes_folder(index_path, tmp_path):
     """Moving a session to folder 'release' rewrites its custom-title to release/<display>."""
     import json
@@ -339,7 +352,8 @@ async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("u"); await pilot.pause()  # surface unnamed
+        await pilot.press("tab"); await pilot.pause()  # mode 0 -> mode 1 (active only)
+        await pilot.press("tab"); await pilot.pause()  # mode 1 -> mode 2 (all incl. unnamed)
         def find(node, sid):
             for c in node.children:
                 if c.data and c.data.get("sid") == sid:
@@ -416,7 +430,7 @@ async def test_column_header_rendered(index_path):
             assert col in header_text
 
 
-async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
+async def test_tab_cycles_view_modes(index_path):
     import json
     data = json.load(open(index_path))
     data["sessions"]["unnamed-xyz"] = {
@@ -430,21 +444,66 @@ async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        assert app._view_mode == 0
         sids = _collect_leaf_sids(app._tree.root)
-        assert "sid-1" in sids
-        assert "unnamed-xyz" not in sids
-        # Subtitle should advertise the hidden count.
-        assert "unnamed hidden" in app.sub_title
+        assert "sid-1" in sids and "unnamed-xyz" not in sids
 
-        await pilot.press("u")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == 1
+        assert _collect_leaf_sids(app._tree.root) == set()
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == 2
+        sids = _collect_leaf_sids(app._tree.root)
+        assert "sid-1" in sids and "unnamed-xyz" in sids
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == 0
+        assert "unnamed-xyz" not in _collect_leaf_sids(app._tree.root)
+
+
+async def test_tab_does_not_cycle_view_while_filter_focused(index_path):
+    """Tab is a priority binding; it must be suppressed while the filter Input
+    is focused so the user can Tab-complete or navigate inside the filter
+    without accidentally cycling the view mode."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("slash")   # open and focus the filter Input
+        await pilot.pause()
+        assert app._filter.has_focus, "filter Input should be focused after pressing slash"
+        before = app._view_mode
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == before, (
+            f"Tab cycled view mode from {before} to {app._view_mode} "
+            "while the filter Input was focused"
+        )
+
+
+async def test_active_only_mode_shows_live_named_and_unnamed(index_path):
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["unnamed-live"] = {
+        "project_label": "demo", "name_cached": None,
+        "last_active_at": "2026-05-25T00:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._live_states = {"unnamed-live": "idle"}
+        await pilot.press("tab")  # -> mode 1 (active only)
         await pilot.pause()
         sids = _collect_leaf_sids(app._tree.root)
-        assert "unnamed-xyz" in sids
-
-        await pilot.press("u")
-        await pilot.pause()
-        sids = _collect_leaf_sids(app._tree.root)
-        assert "unnamed-xyz" not in sids
+        assert sids == {"unnamed-live"}
 
 
 async def test_new_folder_under_project_adds_to_folder_store(index_path):
@@ -770,25 +829,33 @@ def test_empty_state_text_after_scan_found_nothing():
     assert "No sessions found" in msg
 
 
-def test_empty_state_text_prompts_u_when_all_unnamed_hidden():
+def test_empty_state_text_prompts_tab_when_all_unnamed_hidden():
     from _pkg.tui import _empty_state_text
     msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=5,
-                            filter_active=False, scanned=False)
-    assert "Press u" in msg
+                            filter_active=False, scanned=False, view_mode=0)
+    assert "Tab" in msg
     assert "5" in msg
+
+
+def test_empty_state_text_active_only_when_nothing_live():
+    from _pkg.tui import _empty_state_text
+    msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=0,
+                            filter_active=False, scanned=False, view_mode=1)
+    assert "active" in msg.lower()
+    assert "Tab" in msg
 
 
 def test_empty_state_text_filter_no_match_takes_precedence():
     from _pkg.tui import _empty_state_text
     # Filter active wins even if unnamed sessions are also hidden.
     msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=2,
-                            filter_active=True, scanned=False)
+                            filter_active=True, scanned=False, view_mode=0)
     assert "filter" in msg.lower()
     assert "Esc" in msg
 
 
 async def test_empty_state_shown_when_only_unnamed(tmp_path):
-    """An index with only unnamed sessions shows the 'press u' empty-state; u hides it."""
+    """An index with only unnamed sessions shows the Tab empty-state; Tab cycles to show them."""
     import json
     fresh = tmp_path / "only-unnamed"
     fresh.mkdir()
@@ -806,8 +873,10 @@ async def test_empty_state_shown_when_only_unnamed(tmp_path):
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._empty.display is True
-        assert "Press u" in str(app._empty.render())
-        await pilot.press("u")
+        assert "Tab" in str(app._empty.render())
+        await pilot.press("tab")   # mode 0 -> mode 1 (active only)
+        await pilot.pause()
+        await pilot.press("tab")   # mode 1 -> mode 2 (all incl. unnamed)
         await pilot.pause()
         assert app._empty.display is False   # unnamed now visible
 
@@ -1012,6 +1081,17 @@ def test_new_session_argv_name_with_space_is_one_token():
     # execvp takes a list, so a spaced name stays a single argv token (no quoting).
     argv = _new_session_argv("sid-9", "my session")
     assert argv[4] == "my session"
+
+
+def test_new_session_argv_blank_name_omits_dash_n():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "") == ["claude", "--session-id", "sid-9"]
+
+
+def test_new_session_argv_blank_name_with_worktree():
+    from _pkg.tui import _new_session_argv
+    assert _new_session_argv("sid-9", "", worktree="wt1") == [
+        "claude", "--session-id", "sid-9", "-w", "wt1"]
 
 
 def test_preview_text_shows_model():
@@ -1946,6 +2026,30 @@ async def test_new_session_no_tmux_sets_argv(index_path, monkeypatch):
     assert app._new_session_cwd == "/tmp/demo-project"
 
 
+async def test_blank_name_creates_unnamed_session_no_tmux(index_path, monkeypatch):
+    from _pkg.tui import SessionExplorerApp, NewSessionScreen
+    import _pkg.index as idxmod
+
+    seeded = []
+    monkeypatch.setattr(idxmod, "seed_new_session",
+                        lambda *a, **k: seeded.append(a))
+
+    app = SessionExplorerApp(index_path=index_path)  # tmux disabled by default
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Navigate to the demo project node (like test_new_session_no_tmux_seeds_name)
+        await pilot.press("down")  # demo project node
+        app.action_new_session()
+        await pilot.pause()
+        assert isinstance(app.screen, NewSessionScreen)
+        app.screen.dismiss({"name": "", "cwd": "/tmp/demo-project",
+                            "worktree": False, "worktree_name": ""})
+        await pilot.pause()
+    assert seeded == []
+    assert app._new_session_argv is not None
+    assert "-n" not in app._new_session_argv
+
+
 def test_run_execvps_new_session(monkeypatch, tmp_path):
     import _pkg.tui as tui_mod
 
@@ -2138,3 +2242,113 @@ async def test_navigation_debounced_sync_docks_running_session(index_path, monke
         await pilot.pause(0.1)      # let the (shortened) debounce fire
     assert ("sid-1", False) in calls
     assert app._docked_sid == "sid-1"
+
+
+async def test_pending_select_moves_cursor_when_row_appears(index_path):
+    """A pending-select sid jumps the cursor to that row on the next populate."""
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["sid-2"] = {
+        "project_label": "demo", "project_path": "/tmp/demo-project",
+        "name_cached": "planning/another",
+        "last_active_at": "2026-05-28T10:00:00Z",
+        "tokens_estimate": 1, "tokens_window_pct": 1, "message_count": 1,
+        "first_prompt": "hi",
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._pending_select_sid = "sid-2"
+        app._populate()
+        await pilot.pause()
+        node = app._tree.cursor_node
+        assert node is not None and node.data and node.data.get("sid") == "sid-2"
+        # The flag clears after a successful select.
+        assert app._pending_select_sid is None
+
+
+async def test_z_collapses_tree_to_project_roots(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        assert proj.is_expanded
+        await pilot.press("z")
+        await pilot.pause()
+        assert app._collapse_mode is True
+        proj = app._tree.root.children[0]
+        assert not proj.is_expanded
+        await pilot.press("z")
+        await pilot.pause()
+        assert app._collapse_mode is False
+        assert app._tree.root.children[0].is_expanded
+
+
+async def test_collapse_mode_remembers_expanded_project_across_repopulate(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("z")  # collapse all
+        await pilot.pause()
+        app._expanded.add("demo")
+        app._populate()
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        assert proj.is_expanded  # stuck open across the rebuild
+
+
+async def test_pending_select_expands_ancestors_in_collapse_mode(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._collapse_mode = True
+        app._populate()
+        await pilot.pause()
+        app._pending_select_sid = "sid-1"
+        app._populate()
+        await pilot.pause()
+        node = app._tree.cursor_node
+        assert node is not None and node.data and node.data.get("sid") == "sid-1"
+
+
+@pytest.mark.asyncio
+async def test_expanding_node_in_collapse_mode_records_it(index_path):
+    """Interactively expanding a project in collapse mode records it in
+    _expanded (via the NodeExpanded handler) and keeps it open across a rebuild."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("z")  # collapse to roots
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        assert not proj.is_expanded
+        proj.expand()           # posts NodeExpanded -> handler records the key
+        await pilot.pause()
+        assert "demo" in app._expanded
+        app._populate()         # rebuild; the project must stay open
+        await pilot.pause()
+        assert app._tree.root.children[0].is_expanded
+
+
+@pytest.mark.asyncio
+async def test_node_toggle_in_normal_mode_does_not_track(index_path):
+    """Expanding/collapsing nodes outside collapse mode must not record into
+    _expanded (verifies the handler guard added by Fix 1)."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._collapse_mode is False
+        proj = app._tree.root.children[0]
+        proj.collapse()
+        await pilot.pause()
+        proj.expand()
+        await pilot.pause()
+        assert app._expanded == set()  # handlers no-op outside collapse mode
