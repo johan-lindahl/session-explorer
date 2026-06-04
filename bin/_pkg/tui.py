@@ -173,20 +173,24 @@ def _folder_has_sessions(index_data: dict, project: str, folder_segments: list) 
 
 
 def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
-                      filter_active: bool, scanned: bool) -> "str | None":
+                      filter_active: bool, scanned: bool,
+                      view_mode: int = 0) -> "str | None":
     """Message for the tree pane when no rows are visible, else None.
 
     Pure so it can be unit-tested. Branch order is deliberate: an active filter
-    explains itself first (the user is mid-search), then hidden-unnamed, then
-    the empty-index prompts — split by whether a rescan has already run, so a
-    fruitless scan doesn't keep telling the user to "press F5"."""
+    explains itself first (the user is mid-search), then the active-only mode,
+    then hidden-unnamed, then the empty-index prompts — split by whether a
+    rescan has already run, so a fruitless scan doesn't keep telling the user
+    to "press F5"."""
     if visible > 0:
         return None
     if filter_active:
         return "No sessions match the current filter.\nPress Esc to clear it."
+    if view_mode == 1:
+        return "No active sessions right now.\nPress Tab to show all sessions."
     if unnamed_hidden > 0:
         return (f"{unnamed_hidden} unnamed session(s) hidden.\n"
-                "Press u to show them, then r to name one.")
+                "Press Tab to cycle views, then r to name one.")
     if total_indexed == 0:
         if scanned:
             return "No sessions found under ~/.claude/projects/."
@@ -213,8 +217,8 @@ def _help_text() -> str:
         "Rename (r) or move (m) to re-file a session — there are no separate tags.",
         "",
         "[b]What you see[/]",
-        "Only named (renamed) sessions show by default. Unnamed stubs are hidden;",
-        "press [b]u[/] to toggle them on so you can rename or delete them.",
+        "Only named (renamed) sessions show by default. Press [b]Tab[/] to cycle",
+        "the view: named+active → active only → all (incl. unnamed) → back.",
         "",
         "[b]Live sessions[/]",
         "Sessions running right now are flagged in the left column:",
@@ -251,7 +255,8 @@ def _help_text() -> str:
         key("c", "New session in the current project/folder (names it; optional worktree)"),
         key("d", "Delete the selected session, or an empty folder (confirms)"),
         key("e", "Edit notes (Ctrl+S to save)"),
-        key("u", "Toggle visibility of unnamed sessions"),
+        key("Tab", "Cycle view: named+active → active only → all"),
+        key("z", "Collapse the tree to project roots (toggle)"),
         key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
         key("/", "Live filter across name, notes, first prompt"),
         key("h", "Show this help"),
@@ -557,7 +562,7 @@ class SessionExplorerApp(App):
         Binding("c", "new_session", "New session"),
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
-        Binding("u", "toggle_unnamed", "Toggle unnamed"),
+        Binding("tab", "cycle_view", "Cycle view", key_display="Tab", priority=True),
         Binding("g", "toggle_usage", "Usage bar"),
         Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
@@ -584,7 +589,9 @@ class SessionExplorerApp(App):
         self._new_session_argv: list[str] | None = None
         self._new_session_cwd: str | None = None
         self._filter_needle: str = ""
-        self._show_unnamed: bool = False
+        # Display mode cycled by Tab: 0 = named + active (default),
+        # 1 = active only, 2 = all (incl. unnamed).
+        self._view_mode: int = 0
         # Flips after the first rescan so the empty-state can switch from
         # "press F5 to scan" to "no sessions found".
         self._scanned: bool = False
@@ -616,7 +623,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "toggle_unnamed", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -785,10 +792,17 @@ class SessionExplorerApp(App):
         self._row_nodes = {}
         data = _index.load(self._index_path)
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
-        tree = build_nested_tree(data, fs_data, include_unnamed=self._show_unnamed,
-                                 live_ids=set(self._live_states))
+        live_ids = set(self._live_states)
+        tree = build_nested_tree(
+            data, fs_data,
+            include_unnamed=(self._view_mode == 2),
+            live_ids=live_ids,
+            live_only=(self._view_mode == 1),
+        )
+        # Only mode 0 hides unnamed stubs; surface the count so the subtitle and
+        # empty-state can advertise the Tab cycle.
         unnamed_hidden = 0
-        if not self._show_unnamed:
+        if self._view_mode == 0:
             unnamed_hidden = sum(
                 1 for s in data.get("sessions", {}).values() if not s.get("name_cached")
             )
@@ -801,9 +815,14 @@ class SessionExplorerApp(App):
         total = sum(count(p) for p in tree.values())
         active = len(self._live_states)
         active_suffix = f" · ● {active} active" if active else ""
-        if unnamed_hidden:
+        if self._view_mode == 1:
+            self.sub_title = f"Active only — {total} session(s){active_suffix} (Tab)"
+        elif self._view_mode == 2:
+            self.sub_title = (f"All sessions incl. unnamed — {total} across "
+                              f"{len(tree)} projects{active_suffix} (Tab)")
+        elif unnamed_hidden:
             self.sub_title = (f"{total} sessions across {len(tree)} projects · "
-                              f"{unnamed_hidden} unnamed hidden (u){active_suffix}")
+                              f"{unnamed_hidden} unnamed hidden (Tab){active_suffix}")
         else:
             self.sub_title = f"{total} sessions across {len(tree)} projects{active_suffix}"
 
@@ -820,6 +839,7 @@ class SessionExplorerApp(App):
             unnamed_hidden=unnamed_hidden,
             filter_active=bool(self._filter_needle),
             scanned=self._scanned,
+            view_mode=self._view_mode,
         )
         if msg is None:
             self._empty.display = False
@@ -1420,8 +1440,8 @@ class SessionExplorerApp(App):
             # None → cancel: stay in the explorer.
         self.push_screen(QuitScreen(running), after)
 
-    def action_toggle_unnamed(self) -> None:
-        self._show_unnamed = not self._show_unnamed
+    def action_cycle_view(self) -> None:
+        self._view_mode = (self._view_mode + 1) % 3
         self._populate()
 
     def _usage_marker(self) -> str:
@@ -1548,13 +1568,16 @@ class SessionExplorerApp(App):
             pass
 
     def _visibility_changed(self, old: dict, new: dict) -> bool:
-        """True if any session whose membership depends on liveness flipped.
+        """True if a live-set change alters which rows are visible.
 
-        Only unnamed sessions are conditionally visible, and only while not
-        showing all unnamed. A named session is always present regardless of
-        live state, so its appearance never forces a repopulate."""
-        if self._show_unnamed:
+        Mode 1 (active only) is purely liveness-driven, so any flip matters.
+        Mode 2 (all) always shows every session, so liveness never changes
+        membership. Mode 0 only conditionally shows *unnamed* live sessions, so
+        only an unnamed flip matters (a named session is always present)."""
+        if self._view_mode == 2:
             return False
+        if self._view_mode == 1:
+            return set(old) != set(new)
         data = _index.load(self._index_path)
         sessions = data.get("sessions", {})
         flipped = set(old) ^ set(new)  # sids that entered or left the live set

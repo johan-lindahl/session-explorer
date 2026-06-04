@@ -352,7 +352,8 @@ async def test_move_ungroup_unnamed_session_uses_sid_prefix(index_path, tmp_path
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("u"); await pilot.pause()  # surface unnamed
+        await pilot.press("tab"); await pilot.pause()  # mode 0 -> mode 1 (active only)
+        await pilot.press("tab"); await pilot.pause()  # mode 1 -> mode 2 (all incl. unnamed)
         def find(node, sid):
             for c in node.children:
                 if c.data and c.data.get("sid") == sid:
@@ -429,7 +430,7 @@ async def test_column_header_rendered(index_path):
             assert col in header_text
 
 
-async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
+async def test_tab_cycles_view_modes(index_path):
     import json
     data = json.load(open(index_path))
     data["sessions"]["unnamed-xyz"] = {
@@ -443,21 +444,46 @@ async def test_unnamed_hidden_by_default_toggle_with_u(index_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        assert app._view_mode == 0
         sids = _collect_leaf_sids(app._tree.root)
-        assert "sid-1" in sids
-        assert "unnamed-xyz" not in sids
-        # Subtitle should advertise the hidden count.
-        assert "unnamed hidden" in app.sub_title
+        assert "sid-1" in sids and "unnamed-xyz" not in sids
 
-        await pilot.press("u")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == 1
+        assert _collect_leaf_sids(app._tree.root) == set()
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == 2
+        sids = _collect_leaf_sids(app._tree.root)
+        assert "sid-1" in sids and "unnamed-xyz" in sids
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app._view_mode == 0
+        assert "unnamed-xyz" not in _collect_leaf_sids(app._tree.root)
+
+
+async def test_active_only_mode_shows_live_named_and_unnamed(index_path):
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["unnamed-live"] = {
+        "project_label": "demo", "name_cached": None,
+        "last_active_at": "2026-05-25T00:00:00Z",
+        "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0,
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._live_states = {"unnamed-live": "idle"}
+        await pilot.press("tab")  # -> mode 1 (active only)
         await pilot.pause()
         sids = _collect_leaf_sids(app._tree.root)
-        assert "unnamed-xyz" in sids
-
-        await pilot.press("u")
-        await pilot.pause()
-        sids = _collect_leaf_sids(app._tree.root)
-        assert "unnamed-xyz" not in sids
+        assert sids == {"unnamed-live"}
 
 
 async def test_new_folder_under_project_adds_to_folder_store(index_path):
@@ -783,25 +809,33 @@ def test_empty_state_text_after_scan_found_nothing():
     assert "No sessions found" in msg
 
 
-def test_empty_state_text_prompts_u_when_all_unnamed_hidden():
+def test_empty_state_text_prompts_tab_when_all_unnamed_hidden():
     from _pkg.tui import _empty_state_text
     msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=5,
-                            filter_active=False, scanned=False)
-    assert "Press u" in msg
+                            filter_active=False, scanned=False, view_mode=0)
+    assert "Tab" in msg
     assert "5" in msg
+
+
+def test_empty_state_text_active_only_when_nothing_live():
+    from _pkg.tui import _empty_state_text
+    msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=0,
+                            filter_active=False, scanned=False, view_mode=1)
+    assert "active" in msg.lower()
+    assert "Tab" in msg
 
 
 def test_empty_state_text_filter_no_match_takes_precedence():
     from _pkg.tui import _empty_state_text
     # Filter active wins even if unnamed sessions are also hidden.
     msg = _empty_state_text(total_indexed=5, visible=0, unnamed_hidden=2,
-                            filter_active=True, scanned=False)
+                            filter_active=True, scanned=False, view_mode=0)
     assert "filter" in msg.lower()
     assert "Esc" in msg
 
 
 async def test_empty_state_shown_when_only_unnamed(tmp_path):
-    """An index with only unnamed sessions shows the 'press u' empty-state; u hides it."""
+    """An index with only unnamed sessions shows the Tab empty-state; Tab cycles to show them."""
     import json
     fresh = tmp_path / "only-unnamed"
     fresh.mkdir()
@@ -819,8 +853,10 @@ async def test_empty_state_shown_when_only_unnamed(tmp_path):
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._empty.display is True
-        assert "Press u" in str(app._empty.render())
-        await pilot.press("u")
+        assert "Tab" in str(app._empty.render())
+        await pilot.press("tab")   # mode 0 -> mode 1 (active only)
+        await pilot.pause()
+        await pilot.press("tab")   # mode 1 -> mode 2 (all incl. unnamed)
         await pilot.pause()
         assert app._empty.display is False   # unnamed now visible
 

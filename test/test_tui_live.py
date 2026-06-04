@@ -40,12 +40,12 @@ def test_visibility_changed_named_entering_live_returns_false(tmp_path):
     assert app._visibility_changed({}, {"named": "working"}) is False
 
 
-def test_visibility_changed_when_showing_unnamed_returns_false(tmp_path):
+def test_visibility_changed_when_showing_all_returns_false(tmp_path):
     path = _write_index(tmp_path, {
         "stub": {"name_cached": None, "project_label": "demo"},
     })
     app = _app(path)
-    app._show_unnamed = True  # all unnamed already visible -> liveness is moot
+    app._view_mode = 2  # mode 2 (all incl. unnamed) -> liveness never changes membership
     assert app._visibility_changed({}, {"stub": "working"}) is False
 
 
