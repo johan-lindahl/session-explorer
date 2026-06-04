@@ -2268,3 +2268,50 @@ async def test_pending_select_moves_cursor_when_row_appears(index_path):
         assert node is not None and node.data and node.data.get("sid") == "sid-2"
         # The flag clears after a successful select.
         assert app._pending_select_sid is None
+
+
+async def test_z_collapses_tree_to_project_roots(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        assert proj.is_expanded
+        await pilot.press("z")
+        await pilot.pause()
+        assert app._collapse_mode is True
+        proj = app._tree.root.children[0]
+        assert not proj.is_expanded
+        await pilot.press("z")
+        await pilot.pause()
+        assert app._collapse_mode is False
+        assert app._tree.root.children[0].is_expanded
+
+
+async def test_collapse_mode_remembers_expanded_project_across_repopulate(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("z")  # collapse all
+        await pilot.pause()
+        app._expanded.add("demo")
+        app._populate()
+        await pilot.pause()
+        proj = app._tree.root.children[0]
+        assert proj.is_expanded  # stuck open across the rebuild
+
+
+async def test_pending_select_expands_ancestors_in_collapse_mode(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._collapse_mode = True
+        app._populate()
+        await pilot.pause()
+        app._pending_select_sid = "sid-1"
+        app._populate()
+        await pilot.pause()
+        node = app._tree.cursor_node
+        assert node is not None and node.data and node.data.get("sid") == "sid-1"

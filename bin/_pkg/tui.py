@@ -563,6 +563,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("e", "notes", "Edit notes"),
         Binding("tab", "cycle_view", "Cycle view", key_display="Tab", priority=True),
+        Binding("z", "toggle_collapse", "Collapse tree"),
         Binding("g", "toggle_usage", "Usage bar"),
         Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
@@ -606,6 +607,10 @@ class SessionExplorerApp(App):
         # sid to move the cursor to on the next populate where its row exists
         # (set after creating a new session). Cleared once honored.
         self._pending_select_sid: str | None = None
+        # Collapse-to-roots view: when on, projects/folders render collapsed
+        # except those the user has drilled into (tracked in _expanded by key).
+        self._collapse_mode: bool = False
+        self._expanded: set[str] = set()
         # tmux-hosted interaction layer (spec §1). The launcher sets this env
         # var only when it wrapped the explorer in our dedicated tmux server.
         self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
@@ -626,7 +631,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q` quit the TUI — the
         # keystroke belongs in the filter text, not the global quit binding.
@@ -888,8 +893,10 @@ class SessionExplorerApp(App):
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
                 child_segs = segments + [name]
+                fkey = self._node_key(project_label, child_segs)
                 folder_node = parent.add(
-                    f"{name}/", expand=True,
+                    f"{name}/",
+                    expand=(not self._collapse_mode or fkey in self._expanded),
                     data={"project": project_label, "segments": child_segs},
                 )
                 render(folder_node, project_label, child_segs, child, child_depth + 1)
@@ -897,7 +904,8 @@ class SessionExplorerApp(App):
         for project in sorted(tree):
             node = tree[project]
             proj_node = root.add(
-                f"{project} ({count(node)})", expand=True,
+                f"{project} ({count(node)})",
+                expand=(not self._collapse_mode or project in self._expanded),
                 data={"project": project, "segments": []},
             )
             # Project sits at tree depth 0 (show_root=False); its direct
@@ -907,6 +915,16 @@ class SessionExplorerApp(App):
 
         # Honor a pending select (e.g. just-created session) once its row exists.
         if self._pending_select_sid and self._pending_select_sid in self._row_nodes:
+            leaf = self._row_nodes[self._pending_select_sid][0]
+            # Open every ancestor so the row is visible before moving the cursor
+            # (needed when collapse mode collapsed the enclosing project/folder).
+            anc = leaf.parent
+            while anc is not None and anc is not self._tree.root:
+                anc.expand()
+                d = anc.data or {}
+                if "project" in d:
+                    self._expanded.add(self._node_key(d["project"], d.get("segments") or []))
+                anc = anc.parent
             self._restore_cursor_to_sid(self._pending_select_sid)
             self._pending_select_sid = None
 
@@ -1465,6 +1483,19 @@ class SessionExplorerApp(App):
         self._view_mode = (self._view_mode + 1) % 3
         self._populate()
 
+    @staticmethod
+    def _node_key(project_label: str, segments: "list[str]") -> str:
+        # \x00 cannot appear in a project label or folder segment, so it is a
+        # safe separator for "<project>\x00<seg/seg>" folder keys.
+        return project_label if not segments else \
+            project_label + "\x00" + "/".join(segments)
+
+    def action_toggle_collapse(self) -> None:
+        self._collapse_mode = not self._collapse_mode
+        if self._collapse_mode:
+            self._expanded.clear()  # collapse everything to project roots
+        self._populate()
+
     def _usage_marker(self) -> str:
         return os.path.join(self._claude_dir(), ".session-explorer.usage-bar")
 
@@ -1767,6 +1798,19 @@ class SessionExplorerApp(App):
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         self._refresh_preview()
         self._schedule_dock_sync()
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        # Track user-opened nodes so they survive a _populate() rebuild.
+        # Session leaf nodes have data={"sid": ...} (no "project" key) —
+        # the guard below ensures only project/folder nodes are tracked.
+        data = getattr(event.node, "data", None) or {}
+        if "project" in data:
+            self._expanded.add(self._node_key(data["project"], data.get("segments") or []))
+
+    def on_tree_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
+        data = getattr(event.node, "data", None) or {}
+        if "project" in data:
+            self._expanded.discard(self._node_key(data["project"], data.get("segments") or []))
 
 
 _WORKTREE_MARKER = "/.claude/worktrees/"
