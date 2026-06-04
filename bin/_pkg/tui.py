@@ -908,8 +908,9 @@ class SessionExplorerApp(App):
                 if self._matches(sid, s):
                     glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                                    self._ours_flag(sid))
-                    leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph),
-                                           data={"sid": sid, **s})
+                    wt = _worktree_state(s.get("project_path"))
+                    leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph, wt),
+                                           data={"sid": sid, **s, "worktree_state": wt})
                     self._row_nodes[sid] = (leaf, child_depth)
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
@@ -1674,7 +1675,7 @@ class SessionExplorerApp(App):
             data = leaf.data or {}
             glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                            self._ours_flag(sid))
-            leaf.set_label(_row_label(sid, data, depth, glyph))
+            leaf.set_label(_row_label(sid, data, depth, glyph, data.get("worktree_state")))
 
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /
@@ -1717,7 +1718,8 @@ class SessionExplorerApp(App):
             return
         for sid, (leaf, _depth) in self._row_nodes.items():
             if sid in self._live_states and sid in data:
-                leaf.data = {"sid": sid, **data[sid]}
+                leaf.data = {"sid": sid, **data[sid],
+                             "worktree_state": (leaf.data or {}).get("worktree_state")}
         self._relabel_live_rows()
         self._refresh_preview()
 
@@ -1733,7 +1735,8 @@ class SessionExplorerApp(App):
             leaf, depth = node
             leaf.set_label(_row_label(sid, leaf.data or {}, depth,
                                       _glyph(state, self._spinner_frame,
-                                             self._ours_flag(sid))))
+                                             self._ours_flag(sid)),
+                                      (leaf.data or {}).get("worktree_state")))
 
     def action_rescan(self) -> None:
         # reindex shells out to `git` per session, so it runs in a worker thread

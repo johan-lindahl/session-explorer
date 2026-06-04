@@ -2396,3 +2396,43 @@ def test_row_label_includes_wt_glyph():
     assert "⎇" in _row_label("sid", s, depth=2, wt_state="dead")
     assert "⎇" not in _row_label("sid", s, depth=2, wt_state=None)
     assert "⎇" not in _row_label("sid", s, depth=2)  # default = root
+
+
+@pytest.mark.asyncio
+async def test_worktree_rows_show_glyph_in_tree(tmp_path):
+    import json
+    from _pkg.tui import SessionExplorerApp
+
+    repo = tmp_path / "repo"
+    live_wt = repo / ".claude" / "worktrees" / "alive"
+    live_wt.mkdir(parents=True)
+    dead_wt = repo / ".claude" / "worktrees" / "gone"  # never created -> dead
+
+    idx = tmp_path / "index.json"
+    idx.write_text(json.dumps({"version": 2, "sessions": {
+        "root1": {"name_cached": "root-sesh", "project_path": str(repo),
+                  "project_label": "repo", "last_active_at": "2026-06-01T10:00:00Z",
+                  "tokens_estimate": 0, "tokens_window_pct": 0,
+                  "message_count": 0, "first_prompt": ""},
+        "live1": {"name_cached": "live-wt", "project_path": str(live_wt),
+                  "project_label": "repo", "last_active_at": "2026-06-01T11:00:00Z",
+                  "tokens_estimate": 0, "tokens_window_pct": 0,
+                  "message_count": 0, "first_prompt": ""},
+        "dead1": {"name_cached": "dead-wt", "project_path": str(dead_wt),
+                  "project_label": "repo", "last_active_at": "2026-06-01T12:00:00Z",
+                  "tokens_estimate": 0, "tokens_window_pct": 0,
+                  "message_count": 0, "first_prompt": ""},
+    }}))
+
+    app = SessionExplorerApp(index_path=str(idx))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        labels = {sid: str(leaf.label) for sid, (leaf, _d) in app._row_nodes.items()}
+        # Worktree rows carry the glyph; the root row does not.
+        assert "⎇" in labels["live1"]
+        assert "⎇" in labels["dead1"]
+        assert "⎇" not in labels["root1"]
+        # The cached classification is stored on each leaf's data dict.
+        assert app._row_nodes["live1"][0].data["worktree_state"] == "live"
+        assert app._row_nodes["dead1"][0].data["worktree_state"] == "dead"
+        assert app._row_nodes["root1"][0].data["worktree_state"] is None
