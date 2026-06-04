@@ -134,6 +134,49 @@ async def test_poll_live_repopulate_preserves_cursor(tmp_path):
         assert app._selected_sid() == "named"
 
 
+async def test_poll_live_honors_pending_select_for_newly_live_session(tmp_path):
+    # A just-created unnamed session isn't seeded, so it only appears once the
+    # live poll surfaces it. _pending_select_sid must win over the poll's
+    # cursor-restore so the cursor lands on the new session, not the old row.
+    path = _write_index(tmp_path, {
+        "named": {
+            "name_cached": "kept", "project_label": "demo",
+            "project_path": "/tmp/demo", "last_active_at": None,
+            "tokens_estimate": 0, "tokens_window_pct": 0,
+            "message_count": 0, "first_prompt": "",
+        },
+        "fresh": {
+            "name_cached": None, "project_label": "demo",
+            "project_path": "/tmp/demo", "last_active_at": None,
+            "tokens_estimate": 0, "tokens_window_pct": 0,
+            "message_count": 0, "first_prompt": "",
+        },
+    })
+    app = _app(path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Park the cursor on the named row, so the poll's cursor-restore has a
+        # real prior selection to fight against (this is what clobbers the jump).
+        app._tree.move_cursor(app._row_nodes["named"][0])
+        assert app._selected_sid() == "named"
+        # We just "created" the unnamed session "fresh".
+        app._pending_select_sid = "fresh"
+
+        # The live poll now detects "fresh" -> visibility change -> repopulate.
+        from _pkg import live as _live
+        orig_poll = _live.poll
+        _live.poll = lambda *a, **k: {"fresh": "working"}
+        try:
+            app._poll_live()
+        finally:
+            _live.poll = orig_poll
+        await pilot.pause()
+
+        # The cursor jumped to the newly-surfaced session, and the flag cleared.
+        assert app._selected_sid() == "fresh"
+        assert app._pending_select_sid is None
+
+
 import os
 
 import pytest

@@ -1582,7 +1582,10 @@ class SessionExplorerApp(App):
             self._live_states = new_states
             self._our_windows = new_ours
             if states_changed and self._visibility_changed(old, new_states):
-                sid = self._selected_sid()
+                # A pending select (just-created session not yet visible) wins
+                # over preserving the old cursor, so the jump isn't clobbered
+                # when the new row first surfaces on this very poll.
+                sid = self._pending_select_sid or self._selected_sid()
                 self._populate()
                 self._restore_cursor_to_sid(sid)
             else:
