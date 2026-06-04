@@ -821,7 +821,9 @@ class SessionExplorerApp(App):
         active = len(self._live_states)
         active_suffix = f" · ● {active} active" if active else ""
         if self._view_mode == 1:
-            self.sub_title = f"Active only — {total} session(s){active_suffix} (Tab)"
+            # In active-only mode `total` already counts only live sessions, so
+            # active_suffix would just repeat it — omit it here.
+            self.sub_title = f"Active only — {total} sessions (Tab)"
         elif self._view_mode == 2:
             self.sub_title = (f"All sessions incl. unnamed — {total} across "
                               f"{len(tree)} projects{active_suffix} (Tab)")
