@@ -2242,3 +2242,29 @@ async def test_navigation_debounced_sync_docks_running_session(index_path, monke
         await pilot.pause(0.1)      # let the (shortened) debounce fire
     assert ("sid-1", False) in calls
     assert app._docked_sid == "sid-1"
+
+
+async def test_pending_select_moves_cursor_when_row_appears(index_path):
+    """A pending-select sid jumps the cursor to that row on the next populate."""
+    import json
+    data = json.load(open(index_path))
+    data["sessions"]["sid-2"] = {
+        "project_label": "demo", "project_path": "/tmp/demo-project",
+        "name_cached": "planning/another",
+        "last_active_at": "2026-05-28T10:00:00Z",
+        "tokens_estimate": 1, "tokens_window_pct": 1, "message_count": 1,
+        "first_prompt": "hi",
+    }
+    json.dump(data, open(index_path, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._pending_select_sid = "sid-2"
+        app._populate()
+        await pilot.pause()
+        node = app._tree.cursor_node
+        assert node is not None and node.data and node.data.get("sid") == "sid-2"
+        # The flag clears after a successful select.
+        assert app._pending_select_sid is None

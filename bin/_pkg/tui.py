@@ -603,6 +603,9 @@ class SessionExplorerApp(App):
         # sid -> (TreeNode, child_depth) for in-place glyph updates without a
         # full rebuild. Rebuilt by _populate.
         self._row_nodes: dict[str, tuple] = {}
+        # sid to move the cursor to on the next populate where its row exists
+        # (set after creating a new session). Cleared once honored.
+        self._pending_select_sid: str | None = None
         # tmux-hosted interaction layer (spec §1). The launcher sets this env
         # var only when it wrapped the explorer in our dedicated tmux server.
         self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
@@ -901,6 +904,11 @@ class SessionExplorerApp(App):
             # children — both ungrouped sessions and top-level folders — are at
             # tree depth 1.
             render(proj_node, project, [], node, child_depth=1)
+
+        # Honor a pending select (e.g. just-created session) once its row exists.
+        if self._pending_select_sid and self._pending_select_sid in self._row_nodes:
+            self._restore_cursor_to_sid(self._pending_select_sid)
+            self._pending_select_sid = None
 
     def action_expand_node(self) -> None:
         node = self._tree.cursor_node
