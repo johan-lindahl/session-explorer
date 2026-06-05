@@ -2546,3 +2546,17 @@ async def test_worktree_rows_show_glyph_in_tree(tmp_path):
         assert app._row_nodes["live1"][0].data["worktree_state"] == "live"
         assert app._row_nodes["dead1"][0].data["worktree_state"] == "dead"
         assert app._row_nodes["root1"][0].data["worktree_state"] is None
+
+
+def test_preview_text_shows_worktree_size_when_present():
+    from _pkg.tui import _preview_text
+    s = {"sid": "abc12345", "project_path": "/r/.claude/worktrees/f",
+         "worktree_size": "42M", "name_cached": "feat"}
+    assert "Worktree" in _preview_text(s)
+    assert "42M" in _preview_text(s)
+
+
+def test_preview_text_hides_worktree_size_for_root_session():
+    from _pkg.tui import _preview_text
+    s = {"sid": "abc12345", "project_path": "/r/proj", "name_cached": "x"}
+    assert "Worktree" not in _preview_text(s)

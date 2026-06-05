@@ -154,6 +154,10 @@ def _preview_text(s: dict) -> str:
         "",
         field("Project", s.get("project_label") or "(unknown)"),
         field("Path", s.get("project_path") or "(unknown)"),
+    ]
+    if s.get("worktree_size"):
+        lines.append(field("Worktree", f"{s['worktree_size']} on disk"))
+    lines += [
         field("Folder", "/".join(segments) or "(none)"),
         field("Branch", s.get("branch") or "(none)"),
         field("Active", fmt_age(s.get("last_active_at"))),
@@ -626,6 +630,8 @@ class SessionExplorerApp(App):
         # Live-session state: sid -> "working"|"idle", refreshed by _poll_live.
         self._live_states: dict[str, str] = {}
         self._spinner_frame: int = 0
+        self._wt_size_cache: dict[str, str] = {}   # sid -> human size, lazy
+        self._offered_cleanup: set[str] = set()     # sids already asked to clean
         # sid -> (TreeNode, child_depth) for in-place glyph updates without a
         # full rebuild. Rebuilt by _populate.
         self._row_nodes: dict[str, tuple] = {}
@@ -1827,6 +1833,11 @@ class SessionExplorerApp(App):
         if self._tmux_enabled and sid in self._live_states:
             self._preview.update(self._render_live_preview(data, sid))
             return
+        from . import worktree as _wt
+        if _wt.MARKER in (data.get("project_path") or ""):
+            if sid not in self._wt_size_cache:
+                self._wt_size_cache[sid] = _wt.size(data.get("project_path"))
+            data = {**data, "worktree_size": self._wt_size_cache[sid]}
         self._preview.update(_preview_text(data))
 
     def _render_live_preview(self, data: dict, sid: str):
