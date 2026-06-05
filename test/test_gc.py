@@ -250,3 +250,34 @@ def test_collect_worktrees_dry_run_removes_nothing(tmp_path):
     result = collect_worktrees(idx, idle_days=14, dry_run=True)
     assert wt in result["removed_worktrees"]
     assert os.path.isdir(wt)            # dry-run: still on disk
+
+
+def test_collect_worktrees_does_not_mutate_index(tmp_path):
+    """Removing the directory must leave the session row (transcript + branch
+    survive; resume rebuilds). Locks the load-only contract."""
+    import json
+    from _pkg.gc import collect_worktrees
+    repo, wt = _git_repo_with_worktree(tmp_path)
+    make_old_mtime(wt)
+    idx = _wt_index(tmp_path, {"s1": {"project_path": wt, "name_cached": "feat",
+                                      "transcript_path": str(tmp_path / "t.jsonl")}})
+    before = json.load(open(idx))
+    collect_worktrees(idx, idle_days=14)
+    assert not os.path.isdir(wt)              # dir was reclaimed
+    assert json.load(open(idx)) == before     # index untouched
+
+
+def test_collect_worktrees_skips_live(tmp_path):
+    """An idle, clean worktree whose session is live (fresh transcript) is
+    skipped and counted, not removed."""
+    from _pkg.gc import collect_worktrees
+    repo, wt = _git_repo_with_worktree(tmp_path)
+    make_old_mtime(wt)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("{}")              # fresh mtime => _is_live True
+    idx = _wt_index(tmp_path, {"s1": {"project_path": wt, "name_cached": "feat",
+                                      "transcript_path": str(transcript)}})
+    result = collect_worktrees(idx, idle_days=14)
+    assert wt not in result["removed_worktrees"]
+    assert result["skipped_live"] == 1
+    assert os.path.isdir(wt)
