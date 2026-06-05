@@ -1463,6 +1463,8 @@ class SessionExplorerApp(App):
         if not sid or worktree.MARKER not in path:
             self.bell()
             return
+        # _running_sids() already unions in the docked pane when tmux is on; the
+        # explicit _docked_sid check is belt-and-suspenders for the tmux-off path.
         running = set(self._running_sids()) if self._tmux_enabled else set()
         if sid in self._live_states or sid in running or sid == self._docked_sid:
             self.notify("Stop the session before removing its worktree.",
