@@ -556,20 +556,34 @@ def test_record_session_uses_default_folder_store_path(tmp_path):
     assert folder_store.list_paths(sibling, "acme-api") == ["x"]
 
 
-def test_context_window_default_standard():
+def test_context_window_1m_models():
+    """Opus 4.6+ and Sonnet 4.6 run at the 1M window in Claude Code (GA + auto-
+    upgrade), so the model id alone fixes the denominator from the first turn —
+    no jump as usage crosses 200K. Matched by prefix, so dated ids count too."""
     from _pkg.index import _context_window
-    assert _context_window("claude-opus-4-8", 50_000) == 200_000
+    assert _context_window("claude-opus-4-8", 50_000) == 1_000_000
+    assert _context_window("claude-opus-4-7", 50_000) == 1_000_000
+    assert _context_window("claude-opus-4-6", 50_000) == 1_000_000
+    assert _context_window("claude-sonnet-4-6", 50_000) == 1_000_000
+
+
+def test_context_window_standard_models():
+    """Haiku has no 1M variant; pre-GA Opus and unknown models default to 200K."""
+    from _pkg.index import _context_window
+    assert _context_window("claude-haiku-4-5-20251001", 50_000) == 200_000
+    assert _context_window("claude-opus-4-5", 50_000) == 200_000
     assert _context_window(None, 0) == 200_000
 
 
 def test_context_window_promotes_to_1m_on_overflow():
     from _pkg.index import _context_window
-    # A session that has used more than the standard window must be on the 1M tier.
-    assert _context_window("claude-opus-4-8", 620_000) == 1_000_000
+    # Backstop: a session that has used more than its assumed window must be on a
+    # larger one — covers unknown/older models we haven't mapped.
+    assert _context_window("claude-opus-4-5", 620_000) == 1_000_000
 
 
 def test_context_window_uses_model_map(monkeypatch):
-    """A model with a non-default standard window is honored via the map."""
+    """A model with a non-default window is honored via the map (prefix match)."""
     from _pkg import index
     monkeypatch.setitem(index.MODEL_WINDOWS, "future-model-500k", 500_000)
     assert index._context_window("future-model-500k", 100_000) == 500_000

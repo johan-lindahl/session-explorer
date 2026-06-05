@@ -3,6 +3,25 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.11.4
+
+### Fixed
+- **The context-window `CTX %` is now model-aware and no longer jumps.**
+  Previously the denominator was guessed at 200K and only promoted to 1M once a
+  session's observed tokens *exceeded* 200K — so a 1M-context session climbed to
+  ~99% and then visibly collapsed to ~20% the moment it crossed 200K, then
+  climbed again. `index._context_window` now reads the window from the model id
+  (`MODEL_WINDOWS`, prefix match): Opus 4.6/4.7/4.8 and Sonnet 4.6 map to 1M, so
+  the percentage is correct from the first turn. This reflects that the 1M
+  context window is now GA in Claude Code (no beta header since 2026-03-13) and
+  is applied automatically on Max/Team/Enterprise + API plans; the `[1m]` alias
+  suffix is stripped before the request, so it never reaches the transcript and
+  can't be used as a signal. An overflow backstop still promotes to 1M for
+  unmapped models that exceed their assumed window. Known trade-off: a session
+  actually capped at 200K on a 1M-capable model (Pro plan without usage credits,
+  or `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`) is measured against 1M and under-reports
+  fullness — the inverse of the old jump, affecting only non-1M users.
+
 ## 1.11.3
 
 ### Fixed
