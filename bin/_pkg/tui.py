@@ -258,6 +258,7 @@ def _help_text() -> str:
         "A [dark_green]⎇[/] after the name marks a session running in a git",
         "worktree; it turns [dark_red]⎇[/] if that worktree directory was deleted.",
         "Plain (no glyph) means a normal checkout. Updated on rescan ([b]F5[/]).",
+        "Press [b]w[/] to reclaim a stopped worktree's directory — resume rebuilds it.",
         "",
         "[b]Running sessions in tmux[/]",
         "When launched with tmux, the explorer stays in the left pane and the",
@@ -284,6 +285,7 @@ def _help_text() -> str:
         key("n", "New folder under the current project/folder"),
         key("c", "New session (blank name → temporary unnamed; optional worktree)"),
         key("d", "Delete the selected session, or an empty folder (confirms)"),
+        key("w", "Remove the selected worktree's directory (branch + transcript kept)"),
         key("e", "Edit notes (Ctrl+S to save)"),
         key("Tab", "Cycle view: named+active → active only → all"),
         key("z", "Collapse the tree to project roots (toggle)"),
@@ -591,6 +593,7 @@ class SessionExplorerApp(App):
         Binding("n", "new_folder", "New folder"),
         Binding("c", "new_session", "New session"),
         Binding("d", "delete", "Delete"),
+        Binding("w", "remove_worktree", "Remove worktree"),
         Binding("e", "notes", "Edit notes"),
         Binding("tab", "cycle_view", "Cycle view", key_display="Tab", priority=True),
         Binding("z", "toggle_collapse", "Collapse tree"),
@@ -1449,6 +1452,31 @@ class SessionExplorerApp(App):
 
         self.push_screen(ConfirmScreen(f"Delete empty folder '{folder_path}'?"), after)
 
+    def action_remove_worktree(self) -> None:
+        """Reclaim the selected session's worktree directory (keeps branch +
+        transcript; resume rebuilds it). Refuses live sessions; git refuses dirty
+        ones."""
+        node = self._tree.cursor_node
+        data = node.data if (node and node.data) else {}
+        sid = data.get("sid")
+        path = data.get("project_path") or ""
+        if not sid or worktree.MARKER not in path:
+            self.bell()
+            return
+        running = set(self._running_sids()) if self._tmux_enabled else set()
+        if sid in self._live_states or sid in running or sid == self._docked_sid:
+            self.notify("Stop the session before removing its worktree.",
+                        severity="warning")
+            return
+        if not os.path.isdir(path):
+            self.notify("Worktree directory is already gone.", severity="warning")
+            return
+        size = self._wt_size_cache.get(sid) or worktree.size(path)
+        self.push_screen(ConfirmScreen(
+            f"Remove this worktree to free {size}?\n{path}\n"
+            f"(The branch and transcript are kept; resume rebuilds it.)"),
+            lambda ok: self._apply_worktree_removal(sid, path, size) if ok else None)
+
     def action_notes(self) -> None:
         node = self._tree.cursor_node
         if not node or not node.data or "sid" not in node.data:
@@ -1713,6 +1741,22 @@ class SessionExplorerApp(App):
                        self._ours_flag(sid))
         leaf.set_label(_row_label(sid, leaf.data, depth, glyph, state))
 
+    def _apply_worktree_removal(self, sid: str, path: str, size: str) -> None:
+        """Remove the worktree directory and reflect the outcome in the UI.
+        Shared by the manual 'w' action and the on-exit cleanup prompt."""
+        result = worktree.remove(path)
+        if result == "removed":
+            self._set_worktree_state(sid, "dead")
+            self._wt_size_cache.pop(sid, None)  # was X bytes; drop so the
+            # preview stops showing a stale reclaim figure.
+            self.notify(f"Worktree removed — {size} reclaimed.")
+        elif result == "dirty":
+            self.notify("Worktree has uncommitted changes — kept.",
+                        severity="warning")
+        else:
+            self.notify("Could not remove the worktree (see "
+                        "~/.claude/session-explorer.log).", severity="warning")
+
     def _maybe_offer_worktree_cleanup(self, ended: "set[str]") -> None:
         """When the docked session just stopped and its worktree is clean, offer
         to reclaim the directory — once per sid (tracked in _offered_cleanup).
@@ -1731,20 +1775,8 @@ class SessionExplorerApp(App):
         size = self._wt_size_cache.get(sid) or worktree.size(path)
 
         def after(ok: bool) -> None:
-            if not ok:
-                return
-            result = worktree.remove(path)
-            if result == "removed":
-                self._set_worktree_state(sid, "dead")
-                self._wt_size_cache.pop(sid, None)  # was X bytes; drop so the
-                # preview stops showing a stale reclaim figure.
-                self.notify(f"Worktree removed — {size} reclaimed.")
-            elif result == "dirty":
-                self.notify("Worktree has uncommitted changes — kept.",
-                            severity="warning")
-            else:
-                self.notify("Could not remove the worktree (see "
-                            "~/.claude/session-explorer.log).", severity="warning")
+            if ok:
+                self._apply_worktree_removal(sid, path, size)
 
         self.push_screen(ConfirmScreen(
             f"Session '{name}' ended. Remove its worktree to free {size}?\n"
