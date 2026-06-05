@@ -7,6 +7,7 @@ several MB of code. Only happens when the user actually runs `tui`/`launch`.
 from __future__ import annotations
 
 import os
+import subprocess
 import uuid
 
 from textual import work
@@ -1081,7 +1082,7 @@ class SessionExplorerApp(App):
                     self._poll_live()
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
-                "Resume anyway? This re-creates an empty directory:\n"
+                "Recreate the worktree and resume?\n"
                 f"{project_path}"), after)
         else:
             cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
@@ -1096,7 +1097,7 @@ class SessionExplorerApp(App):
         if _dead_worktree_repo(project_path):
             self.push_screen(ConfirmScreen(
                 "This session is from a deleted git worktree.\n"
-                "Resume anyway? This re-creates an empty directory:\n"
+                "Recreate the worktree and resume?\n"
                 f"{project_path}"), lambda ok: proceed() if ok else None)
         else:
             proceed()
@@ -1858,13 +1859,15 @@ _WORKTREE_MARKER = "/.claude/worktrees/"
 
 
 def _dead_worktree_repo(project_path: "str | None") -> "str | None":
-    """If `project_path` is a deleted git-worktree path whose parent repo still
-    exists, return that repo root; else None. Pure — lets the TUI decide whether
-    to warn before recreating the worktree dir on resume."""
-    if not project_path or os.path.isdir(project_path):
+    """If `project_path` is a git-worktree path that needs recreating — its dir
+    is gone, or a prior failed resume left it empty — and the parent repo still
+    exists, return that repo root; else None. Cheap (one isdir + one listdir on
+    the dead path), so the TUI can decide whether to offer recreating the
+    worktree before resume."""
+    if not project_path or _WORKTREE_MARKER not in project_path:
         return None
-    if _WORKTREE_MARKER not in project_path:
-        return None
+    if os.path.isdir(project_path) and os.listdir(project_path):
+        return None  # populated → a live worktree, nothing to recreate
     root = project_path.split(_WORKTREE_MARKER, 1)[0]
     return root if os.path.isdir(root) else None
 
@@ -1881,26 +1884,64 @@ def _worktree_state(project_path: "str | None") -> "str | None":
     return "live" if os.path.isdir(project_path) else "dead"
 
 
+def _recreate_worktree(project_path: str, root: str) -> bool:
+    """Recreate a deleted git worktree at `project_path` under repo `root`.
+
+    `claude -w <name>` files the worktree under `.claude/worktrees/<name>` on a
+    branch named `worktree-<name>`. Reattach to that branch if it still exists
+    (preserving the work); otherwise create it fresh from HEAD. A prior failed
+    resume may have left an empty dir at the path — drop it, and prune any stale
+    worktree registration, so `git worktree add` doesn't refuse. Returns True iff
+    git created the worktree."""
+    leaf = project_path.split(_WORKTREE_MARKER, 1)[1].strip("/")
+    if not leaf:
+        return False
+    if os.path.isdir(project_path):
+        try:
+            os.rmdir(project_path)  # only succeeds if empty
+        except OSError:
+            return False  # populated: not ours to clobber
+
+    def git(*args: str) -> int:
+        return subprocess.run(
+            ["git", "-C", root, *args], capture_output=True, text=True
+        ).returncode
+
+    branch = f"worktree-{leaf}"
+    git("worktree", "prune")
+    have_branch = git("show-ref", "--verify", "--quiet", f"refs/heads/{branch}") == 0
+    add = ["worktree", "add", project_path, branch] if have_branch \
+        else ["worktree", "add", "-b", branch, project_path]
+    return git(*add) == 0
+
+
 def _resolve_resume_cwd(project_path: "str | None") -> "str | None":
     """Directory to chdir into before `claude --resume`.
 
-    `claude --resume` is scoped to the exact cwd that recorded the session, so
-    to resume a session whose git worktree was deleted we recreate that (empty)
-    worktree dir — the only way claude can locate the transcript filed under the
-    worktree's project key. The TUI confirms this side effect first (see
-    action_resume / _dead_worktree_repo). Returns a usable directory, or None
-    when there's nothing to chdir into (caller leaves cwd alone)."""
+    `claude --resume` is scoped to the exact cwd that recorded the session, so to
+    resume a session whose git worktree was deleted we recreate that worktree
+    (via `git worktree add`) — the only way claude can locate the transcript
+    filed under the worktree's project key, and it restores a real working tree.
+    The TUI confirms this side effect first (see action_resume /
+    _dead_worktree_repo). Returns a usable directory, or None when there's
+    nothing to chdir into (caller leaves cwd alone)."""
     if not project_path:
         return None
-    if os.path.isdir(project_path):
+    if os.path.isdir(project_path) and os.listdir(project_path):
         return project_path
-    if _dead_worktree_repo(project_path):
+    root = _dead_worktree_repo(project_path)
+    if root:
+        if _recreate_worktree(project_path, root):
+            return project_path
+        # git couldn't recreate it — fall back to a bare dir so claude can still
+        # locate the transcript filed under this worktree's project key.
         try:
             os.makedirs(project_path, exist_ok=True)
             return project_path
         except OSError:
             return None
-    return None
+    # An existing-but-empty non-worktree dir is still a valid cwd.
+    return project_path if os.path.isdir(project_path) else None
 
 
 def _resume_argv(target: str) -> list[str]:
