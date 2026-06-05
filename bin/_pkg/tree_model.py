@@ -19,6 +19,23 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
+_WORKTREE_MARKER = "/.claude/worktrees/"
+
+
+def session_root(s: dict) -> str:
+    """The stable grouping identity for a session: its repo root path.
+
+    Strips any ``/.claude/worktrees/<name>`` suffix so a repo's worktrees group
+    with the repo. Falls back to the cached label (then ``(unknown)``) when the
+    session has no path — the case exercised by older entries and unit tests.
+    """
+    cwd = s.get("project_path")
+    if cwd:
+        if _WORKTREE_MARKER in cwd:
+            cwd = cwd.split(_WORKTREE_MARKER, 1)[0]
+        return cwd.rstrip("/") or cwd
+    return s.get("project_label") or "(unknown)"
+
 
 def split_path(name: "str | None") -> Tuple[List[str], str]:
     """Split a session name on `/` into folder segments + display name.
@@ -60,6 +77,65 @@ def replace_folder_prefix(
     return "/".join(rebuilt)
 
 
+def _basename(root: str) -> str:
+    """The repo's own folder name — the last path segment of its root."""
+    return root.rstrip("/").split("/")[-1] or root
+
+
+def disambiguate(roots) -> Dict[str, str]:
+    """Map each repo root path to a display label.
+
+    A root whose basename is unique gets that bare basename (e.g. ``magento2``).
+    When several distinct roots share a basename — the duplicate-repo case —
+    each gets the *minimal* ancestor path that tells it apart: the immediate
+    parent when that suffices (``acme/magento2``), or the nearest differing
+    ancestor with skipped levels collapsed to ``…`` (``work/…/magento2``).
+    Labels are unique across the returned map. A root with no path separator
+    has no ancestor to borrow, so it keeps its bare value even under collision.
+    """
+    by_base: Dict[str, List[str]] = {}
+    for r in roots:
+        by_base.setdefault(_basename(r), []).append(r)
+
+    out: Dict[str, str] = {}
+    for base, group in by_base.items():
+        if len(group) == 1:
+            out[group[0]] = base
+            continue
+        for r in group:
+            out[r] = _unique_label(r, group)
+
+    # The `ancestor/…/base` form can, in rare deep layouts, still produce two
+    # equal labels (same furthest ancestor + basename, differing only in a
+    # collapsed middle). Fall back to the full root path for any that collide so
+    # the displayed label is always unique. (Node identity is the root either
+    # way, so this only affects display.)
+    seen: Dict[str, int] = {}
+    for label in out.values():
+        seen[label] = seen.get(label, 0) + 1
+    for r, label in list(out.items()):
+        if seen[label] > 1:
+            out[r] = r
+    return out
+
+
+def _unique_label(root: str, group: List[str]) -> str:
+    """Shortest ``ancestor[/…]/basename`` label distinguishing `root` in `group`."""
+    segs = root.rstrip("/").split("/")
+    base = segs[-1] or root
+    # Walk up: j = number of ancestor segments included beyond the basename.
+    for j in range(1, len(segs)):
+        suffix = segs[-(j + 1):]
+        if all(o is root or o.rstrip("/").split("/")[-(j + 1):] != suffix
+               for o in group):
+            ancestor = segs[-(j + 1)]
+            sep = "/" if j == 1 else "/…/"
+            return f"{ancestor}{sep}{base}"
+    # No ancestor disambiguates (root too shallow / identical paths): use the
+    # whole path so the label is at least unique.
+    return root
+
+
 def _empty_node() -> dict:
     return {"_sessions": [], "_folders": {}}
 
@@ -93,7 +169,12 @@ def build_nested_tree(index_data: dict, folder_store_data: dict,
     live_ids = live_ids or set()
     out: Dict[str, dict] = {}
 
-    # 1. Place each session into its project + folder path.
+    # Nodes are keyed by repo *root* (the stable identity), not the display
+    # label — two distinct repos that share a basename (e.g. several `magento2`
+    # checkouts) must not collapse into one node. The disambiguated label is
+    # computed once below and attached as `_label`.
+
+    # 1. Place each session into its project (root) + folder path.
     for sid, s in index_data.get("sessions", {}).items():
         name = s.get("name_cached")
         if live_only:
@@ -101,8 +182,8 @@ def build_nested_tree(index_data: dict, folder_store_data: dict,
                 continue
         elif not name and not include_unnamed and sid not in live_ids:
             continue
-        project = s.get("project_label") or "(unknown)"
-        proj_node = out.setdefault(project, _empty_node())
+        root = session_root(s)
+        proj_node = out.setdefault(root, _empty_node())
         if not name:
             target = proj_node["_folders"].setdefault("(unnamed)", _empty_node())
         else:
@@ -110,14 +191,21 @@ def build_nested_tree(index_data: dict, folder_store_data: dict,
             target = _walk_to(proj_node, segments)
         target["_sessions"].append((sid, s))
 
-    # 2. Lay in stored folder paths (may create empty folder nodes).
-    for project, paths in (folder_store_data.get("projects") or {}).items():
-        proj_node = out.setdefault(project, _empty_node())
+    # 2. Lay in stored folder paths (may create empty folder nodes). The folder
+    # store is keyed by root too (see index.migrate_folder_store_keys).
+    for root, paths in (folder_store_data.get("projects") or {}).items():
+        proj_node = out.setdefault(root, _empty_node())
         for path_str in paths or []:
             segs = [seg for seg in path_str.split("/") if seg.strip()]
             _walk_to(proj_node, segs)
 
-    # 3. Sort every _sessions list newest-first.
+    # 3. Attach a display label per root (bare basename, disambiguated only on
+    # collision).
+    labels = disambiguate(out.keys())
+    for root, node in out.items():
+        node["_label"] = labels.get(root, _basename(root))
+
+    # 4. Sort every _sessions list newest-first.
     def sort_node(node: dict):
         node["_sessions"].sort(key=lambda x: x[1].get("last_active_at", ""), reverse=True)
         for child in node["_folders"].values():

@@ -125,18 +125,30 @@ def _context_window(model: "str | None", tokens: int) -> int:
 _WORKTREE_MARKER = "/.claude/worktrees/"
 
 
-def _project_label(cwd: str) -> str:
-    """Group label for a session's cwd.
+def project_root(cwd: str) -> str:
+    """The repo root for a session's cwd — the stable grouping identity.
 
     Git worktrees created by Claude Code live at
-    `<project_root>/.claude/worktrees/<name>`. Without special handling each
-    worktree's leaf name (e.g. `ai-weight-adjust`) becomes its own top-level
-    "project", fragmenting the tree. Collapse those back under the parent
-    project root so all of a repo's worktrees group together.
+    `<project_root>/.claude/worktrees/<name>`. Stripping the worktree suffix
+    collapses a repo's worktrees back under the parent so they don't each
+    become a top-level entry. Two different repos that happen to share a
+    basename still differ here (their full paths differ), which is what lets
+    the tree tell them apart — see `tree_model.disambiguate`.
     """
     if _WORKTREE_MARKER in cwd:
         cwd = cwd.split(_WORKTREE_MARKER, 1)[0]
-    return os.path.basename(cwd.rstrip("/")) or cwd
+    return cwd.rstrip("/") or cwd
+
+
+def _project_label(cwd: str) -> str:
+    """Default display label for a session's cwd: its repo's basename.
+
+    This is only the *default* — the TUI disambiguates same-named repos at
+    render time using the repo root (`project_root`). Worktrees collapse to the
+    parent repo's basename.
+    """
+    root = project_root(cwd)
+    return os.path.basename(root) or root
 
 
 def record_session(index_path: str, session_id: str, transcript_path: str,
@@ -207,7 +219,7 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
         segments, _ = split_path(name)
         if segments:
             fs_path = folder_store_path or _fs.default_path_for(index_path)
-            _fs.add(fs_path, entry["project_label"], "/".join(segments))
+            _fs.add(fs_path, project_root(cwd), "/".join(segments))
     return result
 
 
@@ -413,3 +425,46 @@ def migrate_to_v2(index_path: str, folder_store_path: str) -> None:
         d.pop("folders", None)
         return d
     mutate(index_path, to_v2)
+
+
+def migrate_folder_store_keys(index_path: str, folder_store_path: str) -> None:
+    """One-shot re-key of the folder store from repo *basename* to repo *root*.
+
+    Early folder stores keyed each project by its basename (e.g. `magento2`),
+    which silently merged distinct same-named repos. Going forward the store is
+    keyed by repo root path so they stay separate. This maps each legacy
+    basename key to the root(s) of the sessions that carry it (copying into
+    every matching root when a basename is shared); keys with no matching
+    session — empty-folder-only projects, the synthetic `(unfiled)` bucket — are
+    left untouched. Idempotent and gated on the store's version.
+    """
+    # Nothing to re-key (and don't materialise an empty store on no-op CLI runs).
+    if not os.path.exists(folder_store_path):
+        return
+    from . import folder_store as _fs
+    store = _fs.load(folder_store_path)
+    if store.get("version", 1) >= 2:
+        return
+
+    base_to_roots: dict = {}
+    for s in load(index_path).get("sessions", {}).values():
+        cwd = s.get("project_path")
+        if not cwd:
+            continue
+        root = project_root(cwd)
+        base_to_roots.setdefault(os.path.basename(root) or root, set()).add(root)
+
+    def remap(data: dict) -> dict:
+        old = data.get("projects") or {}
+        new: dict = {}
+        for key, paths in old.items():
+            targets = base_to_roots.get(key) or {key}
+            for t in targets:
+                dest = new.setdefault(t, [])
+                for p in paths:
+                    if p not in dest:
+                        dest.append(p)
+        data["projects"] = new
+        data["version"] = 2
+        return data
+    _fs.mutate(folder_store_path, remap)
