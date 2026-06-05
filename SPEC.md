@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.11.5**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision.
+**Status:** Shipped — **v1.12.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision; v1.12.0 adds reversible worktree cleanup — `w` to reclaim a stopped worktree's directory, an offer when a docked worktree session exits clean, and `--gc` pruning of idle (>14d) clean worktrees, all keeping the branch + transcript so resume rebuilds.
 
 ## Goals
 
@@ -154,6 +154,20 @@ Each session row shows:
 These are pure caches in the index. The `SessionStart` hook refreshes them on every fire; `session-explorer index --refresh` recomputes them on demand.
 
 > **Why not sum `input_tokens` / `output_tokens`?** Claude Code's per-message token counts are streaming-time estimates and have been observed to be off by an order of magnitude in community reports. `cache_read_input_tokens` is logged after the API response and is reliable for sessions that use caching (the vast majority).
+
+### Worktree cleanup (v1.12.0)
+
+Git worktrees (`<repo>/.claude/worktrees/<name>`) accumulate on disk and the explorer reclaims them. Two leaks motivate it: (1) the explorer's own recreate-on-resume path rebuilds a worktree with raw `git worktree add`, so Claude — which only offers its native cleanup from the `-w`-creating process — never prompts to remove it; (2) opt-in retention sets `cleanupPeriodDays = 36500`, which also disables Claude's age-based auto-removal of clean/background worktrees. So the explorer owns cleanup.
+
+**Removal is non-destructive and reversible.** All removal goes through `worktree.remove(path)` in `bin/_pkg/worktree.py`, which runs `git worktree remove` **without `--force`** (git refuses any dirty or untracked tree — this refusal is the safety floor; we never force) and **never deletes the `worktree-<name>` branch**. Because the existing `_recreate_worktree` rebuilds a missing worktree on resume, a removed directory is just a "dead" worktree that resume re-materialises on the same branch — committed work and the transcript both survive. `worktree.remove` returns `"removed"` | `"dirty"` | `"failed"`; `worktree.removable(path)` is the clean-and-exists pre-check; both `git` calls are bounded by a timeout so they can't freeze the UI thread.
+
+**Three triggers, all sharing that primitive:**
+
+- **Manual (`w`).** `action_remove_worktree` removes the selected worktree session's directory after a confirm (showing its `du -sh` size). Refuses while the session is live/running/docked ("Stop the session first"); no-ops if the directory is already gone. On success it flips the indicator green→`dark_red` via `_set_worktree_state` (no rescan). Shared completion logic lives in `_apply_worktree_removal`.
+- **On-exit offer.** When a **docked** worktree session transitions live→stopped (`_poll_live` computes `ended = prev_live − new_states`) and its tree is clean, the explorer offers cleanup **once** per sid (tracked in `_offered_cleanup`, added before the prompt so a cancel never re-nags; the user can still retry with `w`). Dirty or non-worktree exits are left alone silently.
+- **`--gc` pruning.** `gc.collect_worktrees(index_path, idle_days=14, dry_run=…)` removes worktree directories that are idle (dir mtime older than 14 days — a module constant, not a CLI flag), not live (reusing `_is_live`), and clean. It runs after the transcript GC in the same `--gc` pass, inherits `--dry-run`, and reports a one-line summary only when something was reclaimed. **It does not mutate the index** and prunes directories of *kept* sessions too — the transcript and branch survive, and resume rebuilds — which is what actually drains the accumulated pile, including the native-`-w` worktrees stranded by `cleanupPeriodDays = 36500`.
+
+The preview pane shows a worktree's on-disk size (`Worktree   N on disk`), computed lazily via `du -sh` and cached per-sid (`_wt_size_cache`) so the refresh timer never re-stats.
 
 ### Rename and move
 
@@ -667,7 +681,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.11.5). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.12.0). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|

@@ -3,6 +3,33 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.12.0
+
+### Added
+- **Reversible worktree cleanup — reclaim the disk that git worktrees eat.**
+  Git worktrees (`<repo>/.claude/worktrees/<name>`) used to pile up: the
+  explorer's recreate-on-resume path rebuilds them with raw `git worktree add`,
+  so Claude (which only offers native cleanup from the `-w`-creating process)
+  never prompts to remove them, and opt-in retention's `cleanupPeriodDays =
+  36500` disables Claude's own age-based sweep too. The explorer now owns
+  cleanup, through one non-destructive primitive (`bin/_pkg/worktree.py`):
+  `git worktree remove` **without `--force`** (git refuses any dirty or
+  untracked tree — the safety floor) and the `worktree-<name>` branch is never
+  deleted. Because a deleted worktree is rebuilt on resume, removing a directory
+  is reversible — committed work and the transcript always survive. Three ways
+  to trigger it:
+  - **`w`** removes the selected worktree session's directory after a confirm
+    (showing its on-disk size); refuses while the session is live/running/docked,
+    and flips the indicator to `dark_red` in place.
+  - **An on-exit offer** when a docked worktree session ends clean — asked once
+    per session (a cancel won't re-nag; press `w` to retry).
+  - **`--gc` pruning** of idle (dir untouched > 14 days), clean, non-live
+    worktrees — including those of *kept* sessions, since the transcript and
+    branch survive and resume rebuilds. Runs in the same `--gc` pass, honours
+    `--dry-run`, and never mutates the index.
+- **The preview pane shows a worktree's on-disk size** (`du -sh`, cached per
+  session so the refresh timer never re-stats).
+
 ## 1.11.5
 
 ### Fixed

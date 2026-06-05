@@ -256,7 +256,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.11.5.** Released and installable from the Claude Code marketplace. Textual
+**v1.12.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders
@@ -268,7 +268,10 @@ split-pane interaction (explorer left / docked claude right, `F9` switch focus,
 `F12` zoom fullscreen, background sessions, live preview snapshots,
 context-aware Enter, quit-guard); new-session creation from the tree (`c`);
 opt-in subscription-usage bar in the tmux status line (`g` toggle, 5-min
-refresh, `SESSION_EXPLORER_PROBE` hook bail-out).
+refresh, `SESSION_EXPLORER_PROBE` hook bail-out); reversible worktree cleanup
+(`w` to reclaim a stopped worktree's directory, an offer when a docked worktree
+session exits clean, and `--gc` pruning of idle worktrees — branch + transcript
+always kept, resume rebuilds).
 Tested by pytest + bats in CI on ubuntu + macOS across Python 3.11–3.13.
 
 ### Running the tests

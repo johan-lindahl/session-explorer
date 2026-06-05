@@ -150,6 +150,15 @@ def _cmd_index(args) -> int:
             print(f"[dry-run] Would remove {n} old unnamed session(s){suffix}")
         else:
             print(f"Removed {n} old unnamed session(s){suffix}")
+        wt_result = _gc.collect_worktrees(path, dry_run=args.dry_run)
+        if wt_result["removed_worktrees"]:
+            wn = len(wt_result["removed_worktrees"])
+            wt_suffix = (f" (skipped {wt_result['skipped_dirty']} dirty,"
+                         f" {wt_result['skipped_live']} live)")
+            if args.dry_run:
+                print(f"[dry-run] Would remove {wn} idle worktree(s){wt_suffix}")
+            else:
+                print(f"Removed {wn} idle worktree(s){wt_suffix}")
         return 0
     print("index: pass --record SID TRANSCRIPT CWD, --refresh, --backfill, or --gc", file=sys.stderr)
     return 2
