@@ -1716,15 +1716,18 @@ class SessionExplorerApp(App):
     def _maybe_offer_worktree_cleanup(self, ended: "set[str]") -> None:
         """When the docked session just stopped and its worktree is clean, offer
         to reclaim the directory — once per sid (tracked in _offered_cleanup).
-        Dirty or non-worktree sessions are silently left alone."""
+        Dirty or non-worktree sessions are silently left alone. Cancel is
+        permanent for this session; the user can always retry later with 'w'."""
         sid = self._docked_sid
         if sid is None or sid not in ended or sid in self._offered_cleanup:
             return
         node = self._row_nodes.get(sid)
-        path = (node[0].data or {}).get("project_path") if node else None
+        data = node[0].data or {} if node else {}
+        path = data.get("project_path")
         if not path or worktree.MARKER not in path or not worktree.removable(path):
             return
         self._offered_cleanup.add(sid)
+        name = data.get("name_cached") or sid[:8]
         size = self._wt_size_cache.get(sid) or worktree.size(path)
 
         def after(ok: bool) -> None:
@@ -1733,7 +1736,8 @@ class SessionExplorerApp(App):
             result = worktree.remove(path)
             if result == "removed":
                 self._set_worktree_state(sid, "dead")
-                self._wt_size_cache.pop(sid, None)
+                self._wt_size_cache.pop(sid, None)  # was X bytes; drop so the
+                # preview stops showing a stale reclaim figure.
                 self.notify(f"Worktree removed — {size} reclaimed.")
             elif result == "dirty":
                 self.notify("Worktree has uncommitted changes — kept.",
@@ -1743,7 +1747,7 @@ class SessionExplorerApp(App):
                             "~/.claude/session-explorer.log).", severity="warning")
 
         self.push_screen(ConfirmScreen(
-            f"Session '{sid[:8]}' ended. Remove its worktree to free {size}?\n"
+            f"Session '{name}' ended. Remove its worktree to free {size}?\n"
             f"{path}\n(The branch and transcript are kept; resume rebuilds it.)"),
             after)
 

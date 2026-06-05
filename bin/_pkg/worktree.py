@@ -34,8 +34,13 @@ def removable(project_path: "str | None") -> bool:
     files) — i.e. `git worktree remove` would succeed without --force."""
     if not project_path or not os.path.isdir(project_path):
         return False
-    r = subprocess.run(["git", "-C", project_path, "status", "--porcelain"],
-                       capture_output=True, text=True)
+    # Bounded: this runs on the UI thread (poll tick) — a slow/network FS must
+    # not freeze it. On timeout we treat the tree as not-removable (safe).
+    try:
+        r = subprocess.run(["git", "-C", project_path, "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return r.returncode == 0 and r.stdout.strip() == ""
 
 
