@@ -192,12 +192,24 @@ def build_nested_tree(index_data: dict, folder_store_data: dict,
         target["_sessions"].append((sid, s))
 
     # 2. Lay in stored folder paths (may create empty folder nodes). The folder
-    # store is keyed by root too (see index.migrate_folder_store_keys).
-    for root, paths in (folder_store_data.get("projects") or {}).items():
-        proj_node = out.setdefault(root, _empty_node())
-        for path_str in paths or []:
-            segs = [seg for seg in path_str.split("/") if seg.strip()]
-            _walk_to(proj_node, segs)
+    # store is keyed by root too (see index.migrate_folder_store_keys) — BUT a
+    # stale pre-root-keying hook can re-add *basename* keys after migration.
+    # Such a key must not become its own ghost project, and must not make the
+    # real repo's basename look contested (which would spuriously prefix it):
+    # fold its paths into every session root sharing that basename instead.
+    # Matching considers ALL session roots, not just the visible ones — folder
+    # ownership doesn't depend on the current view filter.
+    all_roots = {session_root(s) for s in index_data.get("sessions", {}).values()}
+    for key, paths in (folder_store_data.get("projects") or {}).items():
+        if key in all_roots or "/" in key:
+            targets = [key]                 # a proper root (or path) key
+        else:
+            targets = [r for r in all_roots if _basename(r) == key] or [key]
+        for root in targets:
+            proj_node = out.setdefault(root, _empty_node())
+            for path_str in paths or []:
+                segs = [seg for seg in path_str.split("/") if seg.strip()]
+                _walk_to(proj_node, segs)
 
     # 3. Attach a display label per root (bare basename, disambiguated only on
     # collision).

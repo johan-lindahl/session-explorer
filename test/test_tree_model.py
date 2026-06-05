@@ -441,6 +441,82 @@ def test_build_nested_tree_worktree_groups_under_parent_repo_root():
     assert sids == {"main", "wt"}
 
 
+def test_build_nested_tree_folds_legacy_basename_store_key_into_root():
+    """A leftover basename folder-store key (written by an old hook after the
+    root re-key migration) must NOT become its own ghost project node, and must
+    NOT make the real repo's basename look contested (which spuriously prefixed
+    `RoyalUnibrew/magento-os` while a bare `magento-os (0)` ghost rendered).
+    Its paths fold into the matching session root instead."""
+    idx = _idx({
+        "a": {"project_label": "magento-os", "name_cached": "planning/x",
+              "project_path": "/u/RoyalUnibrew/magento-os",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({
+        "/u/RoyalUnibrew/magento-os": ["user-story"],
+        "magento-os": ["planning"],  # legacy key re-added by a stale old hook
+    })
+    t = build_nested_tree(idx, fs)
+    # One node only — no ghost "magento-os" project.
+    assert set(t.keys()) == {"/u/RoyalUnibrew/magento-os"}
+    node = t["/u/RoyalUnibrew/magento-os"]
+    # No collision → bare basename label, not "RoyalUnibrew/magento-os".
+    assert node["_label"] == "magento-os"
+    # Folders from BOTH keys are present.
+    assert "planning" in node["_folders"]
+    assert "user-story" in node["_folders"]
+
+
+def test_build_nested_tree_folds_legacy_key_into_every_matching_root():
+    """When several repos share the basename, a legacy key's paths fold into
+    each of them (attribution was lost when the old hook keyed by basename)."""
+    idx = _idx({
+        "a": {"project_label": "magento2", "name_cached": "x",
+              "project_path": "/u/acme/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+        "b": {"project_label": "magento2", "name_cached": "y",
+              "project_path": "/u/globex/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({"magento2": ["planning"]})
+    t = build_nested_tree(idx, fs)
+    assert set(t.keys()) == {"/u/acme/magento2", "/u/globex/magento2"}
+    assert "planning" in t["/u/acme/magento2"]["_folders"]
+    assert "planning" in t["/u/globex/magento2"]["_folders"]
+    # Still a genuine two-repo collision → parent-prefixed labels.
+    assert t["/u/acme/magento2"]["_label"] == "acme/magento2"
+
+
+def test_build_nested_tree_bare_key_without_matching_root_stays_own_node():
+    """A bare store key with no same-basename session root (an empty-folder-only
+    project) keeps rendering as its own node — folding must not eat it."""
+    idx = _idx({
+        "a": {"project_label": "other", "name_cached": "x",
+              "project_path": "/u/me/other",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({"orphan-project": ["shelf"]})
+    t = build_nested_tree(idx, fs)
+    assert "orphan-project" in t
+    assert "shelf" in t["orphan-project"]["_folders"]
+
+
+def test_build_nested_tree_folds_legacy_key_even_when_sessions_hidden():
+    """Folding matches against ALL session roots, not just visible ones — an
+    unnamed-only (hidden) repo still owns its legacy folder paths."""
+    idx = _idx({
+        "a": {"project_label": "magento-os", "name_cached": None,
+              "project_path": "/u/RoyalUnibrew/magento-os",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({"magento-os": ["planning"]})
+    t = build_nested_tree(idx, fs, include_unnamed=False)
+    # The folded paths surface under the real root (as an empty-folder project),
+    # not under a bare "magento-os" ghost.
+    assert set(t.keys()) == {"/u/RoyalUnibrew/magento-os"}
+    assert "planning" in t["/u/RoyalUnibrew/magento-os"]["_folders"]
+
+
 def test_build_nested_tree_folder_store_keyed_by_root():
     """Empty folders are stored under the repo root, so two same-named repos
     each get only their own stored folders."""

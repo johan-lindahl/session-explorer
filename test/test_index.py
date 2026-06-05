@@ -432,6 +432,55 @@ def test_migrate_folder_store_keys_unresolvable_key_left_as_is(tmp_path):
     assert folder_store.load(fs_path)["projects"] == {"(unfiled)": ["shelf"]}
 
 
+def test_migrate_folder_store_keys_self_heals_v2_store(tmp_path):
+    """An old hook (pre-root-keying) can re-add a basename key AFTER the store
+    was already migrated to v2. The re-key must heal that on the next run, not
+    short-circuit forever on the version stamp."""
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 2, "sessions": {
+        "a": {"project_label": "magento-os",
+              "project_path": "/u/RoyalUnibrew/magento-os"},
+    }})
+    folder_store.save(fs_path, {"version": 2, "projects": {
+        "/u/RoyalUnibrew/magento-os": ["user-story"],
+        "magento-os": ["planning"],  # re-added by a stale old hook
+    }})
+
+    index.migrate_folder_store_keys(idx_path, fs_path)
+
+    data = folder_store.load(fs_path)
+    assert "magento-os" not in data["projects"]
+    assert sorted(data["projects"]["/u/RoyalUnibrew/magento-os"]) == [
+        "planning", "user-story"]
+
+
+def test_migrate_folder_store_keys_v2_store_with_clean_keys_untouched(tmp_path):
+    """A healthy v2 store (root paths + (unfiled) only) is left byte-identical —
+    no pointless rewrite on every CLI invocation."""
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 2, "sessions": {
+        "a": {"project_label": "magento-os",
+              "project_path": "/u/RoyalUnibrew/magento-os"},
+    }})
+    folder_store.save(fs_path, {"version": 2, "projects": {
+        "/u/RoyalUnibrew/magento-os": ["planning"],
+        "(unfiled)": ["shelf"],
+    }})
+    before = os.stat(fs_path).st_mtime_ns
+
+    index.migrate_folder_store_keys(idx_path, fs_path)
+
+    assert os.stat(fs_path).st_mtime_ns == before
+    assert folder_store.load(fs_path)["projects"] == {
+        "/u/RoyalUnibrew/magento-os": ["planning"],
+        "(unfiled)": ["shelf"],
+    }
+
+
 def test_record_session_worktree_label(tmp_path):
     transcript = str(tmp_path / "WT.jsonl")
     shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)

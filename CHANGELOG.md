@@ -3,6 +3,26 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.12.1
+
+### Fixed
+- **Ghost project nodes and spurious parent-prefixed labels from legacy
+  folder-store keys.** The registered `SessionStart` hook can be an *older
+  installed plugin copy* than the TUI being run, and a pre-v1.11.5 hook re-adds
+  **basename** folder-store keys (e.g. `"magento-os": ["planning"]`) after the
+  store was already migrated to root keys. The tree treated such a bare key as
+  its own repo root, so the basename looked contested: the real repo got a
+  spurious parent prefix (`RoyalUnibrew/magento-os`) while a ghost
+  `magento-os (0)` node rendered its folders — and F5 couldn't fix it (reindex
+  rewrites the index, not the store; the re-key was one-shot and version-gated).
+  Two defenses now make the explorer immune regardless of what's in the store:
+  `build_nested_tree` **folds** any bare (no-`/`) store key into every session
+  root sharing that basename at render time, and `migrate_folder_store_keys` is
+  **self-healing** — a v2 store is re-checked on every CLI entry and bare keys
+  that resolve to a session root are re-keyed (the file is rewritten only when
+  something actually changed). Bare keys that resolve to nothing
+  (empty-folder-only projects, `(unfiled)`) still render as their own nodes.
+
 ## 1.12.0
 
 ### Added
