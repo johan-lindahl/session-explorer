@@ -3,6 +3,20 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.11.2
+
+### Fixed
+- **Resuming a deleted-worktree session now recreates the git worktree**, not an
+  empty directory. Confirming the dead-worktree prompt runs `git worktree prune`
+  then `git worktree add` on the `worktree-<leaf>` branch that `claude -w` uses —
+  reattaching to that branch if it survived (preserving the work), otherwise
+  creating it fresh from `HEAD` — so the session resumes in a real working tree.
+  An empty directory left by a prior resume is also detected as "dead" and
+  recreated, so a session whose worktree dir exists but is empty no longer
+  silently resumes into a broken cwd. If git can't recreate the worktree, it
+  falls back to a bare directory so `claude --resume` can still locate the
+  transcript. The confirm prompt now reads "Recreate the worktree and resume?".
+
 ## 1.11.1
 
 ### Changed

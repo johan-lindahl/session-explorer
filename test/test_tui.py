@@ -1251,15 +1251,76 @@ def test_resolve_resume_cwd_recreates_dead_worktree(tmp_path):
 
 
 def test_dead_worktree_repo_detection(tmp_path):
+    import os as _os
     from _pkg.tui import _dead_worktree_repo
     repo = tmp_path / "repo"
     repo.mkdir()
     dead = str(repo / ".claude" / "worktrees" / "wt")
-    assert _dead_worktree_repo(dead) == str(repo)          # recreatable
-    assert _dead_worktree_repo(str(repo)) is None          # path exists
+    assert _dead_worktree_repo(dead) == str(repo)          # recreatable (missing)
+    # An empty dir left by a prior failed resume is still "dead" → recreatable.
+    empty = repo / ".claude" / "worktrees" / "empty"
+    empty.mkdir(parents=True)
+    assert _dead_worktree_repo(str(empty)) == str(repo)
+    # A populated worktree dir is live, not dead.
+    live = repo / ".claude" / "worktrees" / "live"
+    live.mkdir(parents=True)
+    (live / ".git").write_text("gitdir: ...\n")
+    assert _dead_worktree_repo(str(live)) is None
+    assert _dead_worktree_repo(str(repo)) is None          # path exists, no marker
     assert _dead_worktree_repo(str(tmp_path / "gone" / ".claude" / "worktrees" / "wt")) is None  # repo gone
     assert _dead_worktree_repo(str(tmp_path / "nope")) is None  # no worktree marker
     assert _dead_worktree_repo(None) is None
+
+
+def _init_git_repo(path):
+    import subprocess as _sp
+    path.mkdir(parents=True, exist_ok=True)
+    _sp.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    _sp.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+             "commit", "-q", "--allow-empty", "-m", "init"], cwd=path, check=True)
+
+
+def test_resolve_resume_cwd_recreates_real_git_worktree(tmp_path):
+    import subprocess as _sp
+    from _pkg.tui import _resolve_resume_cwd
+    repo = tmp_path / "proj"
+    _init_git_repo(repo)
+    dead_wt = str(repo / ".claude" / "worktrees" / "feature-x")  # never created
+    assert _resolve_resume_cwd(dead_wt) == dead_wt
+    # git now tracks it as a real worktree on branch worktree-<leaf>, not an
+    # empty directory.
+    out = _sp.run(["git", "worktree", "list", "--porcelain"], cwd=repo,
+                  capture_output=True, text=True).stdout
+    assert dead_wt in out
+    assert "worktree-feature-x" in out
+
+
+def test_resolve_resume_cwd_recreates_over_empty_leftover_dir(tmp_path):
+    import os as _os, subprocess as _sp
+    from _pkg.tui import _resolve_resume_cwd
+    repo = tmp_path / "proj"
+    _init_git_repo(repo)
+    dead_wt = str(repo / ".claude" / "worktrees" / "feature-y")
+    _os.makedirs(dead_wt)  # empty leftover from the old makedirs bug
+    assert _resolve_resume_cwd(dead_wt) == dead_wt
+    assert _os.path.exists(_os.path.join(dead_wt, ".git"))  # now a real checkout
+    out = _sp.run(["git", "worktree", "list", "--porcelain"], cwd=repo,
+                  capture_output=True, text=True).stdout
+    assert dead_wt in out
+
+
+def test_resolve_resume_cwd_reattaches_existing_branch(tmp_path):
+    import subprocess as _sp
+    from _pkg.tui import _resolve_resume_cwd
+    repo = tmp_path / "proj"
+    _init_git_repo(repo)
+    # Worktree dir deleted but its branch survived — reattach to preserve work.
+    _sp.run(["git", "branch", "worktree-keep"], cwd=repo, check=True)
+    dead_wt = str(repo / ".claude" / "worktrees" / "keep")
+    assert _resolve_resume_cwd(dead_wt) == dead_wt
+    out = _sp.run(["git", "worktree", "list", "--porcelain"], cwd=repo,
+                  capture_output=True, text=True).stdout
+    assert "worktree-keep" in out
 
 
 def test_resolve_resume_cwd_dead_worktree_and_missing_repo_is_none(tmp_path):

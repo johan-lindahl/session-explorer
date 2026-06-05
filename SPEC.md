@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.11.1**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`.
+**Status:** Shipped — **v1.11.2**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory.
 
 ## Goals
 
@@ -444,7 +444,7 @@ Enter always lands you focused *in* the docked claude pane. Entering a different
 
 - **Already live elsewhere** — if the selected session is live in the registry but is not one of our tmux windows (running in another terminal), Enter refuses with a warning and offers peek-only via transcript tail. Two `claude --resume` processes on one JSONL corrupts it.
 - **Switching focus and zoom:** there are no window tabs — the explorer tree is the only session switcher. **F9** toggles focus between the two panes (`bind -n F9 select-pane -t :.+`; configurable via `switch_key`; a mouse-click on either pane also focuses it). **F12** zooms the focused pane fullscreen and back (`bind -n F12 resize-pane -Z`; configurable via `zoom_key`) — this is how you get a fullscreen claude (tree hidden) and restore the split. The status bar's right side shows a persistent `F9 ⇄ switch · F12 ⤢ full` hint, kept in the tmux status line so it survives the zoomed-fullscreen case where the Textual footer is hidden.
-- cwd/worktree handling carries over from `action_resume`: a background window is created via `tmux new-window -c <resolved cwd>` (using `_resolve_resume_cwd`) before the `join-pane`, and the dead-worktree warning fires before spawning.
+- cwd/worktree handling carries over from `action_resume`: a background window is created via `tmux new-window -c <resolved cwd>` (using `_resolve_resume_cwd`) before the `join-pane`, and the dead-worktree warning fires before spawning. When the session's cwd is a **deleted git worktree** (or an empty dir left by a prior failed resume), `_resolve_resume_cwd` recreates a real worktree via `_recreate_worktree`: `git -C <repo> worktree prune` then `git worktree add` on the `worktree-<leaf>` branch — reattaching if that branch survived, else creating it from HEAD (matching the branch name `claude -w` uses). Only if git fails does it fall back to a bare `makedirs` so `claude --resume` can still locate the worktree-keyed transcript.
 
 ### Snapshot rendering
 
@@ -661,7 +661,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.11.1). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.11.2). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|
