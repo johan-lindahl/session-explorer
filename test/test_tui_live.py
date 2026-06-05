@@ -280,6 +280,7 @@ async def test_apply_live_metadata_preserves_worktree_state(tmp_path):
     repo = tmp_path / "repo"
     live_wt = repo / ".claude" / "worktrees" / "feat"
     live_wt.mkdir(parents=True)
+    (live_wt / ".git").write_text("gitdir: ...\n")  # populated -> "live" (not empty)
 
     # Write a JSONL transcript for the live session so _do_live_metadata_refresh
     # has something to parse (same shape as the helper above).

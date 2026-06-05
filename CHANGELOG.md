@@ -3,6 +3,19 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.11.3
+
+### Fixed
+- **The worktree indicator now turns green the instant a deleted worktree is
+  recreated on resume**, instead of staying red until a manual rescan.
+  Confirming the recreate prompt repaints that row in place via
+  `_set_worktree_state`.
+- **An empty worktree directory now counts as "dead", not "live".**
+  `_worktree_state` previously called any existing dir "live" (so a bare dir
+  left by an earlier failed resume showed a misleading green `⎇`); it now agrees
+  with `_dead_worktree_repo` that an empty worktree dir is dead — keeping the
+  indicator and the resume prompt consistent.
+
 ## 1.11.2
 
 ### Fixed
