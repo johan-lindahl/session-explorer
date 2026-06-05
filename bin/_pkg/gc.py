@@ -22,8 +22,10 @@ import os
 from datetime import datetime, timezone
 
 from . import index as _index
+from . import worktree as _worktree
 
 _LIVE_MTIME_SECONDS = 60
+_WORKTREE_IDLE_DAYS = 14   # idle threshold for --gc worktree pruning
 
 
 def _parse_iso(value: "str | None") -> "datetime | None":
@@ -131,3 +133,48 @@ def collect_garbage(index_path: str, *, retention_days: int = 30,
 
     _index.mutate(index_path, mutator)
     return {"removed": removed, "skipped_live": skipped_live, "dry_run": False}
+
+
+def collect_worktrees(index_path: str, *, idle_days: int = _WORKTREE_IDLE_DAYS,
+                      dry_run: bool = False,
+                      now: "datetime | None" = None) -> dict:
+    """Reclaim idle, clean worktree directories (keeping branch + transcript;
+    resume rebuilds them). Skips live sessions and any dir newer than the idle
+    threshold; git refuses dirty trees (counted in skipped_dirty).
+
+    Returns {"removed_worktrees": [...], "skipped_dirty": int,
+             "skipped_live": int, "dry_run": bool}. Does NOT mutate the index —
+    the transcript and the row stay; only the working directory is freed."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now.timestamp() - idle_days * 86400
+
+    removed: list[str] = []
+    skipped_dirty = 0
+    skipped_live = 0
+
+    data = _index.load(index_path)
+    for entry in data.get("sessions", {}).values():
+        path = entry.get("project_path") or ""
+        if _worktree.MARKER not in path or not os.path.isdir(path):
+            continue
+        transcript = entry.get("transcript_path")
+        if transcript and os.path.exists(transcript) and _is_live(transcript, now):
+            skipped_live += 1
+            continue
+        try:
+            if os.path.getmtime(path) >= cutoff:
+                continue   # too fresh
+        except OSError:
+            continue
+        if not _worktree.removable(path):
+            skipped_dirty += 1
+            continue
+        if dry_run:
+            removed.append(path)
+            continue
+        if _worktree.remove(path) == "removed":
+            removed.append(path)
+        else:
+            skipped_dirty += 1
+    return {"removed_worktrees": removed, "skipped_dirty": skipped_dirty,
+            "skipped_live": skipped_live, "dry_run": dry_run}
