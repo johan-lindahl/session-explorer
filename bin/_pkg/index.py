@@ -428,7 +428,7 @@ def migrate_to_v2(index_path: str, folder_store_path: str) -> None:
 
 
 def migrate_folder_store_keys(index_path: str, folder_store_path: str) -> None:
-    """One-shot re-key of the folder store from repo *basename* to repo *root*.
+    """Re-key the folder store from repo *basename* to repo *root*.
 
     Early folder stores keyed each project by its basename (e.g. `magento2`),
     which silently merged distinct same-named repos. Going forward the store is
@@ -436,14 +436,22 @@ def migrate_folder_store_keys(index_path: str, folder_store_path: str) -> None:
     basename key to the root(s) of the sessions that carry it (copying into
     every matching root when a basename is shared); keys with no matching
     session — empty-folder-only projects, the synthetic `(unfiled)` bucket — are
-    left untouched. Idempotent and gated on the store's version.
+    left untouched.
+
+    NOT a one-shot: a stale pre-root-keying hook (older installed plugin copy)
+    can re-add basename keys *after* the store was stamped v2, so a v2 store is
+    re-checked and healed whenever a bare key matches a current session root.
+    The file is rewritten only when something actually changes. Idempotent.
     """
     # Nothing to re-key (and don't materialise an empty store on no-op CLI runs).
     if not os.path.exists(folder_store_path):
         return
     from . import folder_store as _fs
     store = _fs.load(folder_store_path)
-    if store.get("version", 1) >= 2:
+    projects = store.get("projects") or {}
+    # Fast path: already v2 and every key is a path (or a synthetic bucket that
+    # can't be a repo basename) — skip the index read entirely.
+    if store.get("version", 1) >= 2 and all("/" in k for k in projects):
         return
 
     base_to_roots: dict = {}
@@ -459,7 +467,7 @@ def migrate_folder_store_keys(index_path: str, folder_store_path: str) -> None:
         new: dict = {}
         for key, paths in old.items():
             targets = base_to_roots.get(key) or {key}
-            for t in targets:
+            for t in sorted(targets):
                 dest = new.setdefault(t, [])
                 for p in paths:
                     if p not in dest:
@@ -467,4 +475,10 @@ def migrate_folder_store_keys(index_path: str, folder_store_path: str) -> None:
         data["projects"] = new
         data["version"] = 2
         return data
+
+    # v2 store with bare keys: heal only if a bare key actually resolves to a
+    # session root — otherwise (e.g. only "(unfiled)") leave the file untouched.
+    if store.get("version", 1) >= 2 and not any(
+            "/" not in k and k in base_to_roots for k in projects):
+        return
     _fs.mutate(folder_store_path, remap)
