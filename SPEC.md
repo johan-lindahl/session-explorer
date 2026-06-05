@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.11.4**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K.
+**Status:** Shipped — **v1.11.5**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision.
 
 ## Goals
 
@@ -108,7 +108,7 @@ session-explorer · 32 sessions across 6 projects · 15 unnamed hidden (Tab)    
 ▶ session-explorer (4)
 ```
 
-Outer level: project (`project_label`, auto-grouped from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Three view modes, cycled with `Tab`:**
+Outer level: project (grouped by **repo root path**, derived from cwd; git worktrees under `<repo>/.claude/worktrees/<name>` collapse into the parent repo so a project's worktrees don't each become a top-level entry). The node's display label is the repo basename, **disambiguated only on collision**: when several distinct repos share a name (e.g. multiple `magento2` checkouts under different parents) each is prefixed with the minimal ancestor path that tells it apart — `acme/magento2` when the immediate parent suffices, `work/…/magento2` when a higher ancestor is needed (`tree_model.disambiguate`). A lone repo keeps its bare basename. Inner level: `/`-separated folder paths parsed from session names, rendered as a nested tree of any depth. Pre-created empty folders live in the folder store file (see *Folder store* below). **Three view modes, cycled with `Tab`:**
 - **Mode 0 (default):** named sessions only, plus any currently-live/active session regardless of name — cutting the visual noise from stub records. The header advertises the hidden unnamed count.
 - **Mode 1 (active only):** sessions that carry the live `●` glyph (working or idle), named or unnamed. Useful for a quick "what's running" overview.
 - **Mode 2 (all):** every session including unnamed ones; they appear under an `(unnamed)` sub-group per project, available for renaming or deletion.
@@ -262,7 +262,7 @@ Auto-detection logic, first match wins:
       "name_shadows": ["sprint14"],             // prior titles to ignore as stale live re-emits (optional)
       "notes": "production audit of billing modules\nfollow-up Q1",
       "project_path": "/Users/you/code/acme-api",  // cwd; resume chdir's here
-      "project_label": "acme-api",                  // grouping key; worktrees collapse to the parent repo
+      "project_label": "acme-api",                  // default display basename; grouping uses the repo root (project_path), disambiguated on collision
       "branch": "feature/checkout-revamp",
       "first_prompt": "audit which billing modules have zero production data",
       "summary": "…",                          // from /summary if available
@@ -282,24 +282,29 @@ Auto-detection logic, first match wins:
 
 ### Folder store — `~/.claude/session-explorer-folders.json`
 
-Per-project flat list of folder paths. Path strings use `/` as separator.
-Intermediate folders are implicit (storing `planning/sprint14` implies
-`planning` exists in the rendered tree).
+Per-project flat list of folder paths, keyed by **repo root path** (the cwd
+with any `/.claude/worktrees/<name>` suffix stripped). Keying by root — not by
+basename — is what keeps two different repos that share a name (several
+`magento2` checkouts under different parents) from merging their folders. Path
+strings use `/` as separator. Intermediate folders are implicit (storing
+`planning/sprint14` implies `planning` exists in the rendered tree).
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
   "projects": {
-    "acme-api": ["planning", "planning/sprint14", "bugfix"],
-    "acme-app": ["watch", "watch/v2"],
-    "(unfiled)": ["legacy-shelf"]                 // populated by v1→v2 migration only
+    "/Users/you/code/acme-api": ["planning", "planning/sprint14", "bugfix"],
+    "/Users/you/code/acme-app": ["watch", "watch/v2"],
+    "(unfiled)": ["legacy-shelf"]                 // populated by index v1→v2 migration only
   }
 }
 ```
 
-Atomic writes via the same flock + temp-file-rename pattern as the index.
-Migration from v1 (with `index.folders[]`) is one-shot, idempotent, and runs
-at every CLI entry point.
+Atomic writes via the same flock + temp-file-rename pattern as the index. Two
+one-shot, idempotent migrations apply: the index-side v1→v2 (moving any legacy
+`index.folders[]` here under `(unfiled)`), and the store-side basename→root
+re-key (`index.migrate_folder_store_keys`, gated on the store's own `version`,
+mapping each legacy basename key to the root(s) of the sessions carrying it).
 
 **`session-explorer index --backfill`** populates the index from every JSONL under `~/.claude/projects/` that isn't already tracked. Pre-install sessions don't fire the `SessionStart` hook, so without backfill they'd be invisible. Backfill recovers `cwd` per session from the JSONL's envelope lines (via `jsonl.session_cwd()`) since the hook payload isn't available retrospectively. Existing entries are left untouched — backfill is additive; use `--refresh` to recompute caches for already-tracked sessions. Safe to re-run.
 
@@ -658,10 +663,11 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 8. **Launcher fallback.** No terminal detected → CLI prints the absolute command + copies to clipboard; the slash command's response shows "Run: …".
 9. **Plugin upgrade between session starts.** Hook may be a newer version than the index format. A fresh install creates the index at `version: 1` (no `folders[]` since the field is never written to a new file); the one-shot v1→v2 migration runs at every CLI entry point and bumps `version` to `2` (moving any legacy `folders[]` to the folder store under `(unfiled)`). The migration is idempotent — once `version >= 2`, it short-circuits. Readers tolerate either version.
 10. **Token estimate accuracy.** Per-message `input_tokens` / `output_tokens` in the JSONL are streaming-time estimates and can be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` so users know it's approximate.
+11. **Same-named repos.** Working across several repos that share a directory name (e.g. a `magento2` checkout per client) must not collapse into one tree node. The grouping identity is the **repo root path** (`project_path`, worktree suffix stripped), not the basename, so distinct repos stay separate; the folder store is keyed by root for the same reason. The display label is the bare basename, prefixed with the minimal distinguishing ancestor path **only on collision** (`acme/magento2`, or `work/…/magento2` when a deeper ancestor is needed — `tree_model.disambiguate`). A lone repo is unaffected.
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.11.4). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.11.5). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|

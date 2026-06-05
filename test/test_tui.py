@@ -526,7 +526,8 @@ async def test_new_folder_under_project_adds_to_folder_store(index_path):
         await pilot.pause()
 
     fs_path = folder_store.default_path_for(index_path)
-    assert "audits/q1" in folder_store.list_paths(fs_path, "demo")
+    # Folder store is keyed by repo root (project_path), not the basename label.
+    assert "audits/q1" in folder_store.list_paths(fs_path, "/tmp/demo-project")
 
 
 async def test_new_folder_under_folder_creates_child(index_path):
@@ -561,7 +562,7 @@ async def test_new_folder_under_folder_creates_child(index_path):
         await pilot.pause()
 
     fs_path = folder_store.default_path_for(index_path)
-    paths = folder_store.list_paths(fs_path, "demo")
+    paths = folder_store.list_paths(fs_path, "/tmp/demo-project")
     assert "planning/retro" in paths
 
 
@@ -628,7 +629,7 @@ async def test_move_to_new_path_adds_to_folder_store(index_path, tmp_path):
         await pilot.pause()
 
     fs_path = folder_store.default_path_for(index_path)
-    paths = folder_store.list_paths(fs_path, "demo")
+    paths = folder_store.list_paths(fs_path, "/tmp/demo-project")
     assert "team/new-folder" in paths
     assert json.load(open(index_path))["sessions"]["sid-1"]["name_cached"] == "team/new-folder/sprint14"
 
@@ -679,7 +680,8 @@ def _folder_index(tmp_path):
     json.dump({"version": 1, "sessions": sessions}, open(path, "w"))
     (tmp_path / ".session-explorer.help-seen").write_text("")
     (tmp_path / ".session-explorer.retention-declined").write_text("")
-    folder_store.add(folder_store.default_path_for(path), "demo", "team/planning/archive")
+    # Folder store keyed by repo root (project_path) — see index.project_root.
+    folder_store.add(folder_store.default_path_for(path), "/tmp/demo", "team/planning/archive")
     return path
 
 
@@ -693,7 +695,7 @@ async def test_rename_folder_cascades_to_sessions_and_store(tmp_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        node = _find_node_by_segments(app._tree.root, "demo", ["team", "planning"])
+        node = _find_node_by_segments(app._tree.root, "/tmp/demo", ["team", "planning"])
         assert node is not None
         app._tree.select_node(node); app._tree.cursor_line = node.line
         await pilot.pause()
@@ -712,7 +714,7 @@ async def test_rename_folder_cascades_to_sessions_and_store(tmp_path):
     assert sessions["sid-c"]["name_cached"] == "team/planning-extra/keep"  # untouched
     assert sessions["sid-d"]["name_cached"] == "other/elsewhere"           # untouched
     fs_path = folder_store.default_path_for(index_path)
-    paths = folder_store.list_paths(fs_path, "demo")
+    paths = folder_store.list_paths(fs_path, "/tmp/demo")
     assert "team/strategy/archive" in paths
     assert "team/planning/archive" not in paths
 
@@ -725,7 +727,7 @@ async def test_move_folder_reparents_subtree(tmp_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        node = _find_node_by_segments(app._tree.root, "demo", ["team", "planning"])
+        node = _find_node_by_segments(app._tree.root, "/tmp/demo", ["team", "planning"])
         app._tree.select_node(node); app._tree.cursor_line = node.line
         await pilot.pause()
         await pilot.press("m"); await pilot.pause()
@@ -748,7 +750,7 @@ async def test_move_folder_into_own_descendant_is_rejected(tmp_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        node = _find_node_by_segments(app._tree.root, "demo", ["team", "planning"])
+        node = _find_node_by_segments(app._tree.root, "/tmp/demo", ["team", "planning"])
         app._tree.select_node(node); app._tree.cursor_line = node.line
         await pilot.pause()
         await pilot.press("m"); await pilot.pause()
@@ -1228,6 +1230,48 @@ def test_preview_text_shows_full_project_path():
          "project_path": "/Users/jl/clients/acme/magento2"}
     text = _preview_text(s)
     assert "/Users/jl/clients/acme/magento2" in text
+
+
+def test_preview_text_prefers_disambiguated_project_display():
+    """The Project field uses the disambiguated label the tree stamped on the
+    row (project_display), not the bare basename."""
+    from _pkg.tui import _preview_text
+    s = {"sid": "x", "name_cached": "feature",
+         "project_label": "magento2", "project_display": "acme/magento2",
+         "project_path": "/Users/jl/acme/magento2"}
+    text = _preview_text(s)
+    assert "acme/magento2" in text
+
+
+def _dup_repo_index(tmp_path):
+    import json
+    path = str(tmp_path / "se-index.json")
+    json.dump({"version": 2, "sessions": {
+        "a": {"project_label": "magento2", "project_path": "/u/acme/magento2",
+              "name_cached": "feature-a", "last_active_at": "2026-05-27T10:00:00Z",
+              "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0},
+        "b": {"project_label": "magento2", "project_path": "/u/globex/magento2",
+              "name_cached": "feature-b", "last_active_at": "2026-05-27T11:00:00Z",
+              "tokens_estimate": 0, "tokens_window_pct": 0, "message_count": 0},
+    }}, open(path, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    return path
+
+
+async def test_same_named_repos_render_as_two_disambiguated_nodes(tmp_path):
+    """The duplicate-project bug: two magento2 checkouts under different parents
+    must render as two separate top-level nodes, each prefixed by its parent."""
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=_dup_repo_index(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        labels = [str(c.label) for c in app._tree.root.children]
+    assert len(labels) == 2
+    assert any(l.startswith("acme/magento2") for l in labels)
+    assert any(l.startswith("globex/magento2") for l in labels)
+    # The bare, ambiguous "magento2" node must NOT appear on its own.
+    assert not any(l.startswith("magento2 ") for l in labels)
 
 
 # --- resume cwd resolution: fall back to the parent repo when a worktree path
@@ -1923,22 +1967,24 @@ async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
 
 def test_derive_project_cwd_picks_most_recent_and_strips_worktree():
     from _pkg.tui import _derive_project_cwd
+    # Sessions are matched by repo root: the plain checkout and its worktree
+    # both belong to /repo/main; /elsewhere is a different repo.
     sessions = {
-        "a": {"project_label": "demo", "project_path": "/repo/old",
+        "a": {"project_label": "main", "project_path": "/repo/main",
               "last_active_at": "2026-05-01T00:00:00Z"},
-        "b": {"project_label": "demo",
+        "b": {"project_label": "main",
               "project_path": "/repo/main/.claude/worktrees/wt",
               "last_active_at": "2026-05-09T00:00:00Z"},
         "c": {"project_label": "other", "project_path": "/elsewhere",
               "last_active_at": "2026-05-20T00:00:00Z"},
     }
-    # Most recent demo session is the worktree one; strip back to the repo root.
-    assert _derive_project_cwd(sessions, "demo") == "/repo/main"
+    # Most recent session in the repo is the worktree one; strip to the repo root.
+    assert _derive_project_cwd(sessions, "/repo/main") == "/repo/main"
 
 
 def test_derive_project_cwd_returns_none_when_no_match():
     from _pkg.tui import _derive_project_cwd
-    assert _derive_project_cwd({}, "demo") is None
+    assert _derive_project_cwd({}, "/repo/main") is None
 
 
 async def test_new_session_dialog_returns_dict(index_path):
@@ -2394,7 +2440,7 @@ async def test_collapse_mode_remembers_expanded_project_across_repopulate(index_
         await pilot.pause()
         await pilot.press("z")  # collapse all
         await pilot.pause()
-        app._expanded.add("demo")
+        app._expanded.add("/tmp/demo-project")  # node identity is the repo root
         app._populate()
         await pilot.pause()
         proj = app._tree.root.children[0]
@@ -2430,7 +2476,7 @@ async def test_expanding_node_in_collapse_mode_records_it(index_path):
         assert not proj.is_expanded
         proj.expand()           # posts NodeExpanded -> handler records the key
         await pilot.pause()
-        assert "demo" in app._expanded
+        assert "/tmp/demo-project" in app._expanded
         app._populate()         # rebuild; the project must stay open
         await pilot.pause()
         assert app._tree.root.children[0].is_expanded

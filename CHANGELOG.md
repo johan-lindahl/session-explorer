@@ -3,6 +3,24 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.11.5
+
+### Fixed
+- **Sessions from different repos that share a name no longer collapse into one
+  tree node.** Working across several checkouts named `magento2` (one per
+  organization) previously merged them all under a single `magento2` project,
+  because the grouping key was the repo *basename*. Grouping — and the folder
+  store — are now keyed by the repo **root path** (`project_path`, with any
+  `/.claude/worktrees/<name>` suffix stripped), so distinct repos stay separate
+  while a repo's worktrees still collapse under it. The displayed label remains
+  the bare basename, and is prefixed with the **minimal distinguishing ancestor
+  path only on collision**: `acme/magento2` when the immediate parent suffices,
+  `work/…/magento2` when a higher ancestor is needed (`tree_model.disambiguate`).
+  A lone repo is unaffected. A one-shot, idempotent migration
+  (`index.migrate_folder_store_keys`) re-keys any existing basename-keyed folder
+  store to repo roots, mapping each key via the session index and copying into
+  each root when a basename was shared.
+
 ## 1.11.4
 
 ### Fixed

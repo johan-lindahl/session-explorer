@@ -360,6 +360,78 @@ def test_project_label_collapses_worktree_to_parent():
     assert index._project_label(wt2) == "acme-api"
 
 
+def test_project_root_plain_path():
+    assert index.project_root("/Users/you/code/acme-app") == "/Users/you/code/acme-app"
+    assert index.project_root("/Users/you/code/acme-app/") == "/Users/you/code/acme-app"
+
+
+def test_project_root_strips_worktree_suffix():
+    wt = "/Users/you/code/acme-app/.claude/worktrees/feature-login"
+    assert index.project_root(wt) == "/Users/you/code/acme-app"
+
+
+def test_migrate_folder_store_keys_basename_to_root(tmp_path):
+    """A v1 folder store keyed by repo basename is re-keyed to the repo root
+    path, looked up from the session index."""
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 2, "sessions": {
+        "a": {"project_label": "acme-app", "project_path": "/u/me/acme-app"},
+    }})
+    folder_store.save(fs_path, {"version": 1, "projects": {"acme-app": ["planning"]}})
+
+    index.migrate_folder_store_keys(idx_path, fs_path)
+
+    data = folder_store.load(fs_path)
+    assert data["version"] == 2
+    assert data["projects"] == {"/u/me/acme-app": ["planning"]}
+
+
+def test_migrate_folder_store_keys_duplicate_basename_copies_to_each_root(tmp_path):
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 2, "sessions": {
+        "a": {"project_label": "magento2", "project_path": "/u/acme/magento2"},
+        "b": {"project_label": "magento2", "project_path": "/u/globex/magento2"},
+    }})
+    folder_store.save(fs_path, {"version": 1, "projects": {"magento2": ["planning"]}})
+
+    index.migrate_folder_store_keys(idx_path, fs_path)
+
+    data = folder_store.load(fs_path)
+    assert data["projects"]["/u/acme/magento2"] == ["planning"]
+    assert data["projects"]["/u/globex/magento2"] == ["planning"]
+    assert "magento2" not in data["projects"]
+
+
+def test_migrate_folder_store_keys_is_idempotent(tmp_path):
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 2, "sessions": {
+        "a": {"project_label": "acme-app", "project_path": "/u/me/acme-app"},
+    }})
+    folder_store.save(fs_path, {"version": 1, "projects": {"acme-app": ["planning"]}})
+    index.migrate_folder_store_keys(idx_path, fs_path)
+    first = folder_store.load(fs_path)
+    index.migrate_folder_store_keys(idx_path, fs_path)
+    assert folder_store.load(fs_path) == first
+
+
+def test_migrate_folder_store_keys_unresolvable_key_left_as_is(tmp_path):
+    """A stored key with no matching session (e.g. an empty-folder-only project
+    or the synthetic (unfiled) bucket) is preserved unchanged."""
+    from _pkg import folder_store
+    idx_path = str(tmp_path / "index.json")
+    fs_path = str(tmp_path / "folders.json")
+    index.save(idx_path, {"version": 2, "sessions": {}})
+    folder_store.save(fs_path, {"version": 1, "projects": {"(unfiled)": ["shelf"]}})
+    index.migrate_folder_store_keys(idx_path, fs_path)
+    assert folder_store.load(fs_path)["projects"] == {"(unfiled)": ["shelf"]}
+
+
 def test_record_session_worktree_label(tmp_path):
     transcript = str(tmp_path / "WT.jsonl")
     shutil.copy(_os.path.join(_FIX, "named.jsonl"), transcript)
@@ -435,7 +507,8 @@ def test_record_session_writes_folder_path_when_name_has_slash(tmp_path):
     index.record_session(idx_path, session_id="S",
                          transcript_path=str(jsonl), cwd="/u/x/acme-api",
                          folder_store_path=fs_path)
-    paths = folder_store.list_paths(fs_path, "acme-api")
+    # Folder store is keyed by repo root (so same-named repos stay separate).
+    paths = folder_store.list_paths(fs_path, "/u/x/acme-api")
     assert paths == ["team/planning"]
 
 
@@ -553,7 +626,7 @@ def test_record_session_uses_default_folder_store_path(tmp_path):
     index.record_session(idx_path, session_id="S",
                          transcript_path=str(jsonl), cwd="/u/x/acme-api")
     sibling = str(tmp_path / "session-explorer-folders.json")
-    assert folder_store.list_paths(sibling, "acme-api") == ["x"]
+    assert folder_store.list_paths(sibling, "/u/x/acme-api") == ["x"]
 
 
 def test_context_window_1m_models():
