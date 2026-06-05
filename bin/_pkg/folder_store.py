@@ -1,6 +1,11 @@
 """Atomic, flock'd per-project folder path store for session-explorer.
 
-Schema: {"version": 1, "projects": {project_label: [folder_path, ...]}}
+Schema: {"version": 2, "projects": {project_root: [folder_path, ...]}}
+
+`project_root` is the repo's root path (cwd with any `/.claude/worktrees/<name>`
+suffix stripped) — the stable identity that keeps two same-named repos apart.
+v1 stores keyed by repo basename are re-keyed once by
+`index.migrate_folder_store_keys`.
 
 Folder paths use `/` as separator and are stored as flat strings per project
 (e.g. "planning", "planning/sprint14"). Intermediate folders are implicit —

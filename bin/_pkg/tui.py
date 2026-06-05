@@ -25,7 +25,7 @@ from . import tmux as _tmux
 from . import usage as _usage
 from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
-from .tree_model import build_nested_tree, split_path
+from .tree_model import build_nested_tree, split_path, session_root
 
 
 def _index_path() -> str:
@@ -153,7 +153,7 @@ def _preview_text(s: dict) -> str:
     lines = [
         f"[b]{headline}[/]",
         "",
-        field("Project", s.get("project_label") or "(unknown)"),
+        field("Project", s.get("project_display") or s.get("project_label") or "(unknown)"),
         field("Path", s.get("project_path") or "(unknown)"),
     ]
     if s.get("worktree_size"):
@@ -181,12 +181,12 @@ def _preview_text(s: dict) -> str:
 
 
 def _folder_has_sessions(index_data: dict, project: str, folder_segments: list) -> bool:
-    """True if any session in `project` lives under the folder `folder_segments`
-    (its name's folder path has them as a prefix). Pure, so it can be
-    unit-tested. Unnamed sessions have no folder and never count."""
+    """True if any session in `project` (a repo root) lives under the folder
+    `folder_segments` (its name's folder path has them as a prefix). Pure, so it
+    can be unit-tested. Unnamed sessions have no folder and never count."""
     n = len(folder_segments)
     for s in index_data.get("sessions", {}).values():
-        if s.get("project_label") != project:
+        if session_root(s) != project:
             continue
         name = s.get("name_cached")
         if not name:
@@ -618,6 +618,8 @@ class SessionExplorerApp(App):
         # None → index.reindex/backfill use the default ~/.claude/projects.
         # Injected in tests to point the rescan at a fixture tree.
         self._projects_root = projects_root
+        # One-shot guard for the legacy basename→root folder-store re-key.
+        self._fs_keys_migrated: bool = False
         self._resume_target: str | None = None
         self._resume_cwd: str | None = None
         self._new_session_argv: list[str] | None = None
@@ -840,6 +842,13 @@ class SessionExplorerApp(App):
         from . import folder_store as _fs
         self._tree.clear()
         self._row_nodes = {}
+        if not self._fs_keys_migrated:
+            # One-shot: re-key any legacy basename-keyed folder store to repo
+            # roots before the first render so it lines up with the root-keyed
+            # tree (see index.migrate_folder_store_keys). Idempotent + cheap.
+            _index.migrate_folder_store_keys(
+                self._index_path, _fs.default_path_for(self._index_path))
+            self._fs_keys_migrated = True
         data = _index.load(self._index_path)
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
         live_ids = set(self._live_states)
@@ -917,39 +926,44 @@ class SessionExplorerApp(App):
         # absolute screen column.
         #
         # We also attach structured `data` to every project and folder node so
-        # `_project_and_prefix_for_cursor` can read project_label and folder
+        # `_project_and_prefix_for_cursor` can read the project root and folder
         # segments directly instead of reverse-parsing the rendered label.
-        def render(parent, project_label, segments, node, child_depth):
+        # `project` carries the repo *root* (stable node identity); `label` is
+        # the disambiguated display name shown to the user.
+        def render(parent, project, label, segments, node, child_depth):
             for sid, s in node["_sessions"]:
                 if self._matches(sid, s):
                     glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                                    self._ours_flag(sid))
                     wt = _worktree_state(s.get("project_path"))
-                    leaf = parent.add_leaf(_row_label(sid, s, child_depth, glyph, wt),
-                                           data={"sid": sid, **s, "worktree_state": wt})
+                    leaf = parent.add_leaf(
+                        _row_label(sid, s, child_depth, glyph, wt),
+                        data={"sid": sid, **s, "worktree_state": wt,
+                              "project_display": label})
                     self._row_nodes[sid] = (leaf, child_depth)
             for name in sorted(node["_folders"]):
                 child = node["_folders"][name]
                 child_segs = segments + [name]
-                fkey = self._node_key(project_label, child_segs)
+                fkey = self._node_key(project, child_segs)
                 folder_node = parent.add(
                     f"{name}/",
                     expand=self._should_expand(fkey),
-                    data={"project": project_label, "segments": child_segs},
+                    data={"project": project, "segments": child_segs},
                 )
-                render(folder_node, project_label, child_segs, child, child_depth + 1)
+                render(folder_node, project, label, child_segs, child, child_depth + 1)
 
-        for project in sorted(tree):
+        for project in sorted(tree, key=lambda r: tree[r]["_label"].lower()):
             node = tree[project]
+            label = node["_label"]
             proj_node = root.add(
-                f"{project} ({count(node)})",
+                f"{label} ({count(node)})",
                 expand=self._should_expand(project),
                 data={"project": project, "segments": []},
             )
             # Project sits at tree depth 0 (show_root=False); its direct
             # children — both ungrouped sessions and top-level folders — are at
             # tree depth 1.
-            render(proj_node, project, [], node, child_depth=1)
+            render(proj_node, project, label, [], node, child_depth=1)
 
         # Honor a pending select (e.g. just-created session) once its row exists.
         if self._pending_select_sid and self._pending_select_sid in self._row_nodes:
@@ -1136,7 +1150,7 @@ class SessionExplorerApp(App):
         paths = set(_fs.list_paths(_fs.default_path_for(self._index_path), project))
         data = _index.load(self._index_path)
         for s in data.get("sessions", {}).values():
-            if s.get("project_label") != project:
+            if session_root(s) != project:
                 continue
             segs, _ = split_path(s.get("name_cached"))
             for i in range(1, len(segs) + 1):
@@ -1200,7 +1214,7 @@ class SessionExplorerApp(App):
         data = _index.load(self._index_path)
         affected = []  # (sid, transcript_path, new_name)
         for sid, s in data.get("sessions", {}).items():
-            if s.get("project_label") != project:
+            if session_root(s) != project:
                 continue
             new_name = replace_folder_prefix(s.get("name_cached"), old_segs, new_segs)
             if new_name is not None:
@@ -1248,7 +1262,7 @@ class SessionExplorerApp(App):
         sid = data["sid"]
         name = data.get("name_cached") or ""
         transcript = data.get("transcript_path")
-        project = data.get("project_label")
+        project = session_root(data)  # repo root = folder-store key for this repo
         if not project:
             self.bell(); return
         segments, display = split_path(name)
@@ -1380,8 +1394,9 @@ class SessionExplorerApp(App):
         self._poll_live()
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
-        """Return (project_label, prefix). prefix ends in '/' when the cursor sits
-        on a folder so child creation is one segment away from done.
+        """Return (project, prefix), where `project` is the repo root (the
+        folder-store key). prefix ends in '/' when the cursor sits on a folder
+        so child creation is one segment away from done.
 
         Reads structured `data` attached to project and folder nodes by
         `_populate` — we used to reverse-parse rendered labels, which coupled
@@ -1552,11 +1567,11 @@ class SessionExplorerApp(App):
         self._populate()
 
     @staticmethod
-    def _node_key(project_label: str, segments: "list[str]") -> str:
-        # \x00 cannot appear in a project label or folder segment, so it is a
-        # safe separator for "<project>\x00<seg/seg>" folder keys.
-        return project_label if not segments else \
-            project_label + "\x00" + "/".join(segments)
+    def _node_key(project: str, segments: "list[str]") -> str:
+        # `project` is the repo root. \x00 cannot appear in a path or folder
+        # segment, so it is a safe separator for "<root>\x00<seg/seg>" keys.
+        return project if not segments else \
+            project + "\x00" + "/".join(segments)
 
     def _should_expand(self, key: str) -> bool:
         """A node renders expanded unless we're collapsed and it isn't one of
@@ -2070,15 +2085,15 @@ def _new_sid() -> str:
     return str(uuid.uuid4())
 
 
-def _derive_project_cwd(sessions: dict, project_label: str) -> "str | None":
-    """Launch cwd for a new session in `project_label`: the project_path of its
-    most-recently-active session, with any git-worktree suffix stripped back to
-    the repo root so `claude -w` branches from the real repository. None when the
-    project has no session with a usable path."""
+def _derive_project_cwd(sessions: dict, project: str) -> "str | None":
+    """Launch cwd for a new session in `project` (a repo root): the project_path
+    of its most-recently-active session, with any git-worktree suffix stripped
+    back to the repo root so `claude -w` branches from the real repository. None
+    when the project has no session with a usable path."""
     best = None
     best_key = ""
     for s in sessions.values():
-        if s.get("project_label") != project_label:
+        if session_root(s) != project:
             continue
         path = s.get("project_path")
         if not path:

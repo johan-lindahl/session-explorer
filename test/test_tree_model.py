@@ -1,4 +1,6 @@
-from _pkg.tree_model import split_path, build_nested_tree, replace_folder_prefix
+from _pkg.tree_model import (
+    split_path, build_nested_tree, replace_folder_prefix, disambiguate,
+)
 
 
 def _idx(sessions):
@@ -118,6 +120,78 @@ def test_replace_folder_prefix_handles_messy_input_name():
     assert replace_folder_prefix(
         "/team//planning/sprint14/", ["team", "planning"], ["team", "strategy"]
     ) == "team/strategy/sprint14"
+
+
+# ---------------------------------------------------------------------------
+# disambiguate tests
+# ---------------------------------------------------------------------------
+
+def test_disambiguate_distinct_basenames_use_basename():
+    out = disambiguate(["/u/acme/api", "/u/globex/web"])
+    assert out == {"/u/acme/api": "api", "/u/globex/web": "web"}
+
+
+def test_disambiguate_single_root_uses_basename():
+    assert disambiguate(["/u/work/magento2"]) == {"/u/work/magento2": "magento2"}
+
+
+def test_disambiguate_collision_adds_immediate_parent():
+    out = disambiguate(["/u/acme/magento2", "/u/globex/magento2"])
+    assert out == {
+        "/u/acme/magento2": "acme/magento2",
+        "/u/globex/magento2": "globex/magento2",
+    }
+
+
+def test_disambiguate_deep_collision_uses_ellipsis():
+    # Immediate parent ("clients") and grandparent are identical; the first
+    # differing ancestor is the top segment, so skipped levels collapse to "…".
+    out = disambiguate([
+        "/work/clients/acme/magento2",
+        "/home/clients/acme/magento2",
+    ])
+    assert out == {
+        "/work/clients/acme/magento2": "work/…/magento2",
+        "/home/clients/acme/magento2": "home/…/magento2",
+    }
+
+
+def test_disambiguate_mixed_unique_and_colliding():
+    out = disambiguate([
+        "/u/solo/widget",
+        "/u/acme/magento2",
+        "/u/globex/magento2",
+    ])
+    assert out == {
+        "/u/solo/widget": "widget",
+        "/u/acme/magento2": "acme/magento2",
+        "/u/globex/magento2": "globex/magento2",
+    }
+
+
+def test_disambiguate_bare_root_without_parent_keeps_itself():
+    # A root with no path separators has no ancestor to borrow; it stays as-is
+    # even if it shares a "basename" with an absolute path root.
+    out = disambiguate(["magento2", "/u/acme/magento2"])
+    assert out["magento2"] == "magento2"
+    assert out["/u/acme/magento2"] == "acme/magento2"
+
+
+def test_disambiguate_labels_are_unique():
+    out = disambiguate([
+        "/work/clients/acme/magento2",
+        "/home/clients/acme/magento2",
+        "/u/acme/magento2",
+    ])
+    assert len(set(out.values())) == 3
+
+
+def test_disambiguate_pathological_collision_falls_back_to_full_path():
+    # /a/p/m and /a/q/m would both reduce to "a/…/m"; the fallback keeps every
+    # label unique by using the full root path for the colliding pair.
+    roots = ["/a/p/m", "/a/q/m", "/z/p/m", "/z/q/m"]
+    out = disambiguate(roots)
+    assert len(set(out.values())) == len(roots)
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +388,71 @@ def test_build_nested_tree_live_only_empty_when_nothing_live():
     }}
     assert build_nested_tree(idx, {"projects": {}}, live_only=True,
                              live_ids=set()) == {}
+
+
+# ---------------------------------------------------------------------------
+# build_nested_tree: same-named repos split by root (duplicate-project bug)
+# ---------------------------------------------------------------------------
+
+def test_build_nested_tree_splits_same_named_repos_by_root():
+    """Two distinct magento2 checkouts must become two separate top-level nodes,
+    keyed by repo root, each carrying a disambiguated display label."""
+    idx = _idx({
+        "a": {"project_label": "magento2", "name_cached": "feature-x",
+              "project_path": "/u/acme/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+        "b": {"project_label": "magento2", "name_cached": "feature-y",
+              "project_path": "/u/globex/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    t = build_nested_tree(_idx(idx["sessions"]), _fs_data({}))
+    assert set(t.keys()) == {"/u/acme/magento2", "/u/globex/magento2"}
+    assert t["/u/acme/magento2"]["_label"] == "acme/magento2"
+    assert t["/u/globex/magento2"]["_label"] == "globex/magento2"
+    assert [sid for sid, _ in t["/u/acme/magento2"]["_sessions"]] == ["a"]
+    assert [sid for sid, _ in t["/u/globex/magento2"]["_sessions"]] == ["b"]
+
+
+def test_build_nested_tree_single_repo_keeps_bare_label():
+    idx = _idx({
+        "a": {"project_label": "magento2", "name_cached": "feature-x",
+              "project_path": "/u/acme/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    t = build_nested_tree(idx, _fs_data({}))
+    assert set(t.keys()) == {"/u/acme/magento2"}
+    assert t["/u/acme/magento2"]["_label"] == "magento2"
+
+
+def test_build_nested_tree_worktree_groups_under_parent_repo_root():
+    """A worktree session and a normal session in the same repo share one root
+    node (the repo root), so worktrees don't fragment the tree."""
+    idx = _idx({
+        "main": {"project_label": "magento2", "name_cached": "trunk",
+                 "project_path": "/u/acme/magento2",
+                 "last_active_at": "2026-05-27T10:00:00Z"},
+        "wt": {"project_label": "magento2", "name_cached": "branch",
+               "project_path": "/u/acme/magento2/.claude/worktrees/feat",
+               "last_active_at": "2026-05-27T11:00:00Z"},
+    })
+    t = build_nested_tree(idx, _fs_data({}))
+    assert set(t.keys()) == {"/u/acme/magento2"}
+    sids = {sid for sid, _ in t["/u/acme/magento2"]["_sessions"]}
+    assert sids == {"main", "wt"}
+
+
+def test_build_nested_tree_folder_store_keyed_by_root():
+    """Empty folders are stored under the repo root, so two same-named repos
+    each get only their own stored folders."""
+    idx = _idx({
+        "a": {"project_label": "magento2", "name_cached": "x",
+              "project_path": "/u/acme/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+        "b": {"project_label": "magento2", "name_cached": "y",
+              "project_path": "/u/globex/magento2",
+              "last_active_at": "2026-05-27T10:00:00Z"},
+    })
+    fs = _fs_data({"/u/acme/magento2": ["planning"]})
+    t = build_nested_tree(idx, fs)
+    assert "planning" in t["/u/acme/magento2"]["_folders"]
+    assert "planning" not in t["/u/globex/magento2"]["_folders"]

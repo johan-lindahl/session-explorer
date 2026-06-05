@@ -234,6 +234,10 @@ def main(argv: list[str] | None = None) -> int:
     idx_path = _index_path()
     try:
         _index.migrate_to_v2(idx_path, _fs.default_path_for(idx_path))
+        # Re-key the folder store from repo basename to repo root (so same-named
+        # repos stop merging). Idempotent + version-gated; runs after v2 so the
+        # index it reads sessions from is up to date.
+        _index.migrate_folder_store_keys(idx_path, _fs.default_path_for(idx_path))
     except Exception as e:
         # Never block the CLI on migration; the next invocation retries. But
         # don't swallow the diagnostic — append to the same log the hook uses
@@ -241,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             log = os.path.expanduser("~/.claude/session-explorer.log")
             with open(log, "a", encoding="utf-8") as f:
-                f.write(f"warn: migrate_to_v2 failed: {e}\n")
+                f.write(f"warn: migration failed: {e}\n")
         except Exception:
             pass
     if args.cmd is None:
