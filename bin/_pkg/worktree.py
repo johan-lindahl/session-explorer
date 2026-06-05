@@ -24,6 +24,7 @@ def root_of(project_path: "str | None") -> "str | None":
 
 
 def _git(root: str, *args: str) -> subprocess.CompletedProcess:
+    """Run git at the repo *root* (not the worktree path)."""
     return subprocess.run(["git", "-C", root, *args],
                           capture_output=True, text=True)
 
@@ -51,7 +52,8 @@ def remove(project_path: "str | None") -> str:
     if rc == 0:
         _git(root, "worktree", "prune")
         return "removed"
-    # git refused. Dirty if the dir survives and is no longer clean.
+    # git refused. Dirty if the dir survives and is no longer clean; otherwise
+    # "failed" (e.g. a locked worktree) — callers treat both as "leave it alone".
     if os.path.isdir(project_path) and not removable(project_path):
         return "dirty"
     return "failed"

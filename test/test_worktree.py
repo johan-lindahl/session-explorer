@@ -25,6 +25,8 @@ def test_root_of_and_marker(tmp_path):
     p = str(tmp_path / "repo" / ".claude" / "worktrees" / "x")
     assert worktree.root_of(p) == str(tmp_path / "repo")
     assert worktree.root_of(str(tmp_path / "plain")) is None
+    assert worktree.root_of(None) is None
+    assert worktree.root_of("") is None
 
 
 def test_remove_clean_worktree_keeps_branch(tmp_path):
@@ -40,7 +42,8 @@ def test_remove_clean_worktree_keeps_branch(tmp_path):
 def test_remove_dirty_worktree_is_refused(tmp_path):
     repo = tmp_path / "repo"
     wt = _make_worktree(repo)
-    open(os.path.join(wt, "dirty.txt"), "w").write("uncommitted")  # untracked file
+    with open(os.path.join(wt, "dirty.txt"), "w") as f:  # untracked file
+        f.write("uncommitted")
     assert worktree.remove(wt) == "dirty"
     assert os.path.isdir(wt)                           # nothing removed
 
@@ -49,7 +52,8 @@ def test_removable_true_for_clean_false_for_dirty(tmp_path):
     repo = tmp_path / "repo"
     wt = _make_worktree(repo)
     assert worktree.removable(wt) is True
-    open(os.path.join(wt, "u.txt"), "w").write("x")
+    with open(os.path.join(wt, "u.txt"), "w") as f:
+        f.write("x")
     assert worktree.removable(wt) is False
 
 
