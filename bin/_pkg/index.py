@@ -85,26 +85,39 @@ def _git_branch(cwd: str) -> "str | None":
     return None
 
 
-_STANDARD_WINDOW = 200_000   # default context window for current Claude 4.x models
-_LARGE_WINDOW = 1_000_000    # the 1M-context tier (beta opt-in)
+_STANDARD_WINDOW = 200_000   # default window when the model isn't known to be larger
+_LARGE_WINDOW = 1_000_000    # the 1M-context window (GA since 2026-03-13)
 
-# Standard context window per model id. All current Claude 4.x models default to
-# 200K, so this is intentionally minimal — extend it when a model ships a
-# different *standard* window. The 1M-context tier is NOT encoded in the model
-# id, so _context_window infers it from observed usage instead.
-MODEL_WINDOWS: Dict[str, int] = {}
+# Context window per model id, matched by prefix so dated ids
+# (claude-haiku-4-5-20251001) and future point releases are covered. Opus 4.6+
+# and Sonnet 4.6 run at the 1M window in Claude Code: 1M context went GA (no beta
+# header) on 2026-03-13, and on Max/Team/Enterprise + API plans these models use
+# it automatically. The model id is therefore the denominator signal — the `[1m]`
+# alias suffix is stripped before the request, so it never reaches the JSONL.
+# Models not listed here (Haiku, pre-4.6 Opus, anything unknown) default to 200K.
+MODEL_WINDOWS: Dict[str, int] = {
+    "claude-opus-4-6": _LARGE_WINDOW,
+    "claude-opus-4-7": _LARGE_WINDOW,
+    "claude-opus-4-8": _LARGE_WINDOW,
+    "claude-sonnet-4-6": _LARGE_WINDOW,
+}
 
 
 def _context_window(model: "str | None", tokens: int) -> int:
     """Denominator for the context-usage %.
 
-    Start from the model's standard window (default 200K). If the session has
-    already used more tokens than that window, it must be running on the
-    1M-context tier — which the model id doesn't reveal — so promote to 1M.
-    This keeps ordinary sessions at 200K while stopping large (e.g. 600K+)
-    sessions from pegging uselessly at 100%.
+    Look up the model's window by id prefix (default 200K). This fixes the
+    denominator from the first turn for known-1M models, so the % no longer
+    jumps as usage crosses 200K. If a session has somehow used more tokens than
+    its mapped window, it must be on a larger one — promote to 1M. That overflow
+    backstop covers unknown/older models and any window we haven't mapped.
     """
-    base = MODEL_WINDOWS.get(model or "", _STANDARD_WINDOW)
+    base = _STANDARD_WINDOW
+    if model:
+        for prefix, window in MODEL_WINDOWS.items():
+            if model.startswith(prefix):
+                base = window
+                break
     if tokens > base:
         return _LARGE_WINDOW
     return base
