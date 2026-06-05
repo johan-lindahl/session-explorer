@@ -64,10 +64,12 @@ def size(project_path: "str | None") -> str:
     if not project_path or not os.path.isdir(project_path):
         return ""
     try:
+        # Bounded so a pathologically large tree can't freeze the caller (the
+        # preview pane computes this on the UI thread). On timeout: no size.
         out = subprocess.run(["du", "-sh", project_path],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, timeout=3)
         if out.returncode == 0 and out.stdout:
             return out.stdout.split("\t", 1)[0].strip()
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         pass
     return ""
