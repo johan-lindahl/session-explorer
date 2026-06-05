@@ -139,12 +139,15 @@ def collect_worktrees(index_path: str, *, idle_days: int = _WORKTREE_IDLE_DAYS,
                       dry_run: bool = False,
                       now: "datetime | None" = None) -> dict:
     """Reclaim idle, clean worktree directories (keeping branch + transcript;
-    resume rebuilds them). Skips live sessions and any dir newer than the idle
-    threshold; git refuses dirty trees (counted in skipped_dirty).
+    resume rebuilds them). "Idle" = the worktree dir's mtime is older than
+    `idle_days` (an approximate signal — git activity touches it). Skips live
+    sessions and fresh dirs; git refuses dirty trees.
 
     Returns {"removed_worktrees": [...], "skipped_dirty": int,
              "skipped_live": int, "dry_run": bool}. Does NOT mutate the index —
-    the transcript and the row stay; only the working directory is freed."""
+    the transcript and the row stay; only the working directory is freed.
+    `skipped_dirty` also absorbs the rare non-dirty `remove()` refusal (e.g. a
+    locked worktree) — both mean "left on disk", which is all the caller acts on."""
     now = now or datetime.now(timezone.utc)
     cutoff = now.timestamp() - idle_days * 86400
 
