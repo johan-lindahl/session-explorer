@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.11.2**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory.
+**Status:** Shipped — **v1.11.3**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead.
 
 ## Goals
 
@@ -145,7 +145,7 @@ When the visible tree is empty, the tree pane shows an actionable empty-state in
 Each session row shows:
 
 - **Age** since `last_active_at` (relative).
-- **Worktree indicator.** A narrow column between the name and the age. `_worktree_state(project_path)` classifies each session: blank for a normal checkout, a dark-green `⎇` for a git worktree (`<repo>/.claude/worktrees/<name>`) whose directory still exists, and a dark-red `⎇` for one whose directory was deleted (both shades muted to match). Deliberately separate from the left-column live glyph so the two are never confused. The `os.path.isdir` check runs once at tree-build time and is cached in the row's `worktree_state`, so a worktree deleted while the TUI is open turns red on the next rescan, not instantly.
+- **Worktree indicator.** A narrow column between the name and the age. `_worktree_state(project_path)` classifies each session: blank for a normal checkout, a dark-green `⎇` for a populated git worktree (`<repo>/.claude/worktrees/<name>`), and a dark-red `⎇` for one whose directory was deleted **or left empty** by a prior failed resume (both shades muted to match) — the empty-is-dead verdict matches `_dead_worktree_repo` so the indicator and the resume prompt agree. Deliberately separate from the left-column live glyph so the two are never confused. The isdir+listdir check runs once at tree-build time and is cached in the row's `worktree_state`, so a worktree deleted while the TUI is open turns red on the next rescan, not instantly. The one exception is **recreate-on-resume**: confirming the dead-worktree prompt rebuilds the worktree and immediately repaints that row green via `_set_worktree_state` (no rescan needed).
 - **Approx. tokens.** Derived from `cache_read_input_tokens` of the latest assistant message in the JSONL — accurate when caching is active. Falls back to `bytes / 4` when the session has no cached turns (early sessions, cache disabled). Always prefixed with `~` in the UI to signal it's an estimate.
 - **Context-window %.** The denominator is model-aware: `index._context_window(model, tokens)` starts from the model's standard window (`MODEL_WINDOWS`, default 200K) and promotes to 1M when observed tokens exceed the standard window — because the 1M-context tier is a beta opt-in that the model id does NOT encode, so it's inferred from usage. The session's model id (`jsonl.latest_model`, from `message.model` on the latest non-synthetic assistant line) is cached in the index and shown in the preview pane.
 - **Message count** (`wc -l` on the JSONL; always exact).
@@ -661,7 +661,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.11.2). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.11.3). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|

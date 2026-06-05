@@ -1396,6 +1396,44 @@ async def test_resume_dead_worktree_cancel_does_not_resume(tmp_path):
         assert getattr(app, "_resume_target", None) is None  # cancelled
 
 
+async def test_resume_dead_worktree_turns_glyph_live(tmp_path, monkeypatch):
+    """Confirming the recreate prompt (tmux dock path) recreates the worktree and
+    flips the indicator red→green in place, with no manual rescan."""
+    import json
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    repo = tmp_path / "proj"
+    _init_git_repo(repo)
+    dead_wt = str(repo / ".claude" / "worktrees" / "feat-x")  # dead: not created yet
+    idx = str(tmp_path / "i.json")
+    json.dump({"version": 2, "sessions": {"wt1": {
+        "project_label": "proj", "project_path": dead_wt, "name_cached": "wt-session",
+        "last_active_at": "2026-05-27T10:00:00Z", "tokens_estimate": 1,
+        "tokens_window_pct": 0, "message_count": 1, "first_prompt": "x"}}}, open(idx, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "start_window", lambda sid, cwd, label=None: 0)
+    monkeypatch.setattr(tuimod._tmux, "dock", lambda sid, focus=True: 0)
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        leaf = _find(app._tree.root, "wt-session")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        assert app._row_nodes["wt1"][0].data["worktree_state"] == "dead"  # red
+        await pilot.press("enter"); await pilot.pause()
+        app.screen.dismiss(True); await pilot.pause()
+        # Worktree recreated on disk → indicator now live (green), in place.
+        leaf2 = app._row_nodes["wt1"][0]
+        assert leaf2.data["worktree_state"] == "live"
+        assert "⎇" in str(leaf2.label)
+        import os as _os
+        assert _os.path.exists(_os.path.join(dead_wt, ".git"))  # real worktree
+
+
 # --- _PanelScreen dialog restyle (centered rounded panel on dimmed backdrop) ---
 
 from _pkg import tui as _tui
@@ -2423,10 +2461,11 @@ def test_worktree_state_root_is_none(tmp_path):
     assert _worktree_state("") is None
 
 
-def test_worktree_state_live_when_dir_exists(tmp_path):
+def test_worktree_state_live_when_dir_populated(tmp_path):
     from _pkg.tui import _worktree_state
     wt = tmp_path / "repo" / ".claude" / "worktrees" / "feature-x"
     wt.mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: ...\n")  # a real worktree is never empty
     assert _worktree_state(str(wt)) == "live"
 
 
@@ -2435,6 +2474,15 @@ def test_worktree_state_dead_when_dir_missing(tmp_path):
     # Marker present in the path, but the directory was never created.
     gone = tmp_path / "repo" / ".claude" / "worktrees" / "deleted"
     assert _worktree_state(str(gone)) == "dead"
+
+
+def test_worktree_state_dead_when_dir_empty(tmp_path):
+    from _pkg.tui import _worktree_state
+    # An empty dir (e.g. left by a prior failed resume) is dead, not live — so
+    # the indicator agrees with _dead_worktree_repo / the resume prompt.
+    empty = tmp_path / "repo" / ".claude" / "worktrees" / "empty"
+    empty.mkdir(parents=True)
+    assert _worktree_state(str(empty)) == "dead"
 
 
 def test_wt_cell_width_and_colors():
@@ -2467,6 +2515,7 @@ async def test_worktree_rows_show_glyph_in_tree(tmp_path):
     repo = tmp_path / "repo"
     live_wt = repo / ".claude" / "worktrees" / "alive"
     live_wt.mkdir(parents=True)
+    (live_wt / ".git").write_text("gitdir: ...\n")  # populated -> live
     dead_wt = repo / ".claude" / "worktrees" / "gone"  # never created -> dead
 
     idx = tmp_path / "index.json"

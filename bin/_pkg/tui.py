@@ -1078,6 +1078,9 @@ class SessionExplorerApp(App):
             def after(ok: bool) -> None:
                 if ok:
                     cwd = _resolve_resume_cwd(project_path) or os.path.expanduser("~")
+                    # The worktree was just recreated on disk — repaint the
+                    # indicator (green if it's now a real worktree) right away.
+                    self._set_worktree_state(sid, _worktree_state(project_path))
                     self._dock(sid, cwd, label, already_running=False)
                     self._poll_live()
             self.push_screen(ConfirmScreen(
@@ -1683,6 +1686,22 @@ class SessionExplorerApp(App):
                            self._ours_flag(sid))
             leaf.set_label(_row_label(sid, data, depth, glyph, data.get("worktree_state")))
 
+    def _set_worktree_state(self, sid: str, state: "str | None") -> None:
+        """Update one row's cached worktree state and repaint its glyph in place.
+
+        Lets resuming a dead worktree (which recreates it on disk) flip the
+        indicator red→green immediately, instead of staying stale until the next
+        full rescan. The cached state survives subsequent live-metadata refreshes
+        (they re-inject it), so the green sticks."""
+        node = self._row_nodes.get(sid)
+        if not node or not node[0].data:
+            return
+        leaf, depth = node
+        leaf.data["worktree_state"] = state
+        glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
+                       self._ours_flag(sid))
+        leaf.set_label(_row_label(sid, leaf.data, depth, glyph, state))
+
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /
         tokens populate and tick as the agent works. Plain (no threading) so it's
@@ -1875,13 +1894,14 @@ def _dead_worktree_repo(project_path: "str | None") -> "str | None":
 def _worktree_state(project_path: "str | None") -> "str | None":
     """Classify a session's working dir for the worktree indicator column.
 
-    Returns None for a root checkout (no worktree marker), "live" for a git
-    worktree whose directory still exists, "dead" for a worktree whose directory
-    has been removed. Pure except for the single isdir stat — callers cache the
-    result so the spinner/poll re-renders never hit the filesystem."""
+    Returns None for a root checkout (no worktree marker), "live" for a populated
+    git worktree, "dead" for one whose directory was removed — or left empty by a
+    prior failed resume (same "dead" verdict `_dead_worktree_repo` uses, so the
+    indicator and the resume prompt agree). Cheap (one isdir + one listdir);
+    callers cache the result so the spinner/poll re-renders never hit the FS."""
     if not project_path or _WORKTREE_MARKER not in project_path:
         return None
-    return "live" if os.path.isdir(project_path) else "dead"
+    return "live" if os.path.isdir(project_path) and os.listdir(project_path) else "dead"
 
 
 def _recreate_worktree(project_path: str, root: str) -> bool:
