@@ -23,6 +23,7 @@ from . import index as _index
 from . import snapshot as _snapshot
 from . import tmux as _tmux
 from . import usage as _usage
+from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path
 
@@ -1596,6 +1597,7 @@ class SessionExplorerApp(App):
         first_prompt / msgs / tokens fill in and tick as the agent works.
         """
         from . import live as _live
+        prev_live = set(self._live_states)
         try:
             new_states = _live.poll(self._live_path())
         except Exception:
@@ -1625,6 +1627,9 @@ class SessionExplorerApp(App):
                 self._restore_cursor_to_sid(sid)
             else:
                 self._relabel_live_rows()
+        ended = prev_live - set(new_states)
+        if ended:
+            self._maybe_offer_worktree_cleanup(ended)
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
@@ -1707,6 +1712,40 @@ class SessionExplorerApp(App):
         glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                        self._ours_flag(sid))
         leaf.set_label(_row_label(sid, leaf.data, depth, glyph, state))
+
+    def _maybe_offer_worktree_cleanup(self, ended: "set[str]") -> None:
+        """When the docked session just stopped and its worktree is clean, offer
+        to reclaim the directory — once per sid (tracked in _offered_cleanup).
+        Dirty or non-worktree sessions are silently left alone."""
+        sid = self._docked_sid
+        if sid is None or sid not in ended or sid in self._offered_cleanup:
+            return
+        node = self._row_nodes.get(sid)
+        path = (node[0].data or {}).get("project_path") if node else None
+        if not path or worktree.MARKER not in path or not worktree.removable(path):
+            return
+        self._offered_cleanup.add(sid)
+        size = self._wt_size_cache.get(sid) or worktree.size(path)
+
+        def after(ok: bool) -> None:
+            if not ok:
+                return
+            result = worktree.remove(path)
+            if result == "removed":
+                self._set_worktree_state(sid, "dead")
+                self._wt_size_cache.pop(sid, None)
+                self.notify(f"Worktree removed — {size} reclaimed.")
+            elif result == "dirty":
+                self.notify("Worktree has uncommitted changes — kept.",
+                            severity="warning")
+            else:
+                self.notify("Could not remove the worktree (see "
+                            "~/.claude/session-explorer.log).", severity="warning")
+
+        self.push_screen(ConfirmScreen(
+            f"Session '{sid[:8]}' ended. Remove its worktree to free {size}?\n"
+            f"{path}\n(The branch and transcript are kept; resume rebuilds it.)"),
+            after)
 
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /

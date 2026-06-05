@@ -2560,3 +2560,45 @@ def test_preview_text_hides_worktree_size_for_root_session():
     from _pkg.tui import _preview_text
     s = {"sid": "abc12345", "project_path": "/r/proj", "name_cached": "x"}
     assert "Worktree" not in _preview_text(s)
+
+
+@pytest.mark.asyncio
+async def test_docked_worktree_exit_offers_cleanup_once(tmp_path, monkeypatch):
+    """When the docked session stops and its worktree is clean, _poll_live offers
+    cleanup exactly once; confirming removes it and flips the glyph to dead."""
+    import json
+    from textual.screen import ModalScreen
+    from _pkg import tui as tuimod
+    from _pkg import live as livemod
+    from _pkg.tui import SessionExplorerApp
+
+    wt = str(tmp_path / "repo" / ".claude" / "worktrees" / "feat")
+    idx = str(tmp_path / "i.json")
+    json.dump({"version": 2, "sessions": {"s1": {
+        "project_label": "repo", "project_path": wt, "name_cached": "feat",
+        "last_active_at": "2026-06-01T10:00:00Z", "tokens_estimate": 1,
+        "tokens_window_pct": 0, "message_count": 1, "first_prompt": "x"}}}, open(idx, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+
+    removed = []
+    monkeypatch.setattr(tuimod.worktree, "removable", lambda p: True)
+    monkeypatch.setattr(tuimod.worktree, "remove",
+                        lambda p: removed.append(p) or "removed")
+
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "s1"
+        app._live_states = {"s1": "idle"}            # was live
+        # _poll_live does `from . import live as _live`, so patch the live module
+        # itself: poll now reports the session as stopped.
+        monkeypatch.setattr(livemod, "poll", lambda _p: {})
+        app._poll_live(); await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)   # cleanup offered
+        assert "s1" in app._offered_cleanup
+        app.screen.dismiss(True); await pilot.pause()
+        assert removed == [wt]                        # confirmed -> removed
+        # A second poll must NOT re-offer (guarded by _offered_cleanup).
+        app._poll_live(); await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)
