@@ -66,6 +66,18 @@ gh release list -L 3                          # confirm it shows as "Latest"
 - Release-note body mirrors the CHANGELOG entry; end with the `**Full changelog:**` link and the Claude Code attribution line (see prior releases via `gh release view v1.9.0 --json body`).
 - Title style: `vX.Y.Z — <headline>` (e.g. `v1.10.0 — TUI quality-of-life`).
 
+### Retroactive release (a newer version already shipped)
+
+When a tag lapsed and `main` has since moved past that version (happened with v1.12.0: v1.12.1 was released first), `--target main` would tag the wrong tree. Instead, tag the merge commit whose tree carries that version, push the tag, then create the release from the existing tag with `--latest=false` so the actual newest release stays Latest:
+
+```bash
+git tag vX.Y.Z <merge-commit>        # verify first: git show <sha>:bin/_pkg/__init__.py
+git push origin vX.Y.Z
+gh release create vX.Y.Z --latest=false --title "..." --notes-file /tmp/relnotes.md
+```
+
+(`gh release create --target <sha>` is rejected — "target_commitish is invalid" — which is why the tag is pushed first.)
+
 ## Checklist
 
 - [ ] Decide bump type (minor=feature, patch=fix)
