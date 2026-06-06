@@ -194,3 +194,31 @@ PY
   [ "$status" -eq 0 ]
   [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
 }
+
+# --- Phase 3: PreToolUse command-guard ---
+
+@test "pre-tool-use exits 0 and is silent on empty stdin" {
+  run bash -c "printf '' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
+}
+
+@test "pre-tool-use denies a guarded Bash command in an opted-in project" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/proj"
+  optin_repo "$REPO_DIR"
+  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"docker compose up -d\"},\"cwd\":\"$REPO_DIR\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); h=d['hookSpecificOutput']; assert h['permissionDecision']=='deny'; assert 'queue-run --resource root --' in h['permissionDecisionReason']"
+}
+
+@test "pre-tool-use is silent for an unguarded command" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/proj"
+  optin_repo "$REPO_DIR"
+  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"docker ps\"},\"cwd\":\"$REPO_DIR\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
+}
