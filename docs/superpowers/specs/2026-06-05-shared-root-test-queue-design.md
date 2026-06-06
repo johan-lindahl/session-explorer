@@ -191,23 +191,34 @@ so its filters are specified exactly, not as `--exclude .git`.
   slash) would match only the directory and let the worktree's `.git` **file** be
   copied into root, corrupting root's repo. `/.git` matches either. Rendered as
   `--filter='exclude /.git'` (and one per extra exclude).
-- **`protect: [...]`** — root-only paths that must never be overwritten or
-  deleted, rendered as rsync **protect** filters `--filter='protect /<path>'`
-  (protect affects deletion only). These are files that exist in root but not in
-  the worktree, so `--delete` would otherwise remove them. `/.git` is always
-  protected in addition to being excluded (belt-and-suspenders).
-- **Conservative default `protect`.** Defaults to `/.git`, `/.env`, `/.env.*`,
-  plus — derived once at setup and shown for confirmation — root's
-  **gitignored top-level entries** (caches, certs, local binaries), since
-  gitignored root files are exactly the "local, absent from worktree, would be
-  deleted" set. The user can prune the list in the editor.
-- **Runtime dry-run refusal (not just the §6 test panel).** Before the real
-  destructive rsync, `queue-run` runs `rsync --dry-run` and, if `--delete` would
-  remove any path **not** covered by `protect`/`exclude` (i.e. an untracked or
-  gitignored root-only file), it **refuses** and prints the would-delete list:
-  *"these root files would be deleted — add to `protect` or remove them."* This
-  closes the gap that the §5 transition guard (git-status-based) leaves open for
-  ignored files. A confirmed-safe sync proceeds without nagging.
+- **`protect: [...]`** — root-only paths to preserve **untouched** (neither
+  overwritten nor deleted). Implemented as **anchored exclude filters**
+  (`--filter='exclude /<path>'`), *not* rsync `protect`/`P` rules: a `P` rule
+  blocks receiver-side **deletion only**, so if the worktree also contains the
+  path it would still **overwrite** root's copy. `exclude` is the correct
+  primitive — it removes the path from the transfer *and* (with `--delete`) from
+  deletion, so root's version wins on both axes. `protect` and the `exclude` knob
+  therefore share one mechanism (anchored rsync excludes) and differ only in
+  intent: `exclude` drops worktree junk (`node_modules`, `/.git`) on the way
+  *in*; `protect` preserves a root-only file. `/.git` appears in both for clarity.
+- **Protected *baseline* vs prior-holder residue — what makes the reset safe.**
+  A `--delete` acquire must remove the *previous lease holder's* files (that is
+  the reset) while never touching genuine root-only/local files (`.env`, caches,
+  certs). They are distinguished by a **baseline captured at the first sandbox
+  transition** (real root → sandbox): the set of root files absent from the first
+  holder's worktree becomes the baseline, auto-added to `protect` and seeded from
+  `/.git`, `/.env`, `/.env.*`, and root's **gitignored top-level entries** (shown
+  for confirmation). A small per-resource **sandbox marker** records that the
+  resource is now in sandbox mode and the baseline is established.
+- **Dry-run refusal fires *only* at that first transition, never in steady
+  state.** At the first transition `queue-run` runs `rsync --dry-run`; any
+  would-delete path **not** already in the baseline is a candidate root-only file
+  → it **refuses** and lists them (*"these root files would be deleted — protect
+  or remove them"*) until the baseline is confirmed. Once in sandbox mode,
+  acquires `--delete` **freely** — prior-holder residue is *supposed* to go; only
+  the protected baseline survives. This reconciles the deletion-safety gate with
+  the "next acquire is the reset" model: the gate guards the **one** dangerous
+  flip, not every run.
 
 ### 3. CLI spine
 
@@ -263,9 +274,21 @@ caller's intent is preserved:
   reaping (§1).
 - **Release-hook failures don't strand the queue.** The `release` hook is
   **time-bounded**; if it fails or times out, `queue-run` still **releases the
-  ticket** and records the error in the ticket's final state / `queue-status`
-  (surfaced in the pane) rather than holding the lease open. A failed `release`
-  never blocks the next holder.
+  ticket** (removing it from the active queue so the next holder proceeds) and
+  writes the error to a separate, short-lived record — `…/<resource>/history/`
+  (last-N or TTL-pruned), **not** the now-deleted ticket — which `queue-status`
+  and the pane read. A failed `release` never blocks the next holder.
+
+**Waiting & cancellation.** A `queue-run` that hasn't acquired yet **holds its
+ticket** (its FIFO place) while waiting — on an earlier ticket *or* on a
+live-root block. `Ctrl-C`/`SIGINT` removes its ticket and leaves the line (the
+`finally` release). `queue-cancel` can drop **any waiting ticket**, including the
+head-of-line one stuck behind a live root session. Head-of-line blocking is *not*
+a special hazard for the live-root case: the exclusive-or rule blocks **all**
+worktree acquires while a root session is live, so every waiter is stalled by the
+session — not by the first ticket — and they all proceed in FIFO order once it
+ends (the accepted starvation tradeoff, §5). An optional `--timeout` bounds how
+long a `queue-run` waits before giving up and releasing its ticket.
 
 ### 5. The "root is exclusive-or" policy (only `kind: root-dir`)
 
@@ -298,9 +321,11 @@ This is what makes a destructive `sync` acquire safe. (Does **not** apply to
    would overwrite — stash/commit first"). But `git status` does **not** see
    ignored root-only files (`.env`, caches, certs, binaries), which `--delete`
    would still remove — so the **rsync `--dry-run` deletion refusal** (§2) is the
-   second, authoritative layer: it refuses on any would-delete path not covered by
-   `protect`/`exclude`, ignored or not. A *clean* root that passes both proceeds
-   without nagging.
+   second, authoritative layer: at this first transition it **captures the
+   protected baseline** and refuses on any would-delete path not yet protected,
+   ignored or not. Once the baseline is confirmed and the resource enters sandbox
+   mode, later acquires reset freely (§2) — this guard does not re-fire. A *clean*
+   root that passes both proceeds without nagging.
 4. **Prevention layer (only when the project has a `root-dir` resource).** The
    new-session dialog **defaults the worktree checkbox ON** and warns if the user
    tries to create a plain root session ("this project's root is a shared
@@ -411,10 +436,17 @@ command-guard nudge:
   **never build its own stack** (it collides on the well-known ports), and to run
   guarded commands via `queue-run`.
 - **`PreToolUse` Bash hook**, registered once at install, that **no-ops unless
-  the current repo is opted in**. For opted-in repos it matches the declared
-  `guard` patterns and **denies + redirects**: "re-run as `queue-run -- …`."
-  Denying (rather than silently wrapping) keeps the lease lifecycle inside the
-  one `queue-run` process. Fails open, never blocks startup.
+  the current repo is opted in**. The hook receives **raw shell text**, so
+  matching is defined concretely: split on `&&`, `||`, `;`, and `|` into
+  simple-command segments; for each segment strip a leading `cd … &&`, `VAR=val`
+  env-assignments, and `env`/`command`/`nohup`/`time` prefixes; resolve the
+  segment's executable **basename** and leading **subcommand tokens** and test
+  them against the `{exe, sub}` guard rules (§2). **Any** matching segment →
+  **deny + redirect** ("re-run as `queue-run -- …`"). It deliberately does **not**
+  descend into scripts, `make`/`npm` targets, or `bash -c "…"` bodies — those are
+  the acknowledged residual caught by the §6 detection flag. Denying (rather than
+  silently wrapping) keeps the lease lifecycle inside the one `queue-run` process.
+  Fails open, never blocks startup.
 - **Skill + `CLAUDE.md` snippet** for graceful cooperation — don't busy-spin,
   report queue position, understand sync-overwrite semantics, never boot a
   competing stack.
@@ -501,10 +533,17 @@ ticket held raises a transient `notify()` — *"⚠ out-of-lease access on
 GymCompanion/root"* — plus a subtle marker visible if the pane is open. No
 persistent banner.
 
-**Persistent pane visibility:** `q` is a sticky toggle. A single global boolean
-(`~/.claude/session-explorer-ui.json` → `{"queue_pane_visible": true}`) persists
-it across restarts; it only renders content for opted-in contexts, so a
-non-opted user never gets a stray pane.
+**Persistent pane visibility (global, but content-gated).** `q` is a sticky
+toggle persisted as a single global boolean
+(`~/.claude/session-explorer-ui.json` → `{"queue_pane_visible": true}`) — global,
+because the pane is a cross-project view, not per-project. To avoid a stray empty
+pane, **rendering is content-gated**: with the flag on, the pane takes space only
+when there is something to show — ≥1 active queue anywhere, or the
+currently-selected project has configured resources. Pressing `q` with nothing
+configured/active shows a one-line activation hint for *this* session (so the
+keypress isn't a no-op), but a persisted `true` with no content renders **nothing**
+on the next launch — so a curious never-opted user who toggled it once never
+inherits a permanent empty pane.
 
 **Open implementation details:** exact Textual link widget (click-action +
 copyable URL); pane height **content-sized** to the number of active queues
