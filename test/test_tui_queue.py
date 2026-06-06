@@ -442,3 +442,16 @@ async def test_dry_run_surfaces_transition_guard_for_dirty_root(
         await pilot.pause()
         out = str(screen.query_one("#test-out", Label).render()).lower()
         assert "uncommitted changes" in out
+
+
+@pytest.mark.asyncio
+async def test_queue_help_mentions_protect_and_guide(index_path):
+    from _pkg.tui import QueueHelpScreen, _queue_help_text, QUEUE_GUIDE_URL
+    text = _queue_help_text()
+    assert "protect" in text.lower()
+    assert "isolate" in text.lower()
+    # The full, copyable GitHub URL must be present as plain text (not only a
+    # repo-relative path and not hidden behind an OSC-8-only hyperlink).
+    assert QUEUE_GUIDE_URL in text
+    assert QUEUE_GUIDE_URL.startswith("https://github.com/")
+    assert QUEUE_GUIDE_URL.endswith("/docs/queue-guide.md")

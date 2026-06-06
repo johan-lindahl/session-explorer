@@ -1033,13 +1033,45 @@ class ResourceEditorScreen(_PanelScreen):
         self.query_one("#test-out", Label).update(f"{sev}health: {detail}[/]")
 
 
+QUEUE_GUIDE_URL = ("https://github.com/johan-lindahl/session-explorer"
+                   "/blob/main/docs/queue-guide.md")
+
+
+def _queue_help_text() -> str:
+    return "\n".join([
+        "[b]Shared resources — quick help[/]",
+        "",
+        "[b]Isolate first.[/] If you can give each worktree its own port, DB, or",
+        "derived-data dir, do that instead — this engine is for singletons that",
+        "genuinely can't be isolated (one bind-mounted root, one simulator, one DB).",
+        "",
+        "[b]sync is destructive.[/] A root-dir 'sync' acquire runs",
+        "[b]rsync --delete[/] from your worktree over the shared root — it blows",
+        "away whatever the previous holder left. [b]protect[/] lists root-only",
+        "paths to keep untouched (secrets, certs); [b].git/.env[/] are protected",
+        "by default. Use the [b]dry-run[/] test (ctrl-r) to see deletions first.",
+        "",
+        "[b]Guards[/] are matched on the parsed command (exe + subcommand), never",
+        "as substrings. Test a command with ctrl-t before relying on it.",
+        "",
+        # Plain, copyable URL (always visible) wrapped in a best-effort click
+        # link — terminals without OSC-8 still show the bare URL to copy.
+        "Full guide (opens / copyable):",
+        f"  [link={QUEUE_GUIDE_URL}]{QUEUE_GUIDE_URL}[/link]",
+    ])
+
+
 class QueueHelpScreen(_PanelScreen):
-    """Filled in the help task; placeholder."""
+    """Offline shared-resource help. esc closes."""
+
     BINDINGS = [Binding("escape", "dismiss(None)", "Close")]
 
     def compose(self) -> ComposeResult:
-        yield Vertical(Label("Queue help (TODO)", classes="dialog-title"),
-                       Label("esc close", classes="dialog-hint"), id="panel")
+        yield Vertical(
+            Static(_queue_help_text()),
+            Label("esc close", classes="dialog-hint"),
+            id="panel",
+        )
 
 
 class RescanScreen(_PanelScreen):
