@@ -344,3 +344,101 @@ async def test_malformed_wait_for_is_refused_not_dropped(index_path, tmp_path, m
         assert "readiness" in str(screen.query_one("#res-error", Label).render()).lower()
     # Save was refused → nothing persisted.
     assert queue_config.get_resource(qcfg, pid, "root") is None
+
+
+@pytest.mark.asyncio
+async def test_editor_guard_tester_uses_edited_guard(index_path, tmp_path, monkeypatch):
+    # The tester must reflect the CURRENT form (Finding 4), so set the guard via
+    # the form, not just a template key, and confirm it's the matched rule set.
+    import subprocess
+    from _pkg import project_id
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-guard", TextArea).text = "docker compose up"
+        screen.query_one("#test-cmd", Input).value = "docker compose up -d"
+        screen.action_test_guard()
+        await pilot.pause()
+        assert "QUEUED" in str(screen.query_one("#test-out", Label).render()).upper()
+        screen.query_one("#test-cmd", Input).value = "docker ps"
+        screen.action_test_guard()
+        await pilot.pause()
+        assert "FREE" in str(screen.query_one("#test-out", Label).render()).upper()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_refuses_when_source_equals_root(index_path, tmp_path, monkeypatch):
+    # Finding 3: standing on the main root, source == dest, so a naive dry-run
+    # would report "no deletions" (false safety). The panel must refuse instead.
+    import subprocess
+    from _pkg import project_id
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # project_root is the main root; the editor derives path = main_root too,
+        # so source == dest.
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen._template_key = "root-env"     # root-dir · sync
+        screen.action_dry_run()
+        await pilot.pause()
+        out = str(screen.query_one("#test-out", Label).render()).lower()
+        assert "worktree source" in out
+        assert "no deletions" not in out
+
+
+@pytest.mark.asyncio
+async def test_dry_run_surfaces_transition_guard_for_dirty_root(
+        index_path, tmp_path, monkeypatch):
+    # Finding 1: the dry-run must show the exclusive-or check, not just deletes.
+    # From a worktree source over a DIRTY main root, it surfaces the uncommitted-
+    # changes refusal that the real acquire would hit.
+    import subprocess
+    from _pkg import project_id
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "tracked.txt").write_text("v1")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init", "-q"],
+                   check=True, env=env)
+    wt = tmp_path / "repo-feat"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", str(wt), "-b", "feat"],
+                   check=True, env=env)
+    (repo / "tracked.txt").write_text("dirty")     # uncommitted change in root
+    pid = project_id.project_id(str(wt))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Source = the worktree (distinct from the main-root dest).
+        screen = ResourceEditorScreen(project_root=str(wt), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen._template_key = "root-env"
+        screen.action_dry_run()
+        await pilot.pause()
+        out = str(screen.query_one("#test-out", Label).render()).lower()
+        assert "uncommitted changes" in out

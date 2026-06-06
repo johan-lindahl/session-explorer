@@ -782,6 +782,9 @@ class ResourceEditorScreen(_PanelScreen):
     BINDINGS = [
         Binding("escape", "dismiss(False)", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+t", "test_guard", "Test guard"),
+        Binding("ctrl+r", "dry_run", "Dry-run"),
+        Binding("ctrl+h", "health", "Health"),
     ]
 
     def __init__(self, *, project_root, project_id, config_path, resource_id) -> None:
@@ -842,6 +845,12 @@ class ResourceEditorScreen(_PanelScreen):
             Input(value=format_wait_for(base.get("wait_for"))[1],
                   placeholder="readiness timeout seconds (default 60)", id="res-wait-timeout"),
             Label("", id="res-error", classes="dialog-hint"),
+            Label("Test panel", classes="dialog-title"),
+            Input(placeholder="command to test against the guard", id="test-cmd"),
+            Label("", id="test-out", classes="dialog-hint"),
+            Label("Dry-run is safe only for sync and needs a worktree source "
+                  "distinct from root; custom shells can't be simulated.",
+                  classes="dialog-hint"),
             Label("ctrl-s save · ctrl-t guard · ctrl-r dry-run · ctrl-h health · esc cancel",
                   classes="dialog-hint"),
             id="panel",
@@ -956,6 +965,72 @@ class ResourceEditorScreen(_PanelScreen):
             self.query_one("#res-error", Label).update(f"[red]{e}[/]")
             return
         self.dismiss(True)
+
+    def action_test_guard(self) -> None:
+        from . import guard_match as _gm
+        # Build from the CURRENT form (edits + existing saved guard), not the
+        # bare template — otherwise an edited or existing guard isn't tested.
+        rules = self._build_resource().get("guard") or []
+        cmd = self.query_one("#test-cmd", Input).value.strip()
+        if not cmd:
+            return
+        if _gm.matches(cmd, rules):
+            self.query_one("#test-out", Label).update("[yellow]→ QUEUED (guarded)[/]")
+        else:
+            self.query_one("#test-out", Label).update("[green]→ RUNS FREE (unguarded)[/]")
+
+    def action_dry_run(self) -> None:
+        """rsync --dry-run preview for sync resources: deletions PLUS the
+        exclusive-or check (spec §6) — a live root session and/or a dirty root
+        that would block/refuse the real acquire, surfaced before the user trusts
+        the preview."""
+        from . import qsync as _qs, exclusive as _ex
+        res = self._build_resource()
+        if res.get("acquire") != "sync":
+            self.query_one("#test-out", Label).update(
+                "[dim]dry-run only applies to acquire=sync[/]")
+            return
+        # A real lease syncs from a WORKTREE over root. If the panel's source
+        # (the selected node) is the root itself, rsync would diff root against
+        # root and report "no deletions" — false safety. Refuse rather than lie.
+        src = self._project_root
+        if os.path.realpath(src) == os.path.realpath(res["path"]):
+            self.query_one("#test-out", Label).update(
+                "[yellow]dry-run needs a worktree source distinct from root — "
+                "open this panel from a worktree session to preview deletions[/]")
+            return
+        lines = []
+        # Exclusive-or check (spec §6): these would block/refuse the real acquire.
+        # NB: _live_path() lives on the App, not this modal screen — use self.app.
+        block = _ex.live_root_session(self.app._live_path(), res["path"])
+        if block:
+            lines.append(f"[red]⛔ root held by live session ‹{block.get('name')}› "
+                         f"— acquire would block[/]")
+        tg = _ex.transition_guard(res["path"])
+        if tg:
+            lines.append(f"[yellow]{tg}[/]")
+        sync = res.get("sync", {})
+        try:
+            dels = _qs.dry_run_deletions(src, res["path"],
+                                         exclude=sync.get("exclude", []),
+                                         protect=sync.get("protect", []))
+        except _qs.SyncDryRunError as e:
+            lines.append(f"[red]dry-run failed: {e}[/]")
+            self.query_one("#test-out", Label).update("\n".join(lines))
+            return
+        if dels:
+            shown = ", ".join(dels[:6]) + (" …" if len(dels) > 6 else "")
+            lines.append(f"[red]would DELETE {len(dels)}: {shown}[/]")
+        else:
+            lines.append("[green]no deletions[/]")
+        self.query_one("#test-out", Label).update("\n".join(lines))
+
+    def action_health(self) -> None:
+        from . import probes as _p
+        cmd = self.query_one("#res-health", Input).value.strip() or None
+        ok, detail = _p.health_check(cmd)
+        sev = "[green]" if ok else "[red]"
+        self.query_one("#test-out", Label).update(f"{sev}health: {detail}[/]")
 
 
 class QueueHelpScreen(_PanelScreen):
