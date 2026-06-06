@@ -64,7 +64,7 @@ fi
 # --- Record the session into the index ---
 if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
   if [ -n "${SID}" ] && [ -n "${TPATH}" ] && [ -n "${CWD}" ]; then
-    "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" 2>>"${LOG}" || log "warn: index --record failed for ${SID}"
+    "${CLI}" index --record "${SID}" "${TPATH}" "${CWD}" >>"${LOG}" 2>&1 || log "warn: index --record failed for ${SID}"
   fi
 
   # --- Retention GC: only when the user opted in (backup present), at most once
@@ -81,6 +81,15 @@ if [ -n "${CLI}" ] && [ -x "${CLI}" ]; then
   fi
 else
   log "warn: session-explorer CLI not found; CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-(unset)}; ~/.local/bin checked; PATH checked"
+fi
+
+# --- Shared-resource awareness (Phase 3, spec section 8) ---
+# For opted-in projects, inject SessionStart additionalContext telling the agent
+# the resource is shared + warm and to use queue-run. queue-context prints the
+# hookSpecificOutput JSON (or nothing) and fails open; this is the ONLY thing the
+# hook writes to stdout (index --record above is routed to the log).
+if [ -n "${CLI}" ] && [ -x "${CLI}" ] && [ -n "${CWD}" ]; then
+  "${CLI}" queue-context --cwd "${CWD}" 2>>"${LOG}" || true
 fi
 
 exit 0

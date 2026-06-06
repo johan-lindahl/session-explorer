@@ -34,20 +34,47 @@ hooks = data.setdefault("hooks", {})
 
 start_cmd = os.path.join(repo, "hooks", "session-start.sh")
 live_cmd = os.path.join(repo, "hooks", "session-live.sh")
+pretool_cmd = os.path.join(repo, "hooks", "pre-tool-use.sh")
 
 # Idempotent: a hook entry is "ours" if its command points at one of our scripts.
-_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh")
+_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh",
+            "pre-tool-use.sh")
+# Concrete hook-script basenames. Used when pruning sub-hooks INSIDE a matcher
+# group, where the broad "session-explorer" substring in _MARKERS could over-match
+# a user hook whose path merely contains "session-explorer". Our own nested hooks
+# are always one of these scripts, so narrowing loses no coverage.
+_HOOK_SCRIPTS = ("session-start.sh", "session-live.sh", "pre-tool-use.sh")
 
-def _is_ours(h):
-    return isinstance(h, dict) and any(
-        m in str(h.get("command", "")) for m in _MARKERS
-    )
+def _cmd_is_ours(cmd):           # flat top-level entries: our dedicated entries
+    return any(m in str(cmd) for m in _MARKERS)
+
+def _sub_is_ours(cmd):           # nested sub-hooks: narrow, never over-match users
+    return any(m in str(cmd) for m in _HOOK_SCRIPTS)
 
 def _strip_ours(evt):
+    """Drop our hook entries, preserving user hooks. Flat entries: drop if the
+    command is ours. Nested matcher-group entries: prune only our nested
+    command-hooks (matched by concrete script name, not the broad marker) and keep
+    the group if any user hooks remain (so a shared Bash group never loses the
+    user's hook). Fully-ours groups are dropped."""
     vals = hooks.get(evt)
     if not isinstance(vals, list):
         return []
-    return [h for h in vals if not _is_ours(h)]
+    out = []
+    for h in vals:
+        if not isinstance(h, dict):
+            out.append(h)
+            continue
+        if "hooks" in h:
+            subs = h.get("hooks") or []
+            kept = [s for s in subs
+                    if not (isinstance(s, dict) and _sub_is_ours(s.get("command", "")))]
+            if kept:
+                out.append(dict(h, hooks=kept) if len(kept) != len(subs) else h)
+            # else: group emptied of all our hooks -> drop the group
+        elif not _cmd_is_ours(h.get("command", "")):
+            out.append(h)
+    return out
 
 # Lifecycle event set is mirrored in bin/_pkg/uninstall.py (_HOOK_EVENTS) and
 # .claude-plugin/plugin.json; keep all three in sync.
@@ -68,13 +95,20 @@ hooks["Notification"] = _strip_ours("Notification") + [
 hooks["SessionEnd"] = _strip_ours("SessionEnd") + [
     {"matchers": [], "command": live_cmd}]
 
+# PreToolUse command-guard (Phase 3). Use the documented nested matcher-group
+# form (matching plugin.json) so the guard actually fires on plain installs.
+hooks["PreToolUse"] = _strip_ours("PreToolUse") + [
+    {"matcher": "Bash",
+     "hooks": [{"type": "command", "command": pretool_cmd}]}]
+
 with open(settings_path, "w") as f:
     json.dump(data, f, indent=2)
 
-print(f"Updated {settings_path}: registered SessionStart + live-session hooks")
+print(f"Updated {settings_path}: registered SessionStart + live-session + "
+      "PreToolUse guard hooks")
 PY
 
-chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/hooks/session-live.sh" "${REPO_DIR}/bin/session-explorer"
+chmod +x "${REPO_DIR}/hooks/session-start.sh" "${REPO_DIR}/hooks/session-live.sh" "${REPO_DIR}/hooks/pre-tool-use.sh" "${REPO_DIR}/bin/session-explorer"
 
 echo
 echo "Install complete. Start a new Claude session; run /session-explorer:open to open the explorer."

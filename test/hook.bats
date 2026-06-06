@@ -153,3 +153,72 @@ EOF
   [ ! -f "$STUB" ]
   unset SESSION_EXPLORER_PROBE
 }
+
+# --- Phase 3: SessionStart additionalContext ---
+
+# Opt a git repo into the queue with a guarded 'root' resource.
+optin_repo() {
+  local repo="$1"
+  git init -q "$repo"
+  python3 - "$REPO" "$repo" "$HOME/.claude/session-explorer-queue-config.json" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/bin")
+from _pkg import project_id, queue_config
+repo, cfg = sys.argv[2], sys.argv[3]
+pid = project_id.project_id(repo)
+queue_config.add_resource(
+    cfg, project_id=pid, display_path=repo, resource_id="root",
+    resource={"kind": "root-dir", "path": repo,
+              "guard": [{"exe": "docker", "sub": ["compose", "up"]}],
+              "run_in": "root", "acquire": "sync", "release": "none",
+              "sync": {"delete": True, "exclude": ["/.git"], "protect": ["/.git"]}})
+PY
+}
+
+@test "session-start emits additionalContext for an opted-in project" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/proj"
+  optin_repo "$REPO_DIR"
+  PAYLOAD="{\"session_id\":\"01CTX\",\"transcript_path\":\"$HOME/01CTX.jsonl\",\"cwd\":\"$REPO_DIR\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/session-start.sh'"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['hookSpecificOutput']['hookEventName']=='SessionStart'; assert 'queue-run' in d['hookSpecificOutput']['additionalContext']"
+}
+
+@test "session-start emits nothing on stdout for a non-opted-in project" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/plain"
+  git init -q "$REPO_DIR"
+  PAYLOAD="{\"session_id\":\"01PLN\",\"transcript_path\":\"$HOME/01PLN.jsonl\",\"cwd\":\"$REPO_DIR\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/session-start.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
+}
+
+# --- Phase 3: PreToolUse command-guard ---
+
+@test "pre-tool-use exits 0 and is silent on empty stdin" {
+  run bash -c "printf '' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
+}
+
+@test "pre-tool-use denies a guarded Bash command in an opted-in project" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/proj"
+  optin_repo "$REPO_DIR"
+  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"docker compose up -d\"},\"cwd\":\"$REPO_DIR\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); h=d['hookSpecificOutput']; assert h['permissionDecision']=='deny'; assert 'queue-run --resource root --' in h['permissionDecisionReason']"
+}
+
+@test "pre-tool-use is silent for an unguarded command" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/proj"
+  optin_repo "$REPO_DIR"
+  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"docker ps\"},\"cwd\":\"$REPO_DIR\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
+}

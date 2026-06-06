@@ -110,3 +110,48 @@ print('ok')
   [ ! -f "$HOME/.claude/session-explorer-index.json" ] # purged
   [ ! -f "$HOME/.claude/session-explorer-folders.json" ]
 }
+
+@test "uninstall strips the PreToolUse guard (flat or nested)" {
+  bash "$REPO/install.sh"
+  bash "$REPO/uninstall.sh"
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+pt = d.get('hooks', {}).get('PreToolUse', [])
+cmds = []
+for h in pt:
+    if h.get('command'):
+        cmds.append(h['command'])
+    for sub in h.get('hooks', []) or []:
+        if sub.get('command'):
+            cmds.append(sub['command'])
+assert not any('pre-tool-use.sh' in c for c in cmds), pt
+print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "uninstall preserves a shared-group user hook (even one whose path contains 'session-explorer')" {
+  mkdir -p "$HOME/.claude"
+  python3 -c "
+import json, os
+json.dump({'hooks': {'PreToolUse': [
+    {'matcher': 'Bash', 'hooks': [
+        {'type': 'command', 'command': '/opt/session-explorer-helper/audit.sh'},
+        {'type': 'command', 'command': '$REPO/hooks/pre-tool-use.sh'}]}]}},
+    open(os.path.expanduser('~/.claude/settings.json'), 'w'))
+"
+  bash "$REPO/uninstall.sh"
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+pt = d.get('hooks', {}).get('PreToolUse', [])
+cmds = [s.get('command','') for h in pt for s in h.get('hooks', []) or []]
+assert any('audit.sh' in c for c in cmds), pt   # user hook preserved despite 'session-explorer' in path
+assert not any('pre-tool-use.sh' in c for c in cmds), pt   # ours removed
+print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}

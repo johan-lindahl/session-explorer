@@ -55,6 +55,16 @@ These are the constraints to preserve — violating any breaks the spec's contra
   first sandbox transition until untracked/ignored would-delete paths are
   classified into `protect`/`allow_delete`. Never reintroduce `--delete-excluded`
   or rsync `P`/`protect` rules. See `SPEC.md` → "Shared-resource lease engine".
+- **Phase-3 awareness/enforcement is advisory and fail-open.** The SessionStart
+  `additionalContext` branch (inside the already-registered `session-start.sh`,
+  via `queue-context`) and the new `PreToolUse` Bash hook (`hooks/pre-tool-use.sh`
+  → `queue-guard`) only *nudge* — both emit nothing and exit 0 on any error, a
+  false deny being worse than a missed guard. Decision text + guard matching live
+  in `bin/_pkg/queue_awareness.py`, reusing `guard_match.matches` (never a
+  substring regex). The `PreToolUse` hook is new wiring: registered in
+  `.claude-plugin/plugin.json` **and** `install.sh`, torn down in `uninstall.py`
+  (`_HOOK_MARKERS`/`_HOOK_EVENTS`) — keep all three in sync. Wrappers that hide a
+  guarded command (`make`/`npm`) are an accepted blind spot.
 
 ## Commands
 

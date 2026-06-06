@@ -60,3 +60,29 @@ sessions, in shared-root projects — the new-session dialog defaults to this.
 In the explorer, select a project and press **s**. Add a resource from a
 template, edit its fields, test the guard and dry-run, and save. The Queues pane
 (**q**) shows live holders and waiters across every opted-in project.
+
+## Cooperating as an agent
+
+If you are a Claude session working in a project that shares singleton resources,
+the SessionStart hook already told you which resources exist. To cooperate:
+
+- **Never boot your own copy of a shared stack / server / database.** It is
+  already running and warm; a second copy collides on its fixed ports and paths.
+- **Run guarded commands through a lease:**
+  `session-explorer queue-run --resource <name> -- <command>`. queue-run takes
+  the lease (waiting in FIFO order if it's busy), runs the command, and releases.
+- **Don't busy-spin or force a busy resource.** Report your queue position
+  (`session-explorer queue-status`) and wait.
+- **Expect a `sync` lease to overwrite the shared root** with your worktree's
+  files on acquire. Keep secrets / local-only files out of tracked paths.
+
+### CLAUDE.md snippet (copy into an opted-in project)
+
+```markdown
+## Shared resources
+
+This repo shares singleton resources across worktrees via session-explorer.
+- Do NOT start your own stack/server/db — it is already warm and will collide.
+- Run guarded commands as: `session-explorer queue-run --resource <name> -- <cmd>`.
+- Check who holds a resource with `session-explorer queue-status`.
+```

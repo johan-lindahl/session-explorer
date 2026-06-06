@@ -109,6 +109,18 @@ def build_parser() -> argparse.ArgumentParser:
     qcancel.add_argument("--sid", required=True, help="Session id of the waiter.")
     qcancel.add_argument("--reason", default="cancelled by user")
 
+    qctx = sub.add_parser(
+        "queue-context",
+        help="Print SessionStart additionalContext for an opted-in project "
+             "(used by the SessionStart hook). Silent + fail-open otherwise.")
+    qctx.add_argument("--cwd", required=True,
+                      help="Session cwd used to resolve the project.")
+
+    sub.add_parser(
+        "queue-guard",
+        help="Read a PreToolUse payload on stdin; emit a deny+redirect for "
+             "guarded Bash commands (used by the PreToolUse hook). Fails open.")
+
     uninstall_p = sub.add_parser(
         "uninstall",
         help="Restore cleanupPeriodDays and remove session-explorer's files.")
@@ -350,10 +362,65 @@ def _cmd_queue_cancel(args) -> int:
     return 1
 
 
+def _cmd_queue_context(args) -> int:
+    """Emit a SessionStart additionalContext JSON line for opted-in projects.
+    Fails open: any error -> no output, exit 0 (never disrupt session start)."""
+    import json as _json
+    try:
+        from . import queue_awareness as _qa
+        text = _qa.session_context(_queue_config_path(), args.cwd)
+        if text:
+            print(_json.dumps({"hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": text}}))
+    except Exception:
+        pass
+    return 0
+
+
+def _cmd_queue_guard(args) -> int:
+    """Read a PreToolUse payload on stdin; deny+redirect a guarded Bash command.
+    Fails open: any error (bad JSON, no config, parse ambiguity) -> no output,
+    exit 0, tool proceeds. A false deny is worse than a missed guard (spec
+    section 8)."""
+    import json as _json
+    try:
+        raw = sys.stdin.read()
+        payload = _json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+            return 0
+        command = (payload.get("tool_input") or {}).get("command") or ""
+        # Resolve strictly from the payload's cwd. Do NOT fall back to
+        # os.getcwd(): the hook process's cwd is set by Claude Code (plugin /
+        # install context), so guessing it could deny against the WRONG opted-in
+        # project. No trustworthy cwd -> fail open (allow).
+        cwd = payload.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            return 0
+        from . import queue_awareness as _qa
+        reason = _qa.guard_reason(_queue_config_path(), command, cwd)
+        if reason:
+            print(_json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason}}))
+    except Exception:
+        pass
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from . import folder_store as _fs
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Hook subcommands are on the critical path (SessionStart, and every
+    # PreToolUse Bash call). Keep them cheap: dispatch before the global index /
+    # folder migrations below, which they don't need, so a Bash tool call never
+    # pays migration overhead just to evaluate the guard.
+    if args.cmd == "queue-context":
+        return _cmd_queue_context(args)
+    if args.cmd == "queue-guard":
+        return _cmd_queue_guard(args)
     # Run schema migration once per invocation (idempotent, no-op when the
     # index file doesn't exist yet, so fresh repos aren't materialised here).
     idx_path = _index_path()

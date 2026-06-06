@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.13.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision; v1.12.0 adds reversible worktree cleanup — `w` to reclaim a stopped worktree's directory, an offer when a docked worktree session exits clean, and `--gc` pruning of idle (>14d) clean worktrees, all keeping the branch + transcript so resume rebuilds; v1.12.1 makes the explorer immune to legacy basename folder-store keys re-added by a stale older hook (render-time folding + self-healing re-key), which had caused ghost project nodes and spurious parent-prefixed labels; v1.13.0 adds the shared-resource lease engine's TUI surface (Phase 2) — a read-only Queues pane (`q`), per-project resource setup/editor dialogs (`s`, template catalog + destructive-`sync` dry-run test panel), the `x`-to-exit rebind, new-session worktree auto-slug + worktree-default-on for `root-dir` projects, a best-effort out-of-lease detection toast, offline `?` help, and `docs/queue-guide.md`.
+**Status:** Shipped — **v1.14.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision; v1.12.0 adds reversible worktree cleanup — `w` to reclaim a stopped worktree's directory, an offer when a docked worktree session exits clean, and `--gc` pruning of idle (>14d) clean worktrees, all keeping the branch + transcript so resume rebuilds; v1.12.1 makes the explorer immune to legacy basename folder-store keys re-added by a stale older hook (render-time folding + self-healing re-key), which had caused ghost project nodes and spurious parent-prefixed labels; v1.13.0 adds the shared-resource lease engine's TUI surface (Phase 2) — a read-only Queues pane (`q`), per-project resource setup/editor dialogs (`s`, template catalog + destructive-`sync` dry-run test panel), the `x`-to-exit rebind, new-session worktree auto-slug + worktree-default-on for `root-dir` projects, a best-effort out-of-lease detection toast, offline `?` help, and `docs/queue-guide.md`; v1.14.0 adds the shared-resource lease engine's awareness & command-guard layer (Phase 3) — SessionStart `additionalContext` for opted-in projects (`queue-context`) and a fail-open `PreToolUse` Bash hook (`pre-tool-use.sh` → `queue-guard`) that redirects guarded commands to `queue-run`, single-sourced in `queue_awareness.py`.
 
 ## Goals
 
@@ -649,6 +649,18 @@ Phase-3 hook).
   click action. Full guide: `docs/queue-guide.md` (added to the release
   checklist so it can't silently diverge).
 
+### Agent awareness & command-guard (Phase 3)
+
+**Phase 3 (shipped):** awareness + command-guard. The SessionStart hook injects
+`additionalContext` for opted-in projects (via `session-explorer queue-context`);
+a new `PreToolUse` Bash hook (`hooks/pre-tool-use.sh` → `queue-guard`) denies a
+guarded command and redirects it to `queue-run`. Both fail open. Decision text
+and guard matching are single-sourced in `bin/_pkg/queue_awareness.py` (reusing
+`guard_match`). Accepted v1 blind spot: wrappers (`make`/`npm`) that hide a
+guarded command are not caught — mitigated by the awareness injection, not the
+hook. The `PreToolUse` hook is new install wiring, mirrored across
+`.claude-plugin/plugin.json`, `install.sh`, and `uninstall.py`.
+
 ## Disabling native auto-cleanup
 
 **Opt-in.** Modifying the user's `settings.json` without consent is a marketplace-review concern, so the plugin does NOT neutralise native cleanup automatically. The TUI asks on first launch (`tui.on_mount` → `retention.enable`/`retention.decline`); neither the `SessionStart` hook nor `install.sh` ever touches `settings.json`. Only when the user agrees is `cleanupPeriodDays` in `~/.claude/settings.json` set to `36500` (100 years) — with the prior value backed up — so Claude's expiry never touches user sessions and the plugin's `session-explorer index --gc` does deletion instead:
@@ -784,7 +796,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.13.0). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.14.0). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|
