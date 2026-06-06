@@ -151,9 +151,14 @@ paid once.
 
 ### 2. Per-project config — declarative, per-user, never committed
 
-Lives per-user in `~/.claude/` keyed by project path (consistent with the
-index/folder stores), **not** committed to the repo — invisible to teammates who
-don't use the explorer or don't work in parallel worktrees.
+Lives per-user in `~/.claude/`, **keyed by the same canonical project-id as the
+queue store** (§1) — *not* a raw cwd path. A raw-path key would mismatch: a
+symlinked checkout, a subdirectory cwd, or a worktree resolves (via the canonical
+helper) to a queue-id that a raw-path config key wouldn't match, leaving a queue
+with no config. The human-readable project path is stored as **display
+metadata**. Otherwise consistent with the index/folder stores; **not** committed
+to the repo — invisible to teammates who don't use the explorer or don't work in
+parallel worktrees.
 
 A project opts in by declaring **one or more resources**. "Opted in" simply means
 "has ≥1 resource." Each resource carries the parameter model below.
@@ -167,6 +172,7 @@ A project opts in by declaring **one or more resources**. "Opted in" simply mean
 | `guard` | commands that must hold the lease — matched on **parsed argv** (executable basename + required subcommand tokens), not substring regex (see below) | **core** |
 | `run_in` | working directory for the command — `root` or `worktree` | **core** |
 | `acquire` / `release` | lifecycle hooks; each = a **strategy**: `sync` \| `none` \| `command` (arbitrary shell) | **core** |
+| `release_required` | if true, a failed `release` hook makes `queue-run` exit non-zero (for artifact/result copy-back); ticket still released either way | **core** |
 | `sync{delete,exclude,protect}` | the `sync` strategy's knobs (see below) | **core** |
 | `health` | command/probe answering "is the resource up?" — v1 **detects + warns**, does not auto-start | **core** |
 | `wait_for` | readiness probe (port/URL/command) + timeout, run after acquire, before the command | **core** |
@@ -212,29 +218,30 @@ so its filters are specified exactly, not as `--exclude .git`.
   therefore share one mechanism (anchored rsync excludes) and differ only in
   intent: `exclude` drops worktree junk (`node_modules`, `/.git`) on the way
   *in*; `protect` preserves a root-only file. `/.git` appears in both for clarity.
-- **Protected *baseline* vs prior-holder residue — what makes the reset safe.**
-  A `--delete` acquire must remove the *previous lease holder's* files (that is
-  the reset) while never touching genuine root-only/local files (`.env`, caches,
-  certs). The baseline is therefore defined **purely from git**, *not* from a
-  diff against the first holder's worktree: it is the set of root's
-  **gitignored + untracked** paths (`git status --ignored --porcelain` /
-  `git ls-files --others`), captured at the **first sandbox transition** and
-  auto-added to `protect` (seeded from `/.git`, `/.env`, `/.env.*`). Deriving it
-  from the worktree diff would be wrong — files a branch *intentionally deleted*,
-  or files missing because the first worktree is dirty/divergent, would get
-  permanently protected and root would stop matching the holder. A small
-  per-resource **sandbox marker** records that the resource is in sandbox mode and
-  the baseline is established. (Tracked files absent from a later holder's
-  worktree are legitimately deleted by the reset — they are not in the baseline.)
-- **Dry-run refusal fires *only* at that first transition, never in steady
-  state.** At the first transition `queue-run` runs `rsync --dry-run`; any
-  would-delete path **not** already in the baseline is a candidate root-only file
-  → it **refuses** and lists them (*"these root files would be deleted — protect
-  or remove them"*) until the baseline is confirmed. Once in sandbox mode,
-  acquires `--delete` **freely** — prior-holder residue is *supposed* to go; only
-  the protected baseline survives. This reconciles the deletion-safety gate with
-  the "next acquire is the reset" model: the gate guards the **one** dangerous
-  flip, not every run.
+- **Protected *baseline* — secrets auto-protected, everything else classified.**
+  A `--delete` acquire must remove the *previous lease holder's* files (the reset)
+  **and refresh regenerable outputs**, while never destroying genuine secret/local
+  files (`.env`, certs). Auto-protecting *all* gitignored/untracked paths (the
+  round-3 rule) over-protects: build output, caches and generated artifacts would
+  be preserved forever and root would stop matching the active holder. So at the
+  **first sandbox transition** the baseline is built **by classification, not
+  blanket capture**, derived from git + a dry-run (never from a diff against the
+  holder's worktree, which would wrongly protect branch-deleted or dirty-divergent
+  files):
+  - A tiny **conservative auto-protect default** — `/.git`, `/.env`, `/.env.*` —
+    is protected immediately, no prompt.
+  - For **every other path the dry-run shows would be deleted** (gitignored or
+    untracked root files), `queue-run` **refuses until the user classifies each**
+    in the setup dialog: *protect* (local/precious — secrets, certs, fixtures) vs
+    *allow-delete* (regenerable — caches, build output). Choices persist into the
+    resource's `protect` list and an explicit allow-delete set.
+  A small per-resource **sandbox marker** records that the resource is in sandbox
+  mode and the baseline is settled.
+- **Steady state runs free.** Once classified, acquires `--delete` without
+  re-prompting: prior-holder residue and allow-delete outputs go; only the
+  protected set survives. The classification gate guards the **one** dangerous
+  flip, never every run. (Tracked files absent from a later holder's worktree are
+  legitimately deleted by the reset.)
 
 ### 3. CLI spine
 
@@ -288,12 +295,17 @@ caller's intent is preserved:
 - **Signals (`SIGINT`/`SIGTERM`)** are trapped: forward to the child, then run
   release and exit. Crash/`SIGKILL` is still covered by flock auto-release +
   reaping (§1).
-- **Release-hook failures don't strand the queue.** The `release` hook is
-  **time-bounded**; if it fails or times out, `queue-run` still **releases the
-  ticket** (removing it from the active queue so the next holder proceeds) and
-  writes the error to a separate, short-lived record — `…/<resource>/history/`
-  (last-N or TTL-pruned), **not** the now-deleted ticket — which `queue-status`
-  and the pane read. A failed `release` never blocks the next holder.
+- **Release-hook failures don't strand the queue — but can fail the run.** The
+  `release` hook is **time-bounded**; if it fails or times out, `queue-run`
+  **always still releases the ticket** (so the next holder proceeds) and writes
+  the error to a separate short-lived record — `…/<resource>/history/` (last-N or
+  TTL-pruned), **not** the now-deleted ticket — read by `queue-status`/pane. Queue
+  *liveness* is never blocked. Whether the **exit status** reflects the failure is
+  governed by the per-resource **`release_required`** flag: when set — templates
+  that **sync artifacts/results back to the worktree** (e.g. the C# build-product
+  copy-back) should set it — a failed `release` makes `queue-run` exit non-zero so
+  the caller/CI sees the run didn't fully succeed; when unset (default,
+  best-effort release) the failure is logged and the child's exit code stands.
 
 **Waiting & cancellation (observable by the waiter).** A `queue-run` that hasn't
 acquired yet **holds its ticket** (its FIFO place) while waiting — on an earlier
@@ -301,12 +313,16 @@ ticket *or* on a live-root block. `Ctrl-C`/`SIGINT` removes its ticket and leave
 the line (the `finally` release). Cancellation by *another* process needs a real
 protocol, because merely unlinking a waiting ticket would not stop the waiter
 (which still holds its open fd/flock and keeps polling): the **wait loop
-re-checks its own ticket each poll**, and `queue-cancel` **writes a tombstone**
-(replacing the ticket / recording a durable cancel reason in `…/history/`) that
-the waiter detects on its next poll and then **exits non-zero with that reason**.
-`queue-cancel` targets **waiting tickets only — a current holder cannot be
-canceled this way** (aborting a running command is out of scope; the holder
-releases via its own lifecycle). Head-of-line blocking is *not* a special hazard
+re-checks its own ticket each poll**. Cancellation is **atomic under the queue
+`.lock`** — `queue-cancel` takes the metadata lock, **revalidates the target is
+still a waiter and not the current holder**, writes a **tombstone named so it is
+excluded from ticket ordering and holder selection** (a distinct non-ticket
+marker, *not* a renamed ticket left in the visible queue dir, which would perturb
+the head-of-line/holder computation), records the reason in `…/history/`, and
+releases the lock. The waiter, polling under the same lock discipline, sees its
+ticket tombstoned and **exits non-zero with that reason**. `queue-cancel` targets
+**waiting tickets only — a current holder cannot be canceled this way** (aborting
+a running command is out of scope; the holder releases via its own lifecycle). Head-of-line blocking is *not* a special hazard
 for the live-root case: the exclusive-or rule blocks **all** worktree acquires
 while a root session is live, so every waiter is stalled by the session — not by
 the first ticket — and all proceed in FIFO order once it ends (the accepted
@@ -465,7 +481,13 @@ command-guard nudge:
   strongest, cheapest lever — unconditional, lands before the agent's first
   action): tells every agent the resource is shared and **already warm**, to
   **never build its own stack** (it collides on the well-known ports), and to run
-  guarded commands via `queue-run`.
+  guarded commands via `queue-run`. **Wiring (extends existing hooks, no new
+  manifest entry):** the plugin already registers a `SessionStart` command hook
+  (`hooks/session-start.sh` in `.claude-plugin/plugin.json`); it gains a branch
+  that, when the session's **canonical project** is opted in, prints the contract
+  `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
+  "‹text›"}}` to stdout, and otherwise stays silent. Like all hooks here it fails
+  open and never blocks startup.
 - **`PreToolUse` Bash hook**, registered once at install, that **no-ops unless
   the current repo is opted in**. The hook receives **raw shell text**; because a
   match *denies*, parsing is **conservative and fail-open** — a false block is
@@ -602,9 +624,11 @@ Each is its own spec → plan → implementation cycle.
 
 ## Constraints honored
 
-- Minimal deps; no new runtime dependency (`rsync`/`flock` are system tools;
-  Textual stays vendored).
-- `flock` + temp-file-rename for every queue write (matches existing stores).
+- Minimal deps; no new runtime dependency. Locking uses Python **`fcntl.flock`**
+  (stdlib, exactly as `index.py` / `folder_store.py` / `live.py` already do) —
+  **not** an external `flock` binary, which macOS does not reliably ship. The only
+  external system tools are **`rsync`** and **`git`**; Textual stays vendored.
+- `fcntl.flock` + temp-file-rename for every queue write (matches existing stores).
 - Hooks fail open and never block startup.
 - Opt-in, like retention — nothing activates until a project has ≥1 resource.
 - Zero footprint for non-users beyond the single `q` key and the self-explaining
