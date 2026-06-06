@@ -319,6 +319,30 @@ def _help_text() -> str:
     ])
 
 
+def _render_queue_rows(rows: list) -> str:
+    """Render queue_view.snapshot() rows as pane markup (spec §9 mockup)."""
+    lines = ["[b]Queues[/]"]
+    for r in rows:
+        name = f"{_basename(r['project'])} / {r['resource']}"
+        if r["live_root_block"]:
+            who = r["live_root_block"].get("name", "?")
+            lines.append(f"  {name:<26}⛔ held by live session ‹{who}›")
+            continue
+        if r["holder"]:
+            h = r["holder"]
+            lines.append(f"  {name:<26}● holder: {h['label']} ({h['elapsed']})")
+            if r["waiting"]:
+                waits = " · ".join(f"{w['label']} ({w['pos']})" for w in r["waiting"])
+                lines.append(f"  {'':<26}waiting: {waits}")
+        else:
+            lines.append(f"  {name:<26}○ free")
+    return "\n".join(lines)
+
+
+def _basename(path: str) -> str:
+    return os.path.basename(path.rstrip("/")) or path
+
+
 class _PanelScreen(ModalScreen):
     """Base for the modal dialogs (rename, move, new folder, delete, notes, rescan progress): a centered rounded panel on a dimmed,
     translucent backdrop so the session tree shows through (matches the help
@@ -595,6 +619,7 @@ class SessionExplorerApp(App):
     #treepane { width: 1fr; }
     #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
     #empty-state { padding: 2 2; color: $text-muted; }
+    #queues { height: auto; max-height: 40%; padding: 0 1; border-top: solid $accent; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     HelpScreen { align: center middle; }
@@ -683,6 +708,11 @@ class SessionExplorerApp(App):
         self._sync_timer = None
         # Usage-bar refresh timer (5-min interval); None when the bar is off.
         self._usage_timer = None
+        # Queues pane (shared-resource leases). Visibility persists globally;
+        # _queue_hint_forced shows a one-line activation hint after an explicit
+        # `q` press even when nothing is configured (cleared on next toggle-off).
+        self._queue_visible: bool = False
+        self._queue_hint_forced: bool = False
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -736,8 +766,10 @@ class SessionExplorerApp(App):
         self._preview.display = False
         self._empty = Static("", id="empty-state")
         self._empty.display = False
+        self._queues = Static("", id="queues")
+        self._queues.display = False
         yield Horizontal(
-            Vertical(self._colheader, self._tree, self._empty, id="treepane"),
+            Vertical(self._colheader, self._tree, self._queues, self._empty, id="treepane"),
             self._preview,
         )
         self._filter = Input(placeholder="filter…", id="filter")
@@ -753,9 +785,23 @@ class SessionExplorerApp(App):
         from . import live as _live
         return os.environ.get("SESSION_EXPLORER_LIVE") or _live.default_path_for(self._index_path)
 
+    def _ui_path(self) -> str:
+        from . import ui_state as _ui
+        return _ui.default_path_for(self._index_path)
+
+    def _queue_config_path(self) -> str:
+        from . import queue_config as _qc
+        return os.environ.get("SESSION_EXPLORER_QUEUE_CONFIG") or _qc.default_path_for(self._index_path)
+
+    def _queues_root(self) -> str:
+        return os.environ.get("SESSION_EXPLORER_QUEUES_ROOT") or os.path.join(self._claude_dir(), "session-explorer-queues")
+
     def on_mount(self) -> None:
         self.title = "session-explorer"
         self._populate()
+        from . import ui_state as _ui
+        self._queue_visible = bool(_ui.load(self._ui_path()).get("queue_pane_visible"))
+        self._render_queues()  # content-gated; renders nothing if empty
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
         # Opt-in retention: neutralising cleanupPeriodDays modifies the user's
@@ -1542,9 +1588,51 @@ class SessionExplorerApp(App):
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
+    def _gating_rows(self) -> list:
+        """The rows that justify showing the pane AND are rendered in it (spec
+        §9): every *active* queue across all projects, plus all resources of the
+        currently-selected project (so its idle ones are visible). An idle,
+        unrelated resource is in neither set, so it never opens the pane and is
+        never rendered."""
+        from . import project_id as _pid, queue_view as _qv
+        try:
+            rows = _qv.snapshot(self._queue_config_path(), self._queues_root(),
+                                self._live_path())
+        except Exception:
+            rows = []
+        sel_proj, _ = self._project_and_prefix_for_cursor()
+        sel_pid = _pid.project_id(sel_proj) if sel_proj else None
+        return [r for r in rows
+                if r["active"] or (sel_pid is not None and r["project_id"] == sel_pid)]
+
     def action_toggle_queues(self) -> None:
-        # Full behavior added in the Queues-pane task; stub keeps the binding live.
-        pass
+        from . import ui_state as _ui
+        self._queue_visible = not self._queue_visible
+        _ui.set_queue_pane_visible(self._ui_path(), self._queue_visible)
+        # Force the one-line hint ONLY when turning the pane on with nothing to
+        # show — so the keypress isn't a silent no-op on an unconfigured project.
+        # Never force when there is real content (else the pane stays stuck open
+        # as a "hint" if that content later disappears this session).
+        self._queue_hint_forced = self._queue_visible and not self._gating_rows()
+        self._render_queues()
+
+    def _render_queues(self) -> None:
+        """Content-gated render (spec §9). The gating set and the rendered set are
+        the SAME filtered rows, so the pane never shows an unrelated idle resource
+        — when that set is empty it shows the activation hint (or nothing, if the
+        hint wasn't forced this session)."""
+        gating = self._gating_rows()
+        show = self._queue_visible and (bool(gating) or self._queue_hint_forced)
+        self._queues.display = show
+        if not show:
+            return
+        if not gating:
+            self._queues.update(
+                "[b]Queues[/]  ·  this project is not using shared resources\n"
+                "[dim]Select a project and press [b]s[/] to set up · "
+                "guide: docs/queue-guide.md[/]")
+            return
+        self._queues.update(_render_queue_rows(gating))
 
     def _running_sids(self) -> list:
         """All sessions running in our server: background windows plus the
