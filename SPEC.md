@@ -586,8 +586,68 @@ full design; this records the shipped Phase-1 surface.
 - **Probes:** `health` warns (never auto-starts; `ensure` deferred); `wait_for`
   polls port/url/command until ready or timeout.
 - **Deferred (schema-reserved):** `ensure`, `reload`, `env`, `capacity`>1; the
-  TUI (Phase 2) and the SessionStart/PreToolUse hooks + cooperative skill
-  (Phase 3).
+  SessionStart/PreToolUse hooks + cooperative skill (Phase 3).
+
+### Queues pane and setup dialogs (Phase 2)
+
+The TUI surface for the lease engine. It reads the Phase-1 stores directly from
+`tui.py` (the way it already reads `live.poll()`/`index.load()`), never by
+shelling out to `queue-status`. Three new **pure, Textual-free** modules hold
+the testable logic: `queue_view.snapshot()` (display-ready rows), `ui_state.py`
+(`session-explorer-ui.json` toggle store), `queue_detect.py` (root-dir change
+detector), plus `guard_match.py` (parsed-argv guard matching, shared with the
+Phase-3 hook).
+
+- **Keymap change (global, one for everyone):** `q` toggles the **Queues pane**
+  (this reassigns quit), `x` is **Exit**, and `s` opens the selected project's
+  **resource list** (hidden binding, gated by `check_action` to a project
+  selection). The only added footer key is `q`; `s`/`a`/`e`/`Del` are
+  pane-local. **`x` is *only* Exit — never a remove action** (no double-bound
+  destructive key). Don't reintroduce `q`→quit.
+- **Queues pane** (`Static`, `id="queues"`, under the tree) is **read-only** and
+  **content-gated**: with the persisted flag on it takes space only when there
+  is ≥1 *active* queue anywhere OR the selected project has configured
+  resources. A persisted `true` with only an idle, unrelated resource renders
+  **nothing** (zero-footprint). An explicit `q` with nothing to show surfaces a
+  one-line activation hint *this session only* (not persisted). The gating set
+  and the rendered set are the same filtered rows. Live on the existing ~2s
+  `_poll_live` loop. Cancellation stays CLI-only (`queue-cancel`).
+- **Per-project setup** (`s` → `ResourceListScreen` → `ResourceEditorScreen`):
+  the editor is **template-first** (spec §7 catalog in `QUEUE_TEMPLATES`) and
+  **reflows per `kind`** — a `device`/`port`/`name` hides the path + protect
+  inputs and forces `run_in: worktree`; a `root-dir` shows `protect` and a
+  **read-only** path. The root-dir **`path` is always `project_id.main_root()`**
+  (the repo's main working tree, spec §1), never the selected node (which may be
+  an arbitrary `git worktree add`) and never the editable input. The form is
+  **authoritative on save**: clearing a command/health/`wait_for` field removes
+  the stale value (and reverts a now-empty command strategy to `none`); a
+  non-empty but **unparseable** `wait_for` **refuses** the save rather than
+  silently dropping it. Save validates through `queue_config.add_resource`.
+- **Test panel** (de-risks the destructive `sync`): a **guard tester** (built
+  from the *current* form, no side effects), an **rsync dry-run**
+  (`qsync.dry_run_deletions` with the exact Phase-1 filters) that also surfaces
+  the **exclusive-or check** (live-root block + dirty-root transition guard) and
+  **refuses** when the source equals root (no false "no deletions"), and a
+  **health probe**. Honest: dry-run is fully safe only for `sync`; custom shells
+  can't be simulated.
+- **New-session dialog:** no opt-in checkbox (opt-in is `q`→`s`). Checking
+  *Create git worktree* auto-fills the worktree name with `worktree_slug(name)`;
+  a *manual* edit (detected by **focus**, robust to retyping the same slug)
+  stops the auto-sync. When the project has a `root-dir` resource the checkbox
+  **defaults ON** and submitting a *plain root* session warns (§5.4).
+- **Out-of-lease detection toast** (`queue_detect`): a **best-effort, debounced,
+  weak** signal — snapshots the root-dir top-level entry set + mtimes between
+  polls and toasts on a change while in **neither** valid exclusive-or state (no
+  holder AND no live root session, which legitimately owns root). Catches
+  creates/deletes/renames, **misses in-place content writes**; excludes the
+  `protect` baseline + `.git` + optional `detect_exclude` (glob-matched, so
+  `.env.*` excludes `.env.local`); re-arms after a stable poll. Never
+  enforcement.
+- **Offline help:** in-dialog `?` (`QueueHelpScreen`) leads with isolate-first
+  and the `--delete`/`protect` rule, and shows the guide link as a **plain,
+  copyable** `https://…` URL (never relying on OSC-8) wrapped in a best-effort
+  click action. Full guide: `docs/queue-guide.md` (added to the release
+  checklist so it can't silently diverge).
 
 ## Disabling native auto-cleanup
 
