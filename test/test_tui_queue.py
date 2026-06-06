@@ -88,3 +88,35 @@ async def test_persisted_visible_with_only_unrelated_idle_renders_nothing(
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.query_one("#queues").display is False
+
+
+@pytest.mark.asyncio
+async def test_poll_live_refreshes_the_pane(index_path, tmp_path, monkeypatch):
+    from _pkg import queue_config, queue_run, queue_store
+    qcfg = str(tmp_path / "qc.json")
+    queues = str(tmp_path / "queues")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", queues)
+    queue_config.add_resource(
+        qcfg, project_id="abc123", display_path="/repo/Gym", resource_id="db",
+        resource={"kind": "port", "run_in": "worktree",
+                  "acquire": "none", "release": "none"})
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")              # show pane FIRST, no ticket yet
+        await pilot.pause()
+        # Pane is up but the resource is idle and unselected → no holder shown.
+        assert "holder:" not in str(app.query_one("#queues").render())
+        # Now a holder appears AFTER the pane is shown; only _poll_live can
+        # surface it (action_toggle_queues already ran).
+        qdir = queue_run.queue_dir(queues, "abc123", "db")
+        ticket = queue_store.take_ticket(qdir, sid="feat-auth", cwd="/x",
+                                         command=["t"], pid=1, label="Gym/db",
+                                         now_iso="2026-06-06T11:00:00+00:00")
+        try:
+            app._poll_live()
+            await pilot.pause()
+            assert "holder: Gym/db" in str(app.query_one("#queues").render())
+        finally:
+            ticket.release()

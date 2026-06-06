@@ -1788,6 +1788,9 @@ class SessionExplorerApp(App):
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
+        # Keep the Queues pane current on the same cadence (cheap when hidden).
+        if self._queue_visible:
+            self._render_queues()
 
     def _ours_flag(self, sid: str) -> "bool | None":
         """For _glyph: None when not tmux-hosted (no accessibility distinction),
