@@ -111,16 +111,18 @@ paid once.
   dots / `..`), kept **distinct from a resource's filesystem `path`** (§2): the
   path — which for `root-dir`/`path` can contain slashes, `..`, or symlink-looking
   components — is **never** used as an on-disk key component, so it can't cause
-  traversal, nesting, or collision. `<project-id>` is a stable hash of the
-  **canonical repo root**, computed by a
-  **new shared helper** (used identically by queue identity, `cwd` resolution in
-  §3, and live-root matching in §5): `git rev-parse --show-toplevel` to resolve an
-  arbitrary subdirectory cwd to the git top-level, `realpath` to canonicalize
-  symlinks, then the existing `/.claude/worktrees/` collapse (git common-dir
-  identity) so a worktree maps onto its parent repo. The current
-  `index.project_root()` only string-strips the worktree marker and resolves
-  neither subdirs nor symlinks, so it is **insufficient on its own** — the helper
-  must be added. Resource names like `root` /
+  traversal, nesting, or collision. `<project-id>` is a stable hash of the repo's
+  **git common dir** (`git rev-parse --git-common-dir`, `realpath`-canonicalized),
+  which is **shared by every worktree of a repo — Claude-managed *or* an arbitrary
+  `git worktree add ../repo-feat`** — so all of a repo's worktrees collapse to one
+  identity. This is a **new shared helper** (used identically by queue identity,
+  `cwd` resolution in §3, and live-root matching in §5): the current
+  `index.project_root()` merely string-strips `/.claude/worktrees/` (so it would
+  treat a plain `git worktree add` as its own project) and resolves neither subdirs
+  nor symlinks — insufficient. Separately, the canonical **root *path*** of a
+  `root-dir` resource (where the stack bind-mounts) is the repo's **main working
+  tree** (`git worktree list --porcelain`), not a `.claude/worktrees/`
+  string-strip. Resource names like `root` /
   `db` recur across projects, so keying by resource alone would collide; the
   project hash disambiguates. The human-readable `‹project› / ‹resource›` label
   shown in the pane is display metadata stored *inside* the ticket, kept separate
@@ -196,10 +198,13 @@ text — `up` must never match `cleanup` or `npm run setup`. Each guard is a
 `{exe, sub?}` rule matched against the command's **parsed argv**: the executable
 **basename** (`/usr/local/bin/docker` → `docker`) plus optional required leading
 **subcommand tokens**. So `{exe: docker, sub: [compose, up]}` matches
-`docker compose up -d` but not `docker ps`. Wrapper commands (`make e2e`,
-`npm run test:e2e`) are deliberately out of the hook's scope and are caught by
-the §6 out-of-lease detection flag instead. Template defaults ship as
-conservative `{exe, sub}` rules, never bare substrings.
+`docker compose up -d` but not `docker ps`. A wrapper like `make e2e` *is* a parseable simple command, so users **can** add
+explicit `{exe: make, sub: [e2e]}` rules to guard it. But a wrapper that hides the
+guarded command *internally* (a `make` target that runs `docker` itself) is
+invisible to the hook, and an **undeclared** wrapper isn't guarded at all — that
+is an **accepted v1 blind spot**, not reliably caught by anything (the §6 detector
+is root-dir-file-only; see §8). Template defaults ship as conservative `{exe, sub}`
+rules, never bare substrings.
 
 #### The `sync` strategy knobs and exact rsync filters
 
@@ -266,7 +271,8 @@ session-explorer queue-run --resource <r> -- <command>
 
 **Project resolution (resources are per-project, names repeat).** `--resource
 <r>` is resolved against a project: by default the **canonical repo root derived
-from `cwd`** (collapsing worktree → parent, exactly as the index does), so an
+from `cwd`** via the shared canonical helper (§1; `git-common-dir` identity,
+collapsing every worktree onto its repo), so an
 agent in a worktree resolves to its parent project's resource without extra
 flags. Overrides: `--project <root>` to name the project explicitly, and a
 fully-qualified `<project-id>/<resource-id>` id for non-cwd callers (the TUI, hooks,
@@ -394,7 +400,13 @@ This is what makes a destructive `sync` acquire safe. (Does **not** apply to
 user can run `claude` in root entirely outside the explorer. The dialog
 (prevention) makes root-working rare; the exclusive-or rule (enforcement) keeps
 it *safe* when it happens anyway. Worst case is a worktree agent waiting
-(visible and actionable in the pane), never data loss.
+(visible and actionable in the pane), not data loss. **Bounds of the guarantee:**
+this protects against **registered live Claude root sessions** and
+**classified-protected files** only. It does **not** cover out-of-band edits made
+in root from a *non-Claude* editor or terminal during sandbox mode — those are
+unregistered (the exclusive-or rule can't see them) and, if untracked/unprotected,
+may be overwritten or deleted by a later acquire's reset. "No data loss" is scoped
+to those two cases, not absolute.
 
 **Accepted tradeoff — starvation:** an idle-but-live root session pauses all
 parallel work on that resource. This is correct: it is exactly the situation
@@ -519,19 +531,33 @@ command-guard nudge:
   — quoting/word-split ambiguity, command substitution `$(…)`, shell functions,
   heredocs, `bash -c "…"` bodies, `make`/`npm` targets — it **fails open (allows)**
   rather than guessing. Only a confidently-parsed matching segment → **deny +
-  redirect** ("re-run as `queue-run -- …`"); the unparseable residual is the §6
-  detection flag's job. Denying (rather than silently wrapping) keeps the lease
+  redirect** ("re-run as `queue-run -- …`"); the unparseable/wrapper residual is
+  an **accepted blind spot** (mitigated by awareness, below), *not* reliably the
+  detector's catch. Denying (rather than silently wrapping) keeps the lease
   lifecycle inside the one `queue-run` process. Fails open, never blocks startup.
 - **Skill + `CLAUDE.md` snippet** for graceful cooperation — don't busy-spin,
   report queue position, understand sync-overwrite semantics, never boot a
   competing stack.
 
+**Install surfaces (mirror across all paths, not marketplace-only).** The new
+**`PreToolUse`** hook is *new wiring*, so it must be registered in **both**
+`.claude-plugin/plugin.json` (marketplace) **and** `install.sh` (which writes
+hooks into `~/.claude/settings.json`, lines 19–74), with matching teardown in
+`uninstall.sh`. The `SessionStart` `additionalContext` branch needs no new
+registration (it lives inside the already-registered `session-start.sh`), but its
+script change ships on both paths too. Add all of these to the `cutting-a-release`
+checklist so an implementation can't land marketplace-only.
+
 **Deferred — root-write-guard.** A stronger hook denying worktree Bash that
 writes under shared-root without a lease was considered and deferred. Accepted
-residual: wrapper commands (`make`/`npm run`) slip past command-matching — but
-they surface as **out-of-lease flags** in the pane (§6), so bypass is *visible*,
-not silent. The honest ceiling is "bypass is rare and visible," never "bypass is
-impossible."
+residual: a wrapper that hides the guarded command internally (a `make`/`npm`
+target invoking `docker`), or any undeclared wrapper, slips past command-matching.
+This is a genuine **v1 blind spot, *not* reliably made visible** — the §6 detector
+only snapshots `root-dir` files and sees **nothing** for port / DB / simulator /
+seat access or for non-`root-dir` resources. The mitigations are the SessionStart
+awareness injection and the cooperative skill, **not** the hook or the detector.
+The honest ceiling is "declared commands are nudged, and root-file mutation is
+*sometimes* visible," never "bypass is impossible."
 
 ### 9. Zero-footprint TUI visual design
 
