@@ -2,42 +2,8 @@ import json
 import os
 import pytest
 
-
-@pytest.fixture
-def index_path(tmp_path):
-    """Per-test index in an isolated directory.
-
-    Critical: the folder store file is derived as a sibling of the index via
-    folder_store.default_path_for(), so co-locating the index inside the
-    pytest-provided tmp_path (which is unique per test) ensures the folder
-    store is also test-isolated. Earlier versions used tempfile.mkstemp,
-    which dropped the file into the shared system tmp dir — every test then
-    pointed at the same sibling folder-store path and they polluted each
-    other on any change to that file.
-    """
-    path = str(tmp_path / "se-index.json")
-    json.dump({
-        "version": 1, "folders": [],
-        "sessions": {
-            "sid-1": {
-                "project_label": "demo",
-                "project_path": "/tmp/demo-project",
-                "name_cached": "planning/sprint14",
-                "last_active_at": "2026-05-27T10:00:00Z",
-                "tokens_estimate": 12345,
-                "tokens_window_pct": 6,
-                "message_count": 18,
-                "first_prompt": "hello",
-            }
-        }
-    }, open(path, "w"))
-    # Mark help as already seen AND retention as decided so neither first-launch
-    # modal (help / retention prompt) pops over the tree these tests drive. Both
-    # have their own dedicated tests using marker-free index paths. (The tmux
-    # install offer is suppressed suite-wide via conftest's env guard.)
-    (tmp_path / ".session-explorer.help-seen").write_text("")
-    (tmp_path / ".session-explorer.retention-declined").write_text("")
-    yield path
+# The index_path fixture now lives in test/conftest.py so it is shared across
+# all TUI test modules (test_tui.py, test_tui_queue.py, …).
 
 
 async def test_tui_starts_and_renders_tree(index_path):
@@ -49,13 +15,13 @@ async def test_tui_starts_and_renders_tree(index_path):
         assert "demo" in str(app._tree.root.children[0].label)
 
 
-async def test_tui_quit(index_path):
+async def test_tui_exit(index_path):
     from _pkg.tui import SessionExplorerApp
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
-        await pilot.press("q")
+        await pilot.press("x")     # x is the exit key after the Phase-2 rebind
         await pilot.pause()
-    # Reaching here without timeout means quit worked.
+    # Reaching here without timeout means exit worked.
 
 
 async def test_enter_sets_resume_target(index_path):

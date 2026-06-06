@@ -285,7 +285,7 @@ def _help_text() -> str:
         "  • [b]F9[/] (or click a pane) switches focus between tree and session.",
         "  • [b]F12[/] zooms the focused pane fullscreen; press again to restore.",
         "  • [b]Space[/] peeks a live snapshot of any session without docking it.",
-        "  • [b]q[/] with sessions running asks whether to shut them all down or",
+        "  • [b]x[/] with sessions running asks whether to shut them all down or",
         "    leave them running (reattach next time you open the explorer).",
         "",
         "[b]Keys[/]",
@@ -309,7 +309,8 @@ def _help_text() -> str:
         key("/", "Live filter across name, notes, first prompt"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
-        key("q", "Quit"),
+        key("q", "Toggle the Queues pane (shared-resource leases)"),
+        key("x", "Exit"),
         "",
         "[dim]Esc, q, h, or Space closes this help.[/]",
         "",
@@ -618,7 +619,8 @@ class SessionExplorerApp(App):
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
-        Binding("q", "quit", "Quit"),
+        Binding("q", "toggle_queues", "Queues"),
+        Binding("x", "quit", "Exit"),
         Binding("escape", "close_preview", "Close preview", show=False),
         # The Tree's own toggle keys (enter/space) are taken over by resume and
         # preview above, and this Textual version has no left/right binding, so
@@ -686,11 +688,11 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup") and isinstance(self.screen, ModalScreen):
             return False
-        # While the filter Input is focused, never let `q` quit the TUI — the
-        # keystroke belongs in the filter text, not the global quit binding.
-        if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+        # While the filter Input is focused, never let `q`/`x` fire the global
+        # Queues-toggle or Exit bindings — the keystrokes belong in the text.
+        if action in ("quit", "toggle_queues") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # Tab is a priority binding (it must beat Textual's focus traversal), so
         # explicitly suppress it while the filter Input is focused — there, Tab
@@ -1539,6 +1541,10 @@ class SessionExplorerApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def action_toggle_queues(self) -> None:
+        # Full behavior added in the Queues-pane task; stub keeps the binding live.
+        pass
 
     def _running_sids(self) -> list:
         """All sessions running in our server: background windows plus the
