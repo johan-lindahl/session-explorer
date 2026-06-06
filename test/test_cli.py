@@ -226,3 +226,84 @@ def test_launch_clears_stale_persist_flag(tmp_path, monkeypatch):
     flag.write_text("stale")
     cli._cmd_launch()
     assert not flag.exists()             # stale flag cleared on fresh launch
+
+
+import json as _json
+import subprocess as _sp
+
+
+def _git(cwd, *args):
+    _sp.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+
+
+def _repo(tmp_path):
+    r = tmp_path / "main"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    (r / "f.txt").write_text("x")
+    _git(r, "add", "f.txt")
+    _git(r, "commit", "-qm", "init")
+    return r
+
+
+def _qenv(tmp_path):
+    return {**os.environ,
+            "SESSION_EXPLORER_INDEX": str(tmp_path / "index.json"),
+            "SESSION_EXPLORER_QUEUE_CONFIG": str(tmp_path / "qc.json"),
+            "SESSION_EXPLORER_QUEUES_ROOT": str(tmp_path / "queues"),
+            "SESSION_EXPLORER_LIVE": str(tmp_path / "live.json")}
+
+
+def _seed_resource(tmp_path, env):
+    """Use the config store directly to declare a trivial 'none' resource."""
+    from _pkg import project_id as pid_mod, queue_config as qc
+    root = _repo(tmp_path)
+    pid = pid_mod.project_id(str(root))
+    qc.add_resource(env["SESSION_EXPLORER_QUEUE_CONFIG"], project_id=pid,
+                    display_path=str(root), resource_id="db",
+                    resource={"kind": "name", "path": "", "run_in": "worktree",
+                              "acquire": "none", "release": "none"})
+    return root, pid
+
+
+def test_queue_run_executes_command_from_cwd(tmp_path):
+    env = _qenv(tmp_path)
+    root, _pid = _seed_resource(tmp_path, env)
+    marker = tmp_path / "ran"
+    r = _sp.run([_BIN, "queue-run", "--resource", "db", "--",
+                 "sh", "-c", f"touch {marker}"],
+                cwd=str(root), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert marker.exists()
+
+
+def test_queue_run_unknown_resource_uses_refusal_code(tmp_path):
+    env = _qenv(tmp_path)
+    root = _repo(tmp_path)
+    r = _sp.run([_BIN, "queue-run", "--resource", "nope", "--", "true"],
+                cwd=str(root), env=env, capture_output=True, text=True)
+    from _pkg.queue_run import REFUSAL_EXIT
+    assert r.returncode == REFUSAL_EXIT
+
+
+def test_queue_status_json_lists_configured_resource(tmp_path):
+    env = _qenv(tmp_path)
+    root, pid = _seed_resource(tmp_path, env)
+    r = _sp.run([_BIN, "queue-status", "--json"], env=env,
+                capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    data = _json.loads(r.stdout)
+    ids = [row["id"] for row in data]
+    assert f"{pid}/db" in ids
+
+
+def test_queue_cancel_reports_no_waiter(tmp_path):
+    env = _qenv(tmp_path)
+    root, pid = _seed_resource(tmp_path, env)
+    # Nothing waiting -> cancel is a clean no-op with a clear message.
+    r = _sp.run([_BIN, "queue-cancel", "--resource", "db", "--sid", "ghost"],
+                cwd=str(root), env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "no waiting ticket" in (r.stdout + r.stderr).lower()

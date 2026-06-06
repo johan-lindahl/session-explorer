@@ -29,6 +29,36 @@ def _live_path() -> str:
     return _live.default_path_for(_index_path())
 
 
+def _queue_config_path() -> str:
+    env_override = os.environ.get("SESSION_EXPLORER_QUEUE_CONFIG")
+    if env_override:
+        return env_override
+    from . import queue_config as _qc
+    return _qc.default_path_for(_index_path())
+
+
+def _queues_root() -> str:
+    env_override = os.environ.get("SESSION_EXPLORER_QUEUES_ROOT")
+    if env_override:
+        return env_override
+    return os.path.join(os.path.dirname(_index_path()), "session-explorer-queues")
+
+
+def _resolve_project(args) -> "tuple[str, str] | None":
+    """Resolve (project_id, resource_id) from --resource + cwd/--project.
+    Accepts a fully-qualified '<project-id>/<resource-id>' --resource too."""
+    from . import project_id as _pid
+    res = args.resource
+    if "/" in res:
+        pid, rid = res.split("/", 1)
+        return pid, rid
+    cwd = getattr(args, "project", None) or os.getcwd()
+    pid = _pid.project_id(cwd)
+    if pid is None:
+        return None
+    return pid, res
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="session-explorer")
     p.add_argument("--version", action="version", version=f"session-explorer {__version__}")
@@ -56,6 +86,28 @@ def build_parser() -> argparse.ArgumentParser:
     live_p.add_argument("--transcript", default=None)
     live_p.add_argument("--cwd", default=None)
     live_p.add_argument("--pid", type=int, default=None)
+
+    qr = sub.add_parser("queue-run",
+                        help="Run a command under a shared-resource lease.")
+    qr.add_argument("--resource", required=True,
+                    help="Resource id, or fully-qualified <project-id>/<resource-id>.")
+    qr.add_argument("--project", default=None,
+                    help="Repo root to resolve the resource against (default: cwd).")
+    qr.add_argument("--timeout", type=float, default=None,
+                    help="Max seconds to wait for the lease before giving up.")
+    qr.add_argument("command", nargs=argparse.REMAINDER,
+                    help="-- then the command to run.")
+
+    qstat = sub.add_parser("queue-status",
+                           help="Show active shared-resource queues.")
+    qstat.add_argument("--json", action="store_true", help="Emit JSON.")
+
+    qcancel = sub.add_parser("queue-cancel",
+                             help="Cancel a waiting ticket on a resource.")
+    qcancel.add_argument("--resource", required=True)
+    qcancel.add_argument("--project", default=None)
+    qcancel.add_argument("--sid", required=True, help="Session id of the waiter.")
+    qcancel.add_argument("--reason", default="cancelled by user")
 
     uninstall_p = sub.add_parser(
         "uninstall",
@@ -225,6 +277,79 @@ def _cmd_install_app(args) -> int:
                               pin_dock=not args.no_dock)
 
 
+def _cmd_queue_run(args) -> int:
+    from . import queue_run as _qr
+    resolved = _resolve_project(args)
+    if resolved is None:
+        print("queue-run: cwd is not inside a git repo / opted-in project",
+              file=sys.stderr)
+        return _qr.REFUSAL_EXIT
+    project_id, resource_id = resolved
+    command = list(args.command)
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        print("queue-run: no command given (use: queue-run --resource R -- CMD)",
+              file=sys.stderr)
+        return _qr.REFUSAL_EXIT
+    import uuid
+    sid = os.environ.get("CLAUDE_SESSION_ID") or f"cli-{uuid.uuid4().hex[:8]}"
+    return _qr.run_lease(
+        config_path=_queue_config_path(), queues_root=_queues_root(),
+        live_path=_live_path(), project_id=project_id, resource_id=resource_id,
+        command=command, cwd=os.getcwd(), sid=sid, pid=os.getpid(),
+        timeout=args.timeout)
+
+
+def _cmd_queue_status(args) -> int:
+    import json as _json
+    from . import queue_config as _qc
+    from . import queue_run as _qr
+    from . import queue_store as _qs
+    cfg = _queue_config_path()
+    rows = []
+    for pid, proj in _qc.all_projects(cfg).items():
+        for rid in proj.get("resources", {}):
+            qdir = _qr.queue_dir(_queues_root(), pid, rid)
+            tickets = _qs.list_tickets(qdir)
+            holder = tickets[0] if tickets else None
+            rows.append({
+                "id": f"{pid}/{rid}",
+                "project": proj.get("display_path", pid),
+                "resource": rid,
+                "holder": holder["sid"] if holder else None,
+                "waiting": [t["sid"] for t in tickets[1:]],
+            })
+    if args.json:
+        print(_json.dumps(rows))
+        return 0
+    if not rows:
+        print("No shared resources configured.")
+        return 0
+    for row in rows:
+        state = (f"holder: {row['holder']}" if row["holder"] else "free")
+        wait = (f"  waiting: {', '.join(row['waiting'])}" if row["waiting"] else "")
+        print(f"{row['id']:<40} {state}{wait}")
+    return 0
+
+
+def _cmd_queue_cancel(args) -> int:
+    from . import queue_run as _qr
+    from . import queue_store as _qs
+    resolved = _resolve_project(args)
+    if resolved is None:
+        print("queue-cancel: could not resolve project", file=sys.stderr)
+        return 2
+    pid, rid = resolved
+    qdir = _qr.queue_dir(_queues_root(), pid, rid)
+    if _qs.cancel(qdir, sid=args.sid, reason=args.reason):
+        print(f"Cancelled waiting ticket for {args.sid} on {pid}/{rid}.")
+        return 0
+    print(f"queue-cancel: no waiting ticket for {args.sid} on {pid}/{rid} "
+          f"(it may be the running holder or already gone).", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     from . import folder_store as _fs
     parser = build_parser()
@@ -263,6 +388,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_launch()
     if args.cmd == "install-app":
         return _cmd_install_app(args)
+    if args.cmd == "queue-run":
+        return _cmd_queue_run(args)
+    if args.cmd == "queue-status":
+        return _cmd_queue_status(args)
+    if args.cmd == "queue-cancel":
+        return _cmd_queue_cancel(args)
     if args.cmd == "tui":
         from .tui import run
         return run()
