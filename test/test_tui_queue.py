@@ -515,3 +515,99 @@ async def test_manual_worktree_edit_persists_even_when_value_equals_slug(index_p
         name.value = "auth two"
         screen.on_input_changed(Input.Changed(name, "auth two"))
         assert screen.query_one("#ns-wtname", Input).value == "auth"
+
+
+@pytest.mark.asyncio
+async def test_out_of_lease_toast(index_path, tmp_path, monkeypatch):
+    import subprocess
+    from _pkg import project_id, queue_config
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", str(tmp_path / "queues"))
+    queue_config.add_resource(
+        qcfg, project_id=pid, display_path=str(repo), resource_id="root",
+        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
+                  "acquire": "sync", "release": "none",
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]}})
+    app = SessionExplorerApp(index_path=index_path)
+    notices = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.notify = lambda msg, **k: notices.append(msg)  # capture toasts
+        app._detect_out_of_lease()                     # seed baseline
+        (repo / "newfile.txt").write_text("x")          # out-of-lease change
+        app._detect_out_of_lease()
+        await pilot.pause()
+    assert any("out-of-lease" in m for m in notices)
+
+
+@pytest.mark.asyncio
+async def test_out_of_lease_rearms_after_stable_poll(index_path, tmp_path, monkeypatch):
+    # Finding 5: two distinct idle changes, with a stable poll between, must
+    # produce TWO warnings — the debounce re-arms, it doesn't latch forever.
+    import subprocess
+    from _pkg import project_id, queue_config
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", str(tmp_path / "queues"))
+    queue_config.add_resource(
+        qcfg, project_id=pid, display_path=str(repo), resource_id="root",
+        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
+                  "acquire": "sync", "release": "none",
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]}})
+    app = SessionExplorerApp(index_path=index_path)
+    notices = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.notify = lambda msg, **k: notices.append(msg)
+        app._detect_out_of_lease()              # seed baseline
+        (repo / "f1.txt").write_text("x")        # change 1
+        app._detect_out_of_lease()              # warn #1
+        app._detect_out_of_lease()              # stable poll → re-arm
+        (repo / "f2.txt").write_text("y")        # change 2
+        app._detect_out_of_lease()              # warn #2
+        await pilot.pause()
+    assert len([m for m in notices if "out-of-lease" in m]) == 2
+
+
+@pytest.mark.asyncio
+async def test_no_toast_during_live_root_session(index_path, tmp_path, monkeypatch):
+    # Finding 2: a live session working IN root is a valid exclusive-or holder
+    # (spec §5), so its edits must NOT toast "out-of-lease".
+    import subprocess
+    from _pkg import project_id, queue_config, live
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    live_path = str(tmp_path / "live.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", str(tmp_path / "queues"))
+    monkeypatch.setenv("SESSION_EXPLORER_LIVE", live_path)
+    queue_config.add_resource(
+        qcfg, project_id=pid, display_path=str(repo), resource_id="root",
+        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
+                  "acquire": "sync", "release": "none",
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]}})
+    # A live session whose cwd is the main root (an exclusive-or holder).
+    live.record_event(live_path, event="SessionStart", session_id="rootsess",
+                      cwd=str(repo), pid=os.getpid())
+    app = SessionExplorerApp(index_path=index_path)
+    notices = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.notify = lambda msg, **k: notices.append(msg)
+        app._detect_out_of_lease()              # seed
+        (repo / "newfile.txt").write_text("x")   # change made under the live session
+        app._detect_out_of_lease()
+        await pilot.pause()
+    assert not any("out-of-lease" in m for m in notices)

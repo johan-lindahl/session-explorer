@@ -1243,6 +1243,11 @@ class SessionExplorerApp(App):
         # `q` press even when nothing is configured (cleared on next toggle-off).
         self._queue_visible: bool = False
         self._queue_hint_forced: bool = False
+        # Best-effort out-of-lease detector: per-resource last top-level snapshot
+        # and a debounce set. A change-burst toasts once; the set re-arms after a
+        # stable (unchanged) poll, so a *later* distinct change toasts again.
+        self._detect_snaps: dict[str, dict] = {}
+        self._detect_warned: set[str] = set()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -2359,6 +2364,53 @@ class SessionExplorerApp(App):
         # Keep the Queues pane current on the same cadence (cheap when hidden).
         if self._queue_visible:
             self._render_queues()
+        self._detect_out_of_lease()
+
+    def _detect_out_of_lease(self) -> None:
+        """Compare root-dir snapshots between polls; toast on a change while the
+        resource is in NEITHER valid exclusive-or state — i.e. no lease holder
+        AND no live root session (which legitimately owns root, spec §5). Weak
+        signal (spec §6); excludes the protect baseline + globs."""
+        from . import queue_detect as _qd, queue_view as _qv
+        try:
+            rows = _qv.snapshot(self._queue_config_path(), self._queues_root(),
+                                self._live_path())
+        except Exception:
+            return
+        from . import queue_config as _qc
+        for r in rows:
+            if r["kind"] != "root-dir":
+                continue
+            res = _qc.get_resource(self._queue_config_path(), r["project_id"],
+                                   r["resource"]) or {}
+            path = res.get("path")
+            if not path:
+                continue
+            exclude = set(p.lstrip("/") for p in res.get("sync", {}).get("protect", []))
+            exclude |= {".git"}
+            # Optional generated/served-path exclusions (spec §6). Schema-reserved:
+            # read if present, not yet editable in the v1 form.
+            exclude |= set(p.lstrip("/") for p in res.get("detect_exclude", []))
+            snap = _qd.top_level_snapshot(path, exclude=exclude)
+            prev = self._detect_snaps.get(r["id"])
+            self._detect_snaps[r["id"]] = snap
+            if prev is None:
+                continue
+            # A live root session is a legitimate exclusive-or holder, so its
+            # edits are NOT out-of-lease (spec §5) — treat it as "held" too.
+            held = r["holder"] is not None or r["live_root_block"] is not None
+            if _qd.changed(prev, snap):
+                if not held and r["id"] not in self._detect_warned:
+                    self._detect_warned.add(r["id"])
+                    self.notify(f"⚠ possible out-of-lease access on "
+                                f"{_basename(r['project'])}/{r['resource']}",
+                                severity="warning")
+            else:
+                # Stable poll → re-arm so the NEXT distinct change warns again
+                # (instead of one warning sticking forever while idle).
+                self._detect_warned.discard(r["id"])
+            if held:
+                self._detect_warned.discard(r["id"])  # re-arm once a lease runs too
 
     def _ours_flag(self, sid: str) -> "bool | None":
         """For _glyph: None when not tmux-hosted (no accessibility distinction),
