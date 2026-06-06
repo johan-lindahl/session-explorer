@@ -547,6 +547,48 @@ Probe details:
 | Dock width | 65% | claude pane width when docked (`DOCK_PCT`) |
 | tmux version floor | 3.1 | `join-pane -l <n>%` dock sizing, `capture-pane -e`, root bindings, status styling |
 
+## Shared-resource lease engine (queue core — Phase 1)
+
+`session-explorer queue-run --resource <r> -- <cmd>` serializes a command
+against a shared singleton resource declared per-project. See
+`docs/superpowers/specs/2026-06-05-shared-root-test-queue-design.md` for the
+full design; this records the shipped Phase-1 surface.
+
+- **Identity:** queues + config are keyed by `project_id.project_id(cwd)` — a
+  hash of the repo's `git --git-common-dir`, so every worktree of a repo shares
+  one identity. This supersedes `index.project_root()` for queue purposes (which
+  string-strips `/.claude/worktrees/` and is kept for tree grouping only).
+- **Config:** `~/.claude/session-explorer-queue-config.json`, keyed by
+  project-id; a project is opted in iff it has ≥1 resource. Resource `kind` is
+  one of `root-dir`/`path`/`port`/`service`/`device`/`name`. `acquire` is
+  `sync`/`none`/`command`; `sync` is v1-restricted to `root-dir`.
+- **Queue:** `~/.claude/session-explorer-queues/<project-id>/<resource-id>/`.
+  The queue *is* the set of ticket files; holder = lowest-numbered ticket whose
+  owner still holds its lifetime `flock` (crash/SIGKILL-safe, PID-reuse immune).
+  Ticket publication happens under the queue `.lock` only after the ticket holds
+  its lock, so a liveness probe never falsely reaps a fresh ticket. Cancellation
+  unlinks the ticket + writes a `history/` tombstone, atomic under `.lock`.
+- **sync strategy:** `rsync -a --delete` with anchored `--filter=exclude`
+  rules (never `--delete-excluded`); `exclude` and `protect` share that one
+  mechanism. The first sandbox transition runs a `--dry-run`, auto-protects
+  `/.git /.env /.env.*`, deletes tracked branch-diff files, and refuses on any
+  untracked/ignored would-delete path not classified into `protect` or
+  `allow_delete`. A `sandbox.marker` settles the baseline; later acquires reset
+  freely. **Phase 1 classification is manual** (edit the config); the §2 dialog
+  arrives in Phase 2.
+- **root-dir exclusive-or (§5):** if a live registry session's cwd resolves to
+  the repo's main working tree (or a subdir, not a worktree), worktree acquires
+  block. A dirty root blocks the first transition. root-dir/sync invoked from
+  root itself is refused.
+- **Lifecycle:** one process, release in a `finally`; child exit code is passed
+  through; pre-command refusals use exit code 70; `SIGINT`/`SIGTERM` forward to
+  the child then release.
+- **Probes:** `health` warns (never auto-starts; `ensure` deferred); `wait_for`
+  polls port/url/command until ready or timeout.
+- **Deferred (schema-reserved):** `ensure`, `reload`, `env`, `capacity`>1; the
+  TUI (Phase 2) and the SessionStart/PreToolUse hooks + cooperative skill
+  (Phase 3).
+
 ## Disabling native auto-cleanup
 
 **Opt-in.** Modifying the user's `settings.json` without consent is a marketplace-review concern, so the plugin does NOT neutralise native cleanup automatically. The TUI asks on first launch (`tui.on_mount` → `retention.enable`/`retention.decline`); neither the `SessionStart` hook nor `install.sh` ever touches `settings.json`. Only when the user agrees is `cleanupPeriodDays` in `~/.claude/settings.json` set to `36500` (100 years) — with the prior value backed up — so Claude's expiry never touches user sessions and the plugin's `session-explorer index --gc` does deletion instead:
