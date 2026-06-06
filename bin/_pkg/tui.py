@@ -568,6 +568,126 @@ class NotesScreen(_PanelScreen):
         self.dismiss(self._ta.text)
 
 
+class ResourceListScreen(_PanelScreen):
+    """Per-project shared-resource list (spec §6). a add · e edit · Del remove ·
+    ? help · esc close. The destructive editor + test panel live in
+    ResourceEditorScreen."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Close"),
+        Binding("a", "add", "Add", show=False),
+        Binding("e", "edit", "Edit", show=False),
+        Binding("delete", "remove", "Remove", show=False),
+        Binding("question_mark", "help", "Help", show=False),
+    ]
+
+    def __init__(self, *, project_root: str, project_id: str, config_path: str) -> None:
+        super().__init__()
+        self._project_root = project_root
+        self._project_id = project_id
+        self._config_path = config_path
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(f"Shared resources — {_basename(self._project_root)}",
+                  classes="dialog-title"),
+            OptionList(id="reslist"),
+            Label("a add · e edit · Del remove · ? help · esc close",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._reload()
+
+    def _reload(self) -> None:
+        from . import queue_config as _qc
+        ol = self.query_one("#reslist", OptionList)
+        ol.clear_options()
+        resources = _qc.list_resources(self._config_path, self._project_id)
+        if not resources:
+            ol.add_option(Option("(no resources yet — press a to add)", id=None))
+            return
+        for rid, res in sorted(resources.items()):
+            label = (f"{rid:<14} {res.get('kind',''):<9} "
+                     f"acquire:{res.get('acquire','')}  run_in:{res.get('run_in','')}")
+            ol.add_option(Option(label, id=rid))
+
+    def action_add(self) -> None:
+        def after(saved):
+            if saved:
+                self._reload()
+        self.app.push_screen(
+            ResourceEditorScreen(project_root=self._project_root,
+                                 project_id=self._project_id,
+                                 config_path=self._config_path,
+                                 resource_id=None),
+            after)
+
+    def action_edit(self) -> None:
+        rid = self._selected_rid()
+        if not rid:
+            return
+        def after(saved):
+            if saved:
+                self._reload()
+        self.app.push_screen(
+            ResourceEditorScreen(project_root=self._project_root,
+                                 project_id=self._project_id,
+                                 config_path=self._config_path,
+                                 resource_id=rid),
+            after)
+
+    def action_remove(self) -> None:
+        from . import queue_config as _qc
+        rid = self._selected_rid()
+        if not rid:
+            return
+        def after(ok: bool) -> None:
+            if ok:
+                _qc.remove_resource(self._config_path, self._project_id, rid)
+                self._reload()
+        self.app.push_screen(
+            ConfirmScreen(f"Remove shared resource '{rid}'? (queue config only; "
+                          "no files are touched)"), after)
+
+    def action_help(self) -> None:
+        self.app.push_screen(QueueHelpScreen())
+
+    def _selected_rid(self) -> "str | None":
+        ol = self.query_one("#reslist", OptionList)
+        idx = ol.highlighted
+        if idx is None:
+            return None
+        opt = ol.get_option_at_index(idx)
+        return opt.id
+
+
+class ResourceEditorScreen(_PanelScreen):
+    """Filled in the editor task; placeholder keeps the module importable."""
+    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+
+    def __init__(self, *, project_root, project_id, config_path, resource_id) -> None:
+        super().__init__()
+        self._project_root = project_root
+        self._project_id = project_id
+        self._config_path = config_path
+        self._resource_id = resource_id
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(Label("Resource editor (TODO)", classes="dialog-title"),
+                       Label("esc cancel", classes="dialog-hint"), id="panel")
+
+
+class QueueHelpScreen(_PanelScreen):
+    """Filled in the help task; placeholder."""
+    BINDINGS = [Binding("escape", "dismiss(None)", "Close")]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(Label("Queue help (TODO)", classes="dialog-title"),
+                       Label("esc close", classes="dialog-hint"), id="panel")
+
+
 class RescanScreen(_PanelScreen):
     """Progress panel for the F5 rescan. A centered _PanelScreen (matching the
     other dialogs) holding an indeterminate-then-determinate bar and an X/N
@@ -646,6 +766,7 @@ class SessionExplorerApp(App):
         Binding("h", "help", "Help"),
         Binding("q", "toggle_queues", "Queues"),
         Binding("x", "quit", "Exit"),
+        Binding("s", "resource_setup", "Shared resources", show=False),
         Binding("escape", "close_preview", "Close preview", show=False),
         # The Tree's own toggle keys (enter/space) are taken over by resume and
         # preview above, and this Textual version has no left/right binding, so
@@ -732,6 +853,10 @@ class SessionExplorerApp(App):
         # The usage bar only exists in the tmux-hosted layout.
         if action == "toggle_usage" and not self._tmux_enabled:
             return False
+        # `s` (shared-resource setup) is only meaningful with a project selected.
+        if action == "resource_setup":
+            proj, _ = self._project_and_prefix_for_cursor()
+            return proj is not None
         return True
 
     def on_click(self, event) -> None:
@@ -1402,6 +1527,19 @@ class SessionExplorerApp(App):
             self._populate()
 
         self.push_screen(NewFolderScreen(project, prefix), after)
+
+    def action_resource_setup(self) -> None:
+        from . import project_id as _pid
+        project, _ = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+        pid = _pid.project_id(project)
+        if pid is None:
+            self.notify("This project is not a git repository — shared resources "
+                        "need a repo.", severity="warning")
+            return
+        self.push_screen(ResourceListScreen(project_root=project, project_id=pid,
+                                             config_path=self._queue_config_path()))
 
     def action_new_session(self) -> None:
         project, prefix = self._project_and_prefix_for_cursor()

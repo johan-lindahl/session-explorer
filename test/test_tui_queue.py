@@ -120,3 +120,39 @@ async def test_poll_live_refreshes_the_pane(index_path, tmp_path, monkeypatch):
             assert "holder: Gym/db" in str(app.query_one("#queues").render())
         finally:
             ticket.release()
+
+
+@pytest.mark.asyncio
+async def test_s_disabled_without_project_selection(index_path):
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # No project node selected (empty tree) → resource_setup is disabled.
+        assert app.check_action("resource_setup", ()) is False
+
+
+@pytest.mark.asyncio
+async def test_resource_list_lists_configured_resources(index_path, tmp_path, monkeypatch):
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceListScreen
+    # A real git repo so project_id resolves.
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    queue_config.add_resource(
+        qcfg, project_id=pid, display_path=str(repo), resource_id="db",
+        resource={"kind": "port", "run_in": "worktree",
+                  "acquire": "none", "release": "none"})
+    screen = ResourceListScreen(project_root=str(repo), project_id=pid,
+                                config_path=qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(screen)
+        await pilot.pause()
+        # The OptionList contains the resource id.
+        assert any("db" in str(o.prompt) for o in screen.query_one("#reslist").options)
