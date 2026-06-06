@@ -106,8 +106,13 @@ paid once.
 ### 1. Queue core — daemon-less FIFO + flock crash-reaping
 
 - **Queue identity — keyed by project *and* resource, never resource alone.**
-  Store: `~/.claude/session-explorer-queues/<project-id>/<resource>/`, where
-  `<project-id>` is a stable hash of the **canonical repo root**, computed by a
+  Store: `~/.claude/session-explorer-queues/<project-id>/<resource-id>/`, where
+  `<resource-id>` is a **validated slug** (`[a-z0-9][a-z0-9-]*`, no slashes /
+  dots / `..`), kept **distinct from a resource's filesystem `path`** (§2): the
+  path — which for `root-dir`/`path` can contain slashes, `..`, or symlink-looking
+  components — is **never** used as an on-disk key component, so it can't cause
+  traversal, nesting, or collision. `<project-id>` is a stable hash of the
+  **canonical repo root**, computed by a
   **new shared helper** (used identically by queue identity, `cwd` resolution in
   §3, and live-root matching in §5): `git rev-parse --show-toplevel` to resolve an
   arbitrary subdirectory cwd to the git top-level, `realpath` to canonicalize
@@ -168,7 +173,8 @@ A project opts in by declaring **one or more resources**. "Opted in" simply mean
 | Param | Purpose | Status |
 |---|---|---|
 | `kind` | `root-dir`/`path`/`port`/`device`/`name` — governs sync + exclusive-or applicability | **core** |
-| `resource` | the resource's name/key (and, for `root-dir`/`path`, its filesystem path; auto-derived from `index._project_label`/`project_path` for `root-dir`) | **core** |
+| `resource_id` | validated slug (`[a-z0-9][a-z0-9-]*`) used as the on-disk queue key and in `--resource`; **not** a filesystem path | **core** |
+| `path` | filesystem path of a `root-dir`/`path` resource (auto-derived from the canonical helper for `root-dir`); stored as data, never an on-disk key component | **core** |
 | `guard` | commands that must hold the lease — matched on **parsed argv** (executable basename + required subcommand tokens), not substring regex (see below) | **core** |
 | `run_in` | working directory for the command — `root` or `worktree` | **core** |
 | `acquire` / `release` | lifecycle hooks; each = a **strategy**: `sync` \| `none` \| `command` (arbitrary shell) | **core** |
@@ -230,11 +236,17 @@ so its filters are specified exactly, not as `--exclude .git`.
   files):
   - A tiny **conservative auto-protect default** — `/.git`, `/.env`, `/.env.*` —
     is protected immediately, no prompt.
-  - For **every other path the dry-run shows would be deleted** (gitignored or
-    untracked root files), `queue-run` **refuses until the user classifies each**
-    in the setup dialog: *protect* (local/precious — secrets, certs, fixtures) vs
-    *allow-delete* (regenerable — caches, build output). Choices persist into the
-    resource's `protect` list and an explicit allow-delete set.
+  - The classification set is **only untracked + gitignored** root paths. For
+    each such path the dry-run shows would be deleted, `queue-run` **refuses until
+    the user classifies it** in the setup dialog: *protect* (local/precious —
+    secrets, certs, fixtures) vs *allow-delete* (regenerable — caches, build
+    output). Choices persist into the resource's `protect` list and an explicit
+    allow-delete set.
+  - **Tracked root files are never classified or protected by this gate.** A
+    dry-run deletion of a *tracked* file means it exists on root's branch but not
+    the holder's — a legitimate branch difference the reset must apply — so it is
+    deleted, never prompted. Protecting it would make root stop matching the
+    active holder.
   A small per-resource **sandbox marker** records that the resource is in sandbox
   mode and the baseline is settled.
 - **Steady state runs free.** Once classified, acquires `--delete` without
@@ -257,7 +269,7 @@ session-explorer queue-run --resource <r> -- <command>
 from `cwd`** (collapsing worktree → parent, exactly as the index does), so an
 agent in a worktree resolves to its parent project's resource without extra
 flags. Overrides: `--project <root>` to name the project explicitly, and a
-fully-qualified `<project-id>/<resource>` id for non-cwd callers (the TUI, hooks,
+fully-qualified `<project-id>/<resource-id>` id for non-cwd callers (the TUI, hooks,
 `queue-status`). If `cwd` resolves to no opted-in project, `queue-run` errors
 clearly rather than guessing.
 
@@ -278,6 +290,12 @@ The order is load-bearing:
   specified in §2**, never a bare `--exclude .git`); `none` (serialize only);
   `command` (arbitrary shell, e.g. a DB reset). A worktree session's `sync`
   always re-syncs its own files, so it never depends on root's prior contents.
+- **`root-dir` `sync` requires a worktree source.** If `queue-run` for a
+  `root-dir` resource is invoked from the **root checkout itself** (canonical cwd
+  == the resource's root path, so there is no holder worktree), it **refuses**
+  with a clear reason — it never rsyncs root over itself. A root cwd is the
+  exclusive-or *holder* (§5), not a lease participant; guarded work there is the
+  thing the prevention layer steers away from, not something to sandbox-sync.
 - **`release` is race-free by ordering** — all file movement (e.g. syncing build
   artifacts back to the holder's own worktree) happens *inside* the exclusive
   window; releasing the ticket is strictly last.
@@ -298,7 +316,7 @@ caller's intent is preserved:
 - **Release-hook failures don't strand the queue — but can fail the run.** The
   `release` hook is **time-bounded**; if it fails or times out, `queue-run`
   **always still releases the ticket** (so the next holder proceeds) and writes
-  the error to a separate short-lived record — `…/<resource>/history/` (last-N or
+  the error to a separate short-lived record — `…/<resource-id>/history/` (last-N or
   TTL-pruned), **not** the now-deleted ticket — read by `queue-status`/pane. Queue
   *liveness* is never blocked. Whether the **exit status** reflects the failure is
   governed by the per-resource **`release_required`** flag: when set — templates
@@ -315,12 +333,13 @@ protocol, because merely unlinking a waiting ticket would not stop the waiter
 (which still holds its open fd/flock and keeps polling): the **wait loop
 re-checks its own ticket each poll**. Cancellation is **atomic under the queue
 `.lock`** — `queue-cancel` takes the metadata lock, **revalidates the target is
-still a waiter and not the current holder**, writes a **tombstone named so it is
-excluded from ticket ordering and holder selection** (a distinct non-ticket
-marker, *not* a renamed ticket left in the visible queue dir, which would perturb
-the head-of-line/holder computation), records the reason in `…/history/`, and
-releases the lock. The waiter, polling under the same lock discipline, sees its
-ticket tombstoned and **exits non-zero with that reason**. `queue-cancel` targets
+still a waiter and not the current holder**, then **unlinks the ticket itself**
+(removing it from FIFO ordering and holder selection) *and* writes a separate
+**excluded tombstone/history record** carrying the reason (a non-ticket marker
+ordering ignores). Unlinking the ticket is the point: a tombstone left *alongside*
+a still-present ticket would keep blocking FIFO selection. The waiter, polling
+under the same lock discipline, treats **its ticket being gone (or a tombstone for
+it)** as cancellation and **exits non-zero with that reason**. `queue-cancel` targets
 **waiting tickets only — a current holder cannot be canceled this way** (aborting
 a running command is out of scope; the holder releases via its own lifecycle). Head-of-line blocking is *not* a special hazard
 for the live-root case: the exclusive-or rule blocks **all** worktree acquires
