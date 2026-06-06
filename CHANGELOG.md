@@ -3,6 +3,48 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.13.0
+
+### Added
+- **Shared-resource lease engine — TUI surface (Phase 2).** The Phase-1
+  `queue-run`/`queue-status`/`queue-cancel` core now has an explorer front end,
+  read directly from the in-process stores (no shelling out).
+  - **Queues pane (`q`)** — a global, **read-only** view of every active queue
+    across all opted-in projects, each row showing the holder (+ elapsed) and
+    the waiting line with positions ("1 of 2"); `⛔ held by live session` for a
+    root-dir blocked by a live root session. Live on the existing ~2s refresh
+    loop. **Content-gated**: it takes space only when there is an active queue
+    anywhere or the selected project has configured resources, so a curious
+    one-time toggle never leaves a permanent empty pane. Visibility persists
+    globally in `~/.claude/session-explorer-ui.json`.
+  - **Per-project setup (`s`)** — a resource list (add/edit/remove) and a
+    **template-first editor** that reflows per `kind`: a `device`/`port`/`name`
+    hides the path + protect inputs and runs in a worktree; a `root-dir` shows
+    `protect` and a read-only canonical path (always the repo's main working
+    tree). Templates cover the documented cases (bind-mounted stack, browser
+    e2e, iOS simulator, shared DB, root-only `.env`, device/seat, custom).
+  - **Test panel** — a guard-match tester (no side effects), an **rsync
+    dry-run** that highlights deletions *and* surfaces the exclusive-or check
+    (live-root block + dirty-root transition guard) and refuses when the source
+    equals root, and a health probe. De-risks the destructive `sync` acquire
+    before any real run.
+  - **New-session dialog** — checking *Create git worktree* auto-fills the
+    worktree name from a slug of the session name (manual edits stop the
+    sync); the checkbox **defaults on** and a plain-root session warns when the
+    project has a `root-dir` resource.
+  - **Best-effort out-of-lease detection toast** — a debounced, weak signal
+    that the shared root changed while no lease and no live root session held
+    it. Honest about its limits (catches creates/deletes/renames, misses
+    in-place writes); never enforcement.
+  - **Offline `?` help** and a copyable guide link, plus the full
+    `docs/queue-guide.md` user guide (when-NOT-to-use first, then the
+    `--delete`/`protect` rules and template catalog).
+
+### Changed
+- **`q` now toggles the Queues pane and `x` exits** (quit moved off `q`). The
+  only added footer key is `q`; `s`/`a`/`e`/`Del` are pane-local, and `x` is
+  *only* Exit — never a destructive action.
+
 ## 1.12.1
 
 ### Fixed
