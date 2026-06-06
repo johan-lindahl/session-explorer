@@ -44,6 +44,116 @@ def worktree_slug(name: str) -> str:
     return display
 
 
+# Spec §7 template catalog. `defaults` is merged into a resource dict; the editor
+# overlays user edits. Kept as pure data so it is unit-tested without Textual.
+QUEUE_TEMPLATES = [
+    {"key": "bind-mounted-stack", "title": "Bind-mounted stack, well-known ports",
+     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
+                  "run_in": "root",
+                  "guard": [{"exe": "docker", "sub": ["compose", "up"]},
+                            {"exe": "docker", "sub": ["compose", "run"]}],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]},
+                  "wait_for": {"type": "url", "target": "http://localhost:8080",
+                               "timeout": 120}}},
+    {"key": "browser-e2e", "title": "Browser e2e vs fixed-URL app",
+     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
+                  "run_in": "root",
+                  "guard": [{"exe": "playwright", "sub": ["test"]},
+                            {"exe": "cypress", "sub": ["run"]}],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]},
+                  "wait_for": {"type": "url", "target": "http://localhost:3000",
+                               "timeout": 120}}},
+    {"key": "ios-sim", "title": "iOS simulator / xcodebuild",
+     "defaults": {"kind": "device", "acquire": "none", "release": "none",
+                  "run_in": "worktree",
+                  "guard": [{"exe": "xcodebuild", "sub": ["test"]}]}},
+    # acquire defaults to "none" (valid as-saved); filling the editor's acquire
+    # field promotes it to "command" with the user's DB-reset shell. Shipping
+    # acquire="command" with an empty command_acquire would fail queue_config
+    # validation on save (queue_config.py:121-122).
+    {"key": "shared-db", "title": "Single shared database",
+     "defaults": {"kind": "port", "acquire": "none", "release": "none",
+                  "run_in": "worktree",
+                  "guard": [{"exe": "npm", "sub": ["run", "migrate"]}]}},
+    {"key": "root-env", "title": "Root-only credentials / .env",
+     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
+                  "run_in": "root", "guard": [],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]}}},
+    {"key": "device-seat", "title": "Single device / HIL / license seat",
+     "defaults": {"kind": "name", "acquire": "none", "release": "none",
+                  "run_in": "worktree", "guard": []}},
+    {"key": "custom", "title": "Custom / blank",
+     "defaults": {"kind": "name", "acquire": "none", "release": "none",
+                  "run_in": "worktree", "guard": []}},
+]
+
+
+def template_resource(key: str, *, path: str) -> dict:
+    """Build a fresh resource dict from a template key. Pure."""
+    import copy
+    tpl = next((t for t in QUEUE_TEMPLATES if t["key"] == key), None)
+    if tpl is None:
+        tpl = next(t for t in QUEUE_TEMPLATES if t["key"] == "custom")
+    res = copy.deepcopy(tpl["defaults"])
+    if res.get("kind") in ("root-dir", "path") and path:
+        res["path"] = path
+    return res
+
+
+# --- Editor form <-> resource-dict conversions (pure, unit-tested) ---
+
+def parse_guard_lines(text: str) -> list:
+    """Each non-empty line 'exe sub1 sub2' -> {'exe': exe, 'sub': [sub1, ...]}.
+    Blank/whitespace-only lines are dropped. So 'docker compose up' becomes
+    {'exe': 'docker', 'sub': ['compose', 'up']}. Pure."""
+    rules = []
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        rules.append({"exe": parts[0], "sub": parts[1:]})
+    return rules
+
+
+def format_guard_lines(rules: list) -> str:
+    """Inverse of parse_guard_lines, to pre-fill the guard editor."""
+    return "\n".join(" ".join([r.get("exe", "")] + list(r.get("sub", [])))
+                     for r in (rules or []))
+
+
+def parse_path_lines(text: str) -> list:
+    """One path per line; blanks dropped, whitespace trimmed (for protect)."""
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
+def parse_wait_for(text: str, timeout_text: str) -> "dict | None":
+    """'<url|port|command> <target>' + a timeout string -> a wait_for spec, or
+    None when empty/invalid (so a cleared field removes the spec). Pure."""
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        return None
+    wtype, target = parts[0], parts[1].strip()
+    if wtype not in ("url", "port", "command") or not target:
+        return None
+    try:
+        timeout = float(timeout_text.strip()) if timeout_text.strip() else 60.0
+    except ValueError:
+        timeout = 60.0
+    return {"type": wtype, "target": target, "timeout": timeout}
+
+
+def format_wait_for(spec: dict) -> tuple:
+    """Inverse of parse_wait_for: ('type target', 'timeout') for pre-filling."""
+    if not spec:
+        return ("", "")
+    line = f"{spec.get('type', '')} {spec.get('target', '')}".strip()
+    t = spec.get("timeout")
+    return (line, "" if t is None else str(t))
+
+
 def _index_path() -> str:
     return os.environ.get("SESSION_EXPLORER_INDEX") or os.path.expanduser(
         "~/.claude/session-explorer-index.json"
@@ -664,19 +774,188 @@ class ResourceListScreen(_PanelScreen):
 
 
 class ResourceEditorScreen(_PanelScreen):
-    """Filled in the editor task; placeholder keeps the module importable."""
-    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+    """Template-first resource editor that reflows per kind (spec §6). Saves via
+    queue_config.add_resource (which enforces the §2 invariants). Returns True on
+    a successful save, False on cancel. The destructive test panel is mounted by
+    the test-panel task."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(False)", "Cancel"),
+        Binding("ctrl+s", "save", "Save"),
+    ]
 
     def __init__(self, *, project_root, project_id, config_path, resource_id) -> None:
         super().__init__()
         self._project_root = project_root
         self._project_id = project_id
         self._config_path = config_path
-        self._resource_id = resource_id
+        self._resource_id = resource_id          # None == add
+        self._template_key = "custom"
+        from . import project_id as _pid
+        # A root-dir resource's path is the repo's MAIN working tree, never the
+        # selected tree node — which can be an arbitrary `git worktree add`
+        # shown as its own project (spec §1). Derive it via the git-common-dir
+        # helper; fall back to the node path if git can't resolve it.
+        self._root_path = _pid.main_root(project_root) or project_root
+        self._existing = None
+        self._kind = "name"
 
     def compose(self) -> ComposeResult:
-        yield Vertical(Label("Resource editor (TODO)", classes="dialog-title"),
-                       Label("esc cancel", classes="dialog-hint"), id="panel")
+        from . import queue_config as _qc
+        existing = (_qc.get_resource(self._config_path, self._project_id,
+                                     self._resource_id) if self._resource_id else None)
+        self._existing = existing
+        if existing:
+            self._template_key = "custom"   # edit: seed fields from the stored shape
+        base = existing or template_resource("custom", path=self._root_path)
+        self._kind = base.get("kind", "name")
+        title = ("Edit resource" if existing else "Add resource") + \
+                f" — {_basename(self._project_root)}"
+        opts = [Option(t["title"], id=t["key"]) for t in QUEUE_TEMPLATES]
+        yield Vertical(
+            Label(title, classes="dialog-title"),
+            Label("Template", classes="dialog-hint"),
+            OptionList(*opts, id="res-template"),
+            Input(value=self._resource_id or "", placeholder="resource id (e.g. ios-sim)",
+                  id="res-id", disabled=bool(self._resource_id)),
+            Label(f"kind: {self._kind}", id="res-kind", classes="dialog-hint"),
+            Input(value=base.get("path", self._root_path),
+                  placeholder="path (path-kind editable; root-dir is auto-derived)",
+                  id="res-path"),
+            Label("Guard — one 'exe sub…' rule per line (empty = unguarded)",
+                  classes="dialog-hint"),
+            TextArea(format_guard_lines(base.get("guard", [])), id="res-guard"),
+            Label("Protect — root-only paths to keep, one per line (root-dir/path)",
+                  id="res-protect-label", classes="dialog-hint"),
+            TextArea("\n".join(base.get("sync", {}).get("protect", [])), id="res-protect"),
+            Input(value=base.get("command_acquire", ""),
+                  placeholder="acquire command (when acquire=command)", id="res-acq"),
+            Input(value=base.get("command_release", ""),
+                  placeholder="release command (optional)", id="res-rel"),
+            Checkbox("release required (fail the run if release fails)",
+                     value=bool(base.get("release_required")), id="res-req"),
+            Input(value=base.get("health", ""),
+                  placeholder="health check command (optional)", id="res-health"),
+            Input(value=format_wait_for(base.get("wait_for"))[0],
+                  placeholder="readiness: '<url|port|command> <target>' (optional)",
+                  id="res-wait"),
+            Input(value=format_wait_for(base.get("wait_for"))[1],
+                  placeholder="readiness timeout seconds (default 60)", id="res-wait-timeout"),
+            Label("", id="res-error", classes="dialog-hint"),
+            Label("ctrl-s save · ctrl-t guard · ctrl-r dry-run · ctrl-h health · esc cancel",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._reflow(self._kind)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "res-template":
+            return
+        self._template_key = event.option.id or "custom"
+        res = template_resource(self._template_key, path=self._root_path)
+        self._kind = res["kind"]
+        self.query_one("#res-kind", Label).update(f"kind: {res['kind']}")
+        # Repopulate the form from the chosen template's defaults.
+        self.query_one("#res-guard", TextArea).text = format_guard_lines(res.get("guard", []))
+        self.query_one("#res-protect", TextArea).text = "\n".join(
+            res.get("sync", {}).get("protect", []))
+        self.query_one("#res-acq", Input).value = res.get("command_acquire", "")
+        wline, wt = format_wait_for(res.get("wait_for"))
+        self.query_one("#res-wait", Input).value = wline
+        self.query_one("#res-wait-timeout", Input).value = wt
+        self._reflow(res["kind"])
+
+    def _reflow(self, kind: str) -> None:
+        """Hide the path + protect inputs for non-file kinds (spec §6 reflow). A
+        root-dir path is auto-derived (spec §1), so its input is shown read-only
+        as the canonical main-worktree path; only a `path`-kind path is editable."""
+        is_file = kind in ("root-dir", "path")
+        path_input = self.query_one("#res-path", Input)
+        path_input.display = is_file
+        path_input.disabled = (kind == "root-dir")
+        if kind == "root-dir":
+            path_input.value = self._root_path     # canonical, not user-editable
+        self.query_one("#res-protect", TextArea).display = is_file
+        self.query_one("#res-protect-label", Label).display = is_file
+
+    def _build_resource(self) -> dict:
+        if self._existing is not None and self._template_key == "custom":
+            res = dict(self._existing)
+        else:
+            res = template_resource(self._template_key, path=self._root_path)
+        kind = res.get("kind")
+        # root-dir path is ALWAYS the canonical main worktree (spec §1) — never
+        # the editable input. Only a `path`-kind path is taken from the form.
+        if kind == "root-dir":
+            res["path"] = self._root_path
+        elif kind == "path":
+            p = self.query_one("#res-path", Input).value.strip()
+            if p:
+                res["path"] = p
+        # The guard form is authoritative — an empty form means unguarded.
+        res["guard"] = parse_guard_lines(self.query_one("#res-guard", TextArea).text)
+        # Protect only has meaning when syncing; fold the form into the sync dict.
+        if res.get("acquire") == "sync":
+            sync = res.setdefault("sync", {"delete": True, "exclude": ["/.git"]})
+            sync["protect"] = parse_path_lines(self.query_one("#res-protect", TextArea).text)
+        # Command/health/wait_for: the form is authoritative, so a CLEARED field
+        # removes the stale value (and reverts a now-empty command strategy to
+        # 'none') rather than silently keeping the old one (Finding 3).
+        acq = self.query_one("#res-acq", Input).value.strip()
+        if acq:
+            res["command_acquire"] = acq
+            res["acquire"] = "command"
+        else:
+            res.pop("command_acquire", None)
+            if res.get("acquire") == "command":
+                res["acquire"] = "none"
+        rel = self.query_one("#res-rel", Input).value.strip()
+        if rel:
+            res["command_release"] = rel
+            res["release"] = "command"
+        else:
+            res.pop("command_release", None)
+            if res.get("release") == "command":
+                res["release"] = "none"
+        res["release_required"] = self.query_one("#res-req", Checkbox).value
+        health = self.query_one("#res-health", Input).value.strip()
+        if health:
+            res["health"] = health
+        else:
+            res.pop("health", None)
+        wf = parse_wait_for(self.query_one("#res-wait", Input).value,
+                            self.query_one("#res-wait-timeout", Input).value)
+        if wf:
+            res["wait_for"] = wf
+        else:
+            res.pop("wait_for", None)
+        return res
+
+    def action_save(self) -> None:
+        from . import queue_config as _qc
+        rid = self.query_one("#res-id", Input).value.strip()
+        # A non-empty but unparseable readiness field is a typo, not "no
+        # readiness" — refuse rather than silently drop it. (Empty still clears,
+        # handled in _build_resource.) Kept here, not in _build_resource, so the
+        # test-panel actions that also build the resource never raise on a typo.
+        wait_text = self.query_one("#res-wait", Input).value.strip()
+        if wait_text and parse_wait_for(
+                self.query_one("#res-wait", Input).value,
+                self.query_one("#res-wait-timeout", Input).value) is None:
+            self.query_one("#res-error", Label).update(
+                "[red]readiness must be '<url|port|command> <target>'[/]")
+            return
+        try:
+            res = self._build_resource()
+            _qc.add_resource(self._config_path, project_id=self._project_id,
+                             display_path=self._project_root, resource_id=rid,
+                             resource=res)
+        except ValueError as e:
+            self.query_one("#res-error", Label).update(f"[red]{e}[/]")
+            return
+        self.dismiss(True)
 
 
 class QueueHelpScreen(_PanelScreen):

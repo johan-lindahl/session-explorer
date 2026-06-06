@@ -156,3 +156,191 @@ async def test_resource_list_lists_configured_resources(index_path, tmp_path, mo
         await pilot.pause()
         # The OptionList contains the resource id.
         assert any("db" in str(o.prompt) for o in screen.query_one("#reslist").options)
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_a_resource(index_path, tmp_path, monkeypatch):
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-id", Input).value = "ios-sim"
+        screen._template_key = "ios-sim"
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "ios-sim")
+    assert res is not None and res["kind"] == "device" and res["run_in"] == "worktree"
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_guard_and_protect_for_root_dir(index_path, tmp_path, monkeypatch):
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-id", Input).value = "root"
+        screen._template_key = "root-env"                # root-dir · sync
+        screen.query_one("#res-guard", TextArea).text = "docker compose up"
+        screen.query_one("#res-protect", TextArea).text = "/.git\n/.env\n/certs"
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "root")
+    assert res["kind"] == "root-dir"
+    # A custom guard and a custom protect entry both round-trip into the save.
+    assert {"exe": "docker", "sub": ["compose", "up"]} in res["guard"]
+    assert "/certs" in res["sync"]["protect"]
+
+
+@pytest.mark.asyncio
+async def test_root_dir_path_is_main_worktree_not_the_selected_worktree(
+        index_path, tmp_path, monkeypatch):
+    # Finding-1 regression: standing on an arbitrary `git worktree add` node, the
+    # saved root-dir path must be the repo's MAIN working tree (spec §1), not the
+    # worktree we happened to select.
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-m", "x", "-q"],
+                   check=True, env=env)
+    wt = tmp_path / "repo-feat"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", str(wt), "-b", "feat"],
+                   check=True, env=env)
+    pid = project_id.project_id(str(wt))   # same id as repo (git-common-dir)
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(wt), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-id", Input).value = "root"
+        screen._template_key = "root-env"
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "root")
+    assert res["path"] == project_id.main_root(str(repo))
+    assert res["path"] != str(wt)
+
+
+@pytest.mark.asyncio
+async def test_root_dir_ignores_path_edits_and_saves_wait_for(
+        index_path, tmp_path, monkeypatch):
+    # Finding 1: a typed path is ignored for root-dir (always canonical).
+    # Finding 2: wait_for is editable and round-trips into the save.
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-id", Input).value = "root"
+        screen._template_key = "root-env"
+        screen.query_one("#res-path", Input).value = "/totally/wrong"   # tampered
+        screen.query_one("#res-wait", Input).value = "url http://localhost:8080"
+        screen.query_one("#res-wait-timeout", Input).value = "90"
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "root")
+    assert res["path"] == project_id.main_root(str(repo))     # tamper ignored
+    assert res["wait_for"] == {"type": "url",
+                               "target": "http://localhost:8080", "timeout": 90.0}
+
+
+@pytest.mark.asyncio
+async def test_editing_clears_stale_command_and_health(index_path, tmp_path, monkeypatch):
+    # Finding 3: clearing a field in the editor removes the stale value (and
+    # reverts a now-empty command strategy to 'none'), not leaves the old one.
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    queue_config.add_resource(
+        qcfg, project_id=pid, display_path=str(repo), resource_id="db",
+        resource={"kind": "port", "run_in": "worktree", "acquire": "command",
+                  "release": "none", "command_acquire": "reset-db",
+                  "health": "pg_isready"})
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id="db")
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-acq", Input).value = ""
+        screen.query_one("#res-health", Input).value = ""
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "db")
+    assert "command_acquire" not in res
+    assert res["acquire"] == "none"         # reverted from 'command'
+    assert "health" not in res
+
+
+@pytest.mark.asyncio
+async def test_malformed_wait_for_is_refused_not_dropped(index_path, tmp_path, monkeypatch):
+    # Finding (polish): a non-empty but invalid readiness field must block the
+    # save with an error, not silently behave like "no readiness check".
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-id", Input).value = "root"
+        screen._template_key = "root-env"
+        screen.query_one("#res-wait", Input).value = "urls http://localhost:8080"  # typo
+        screen.action_save()
+        await pilot.pause()
+        assert "readiness" in str(screen.query_one("#res-error", Label).render()).lower()
+    # Save was refused → nothing persisted.
+    assert queue_config.get_resource(qcfg, pid, "root") is None
