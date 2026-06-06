@@ -565,11 +565,14 @@ class NewSessionScreen(_PanelScreen):
 
     BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
 
-    def __init__(self, project: str, name_prefix: str = "", cwd: str = "") -> None:
+    def __init__(self, project: str, name_prefix: str = "", cwd: str = "",
+                 *, root_is_shared: bool = False) -> None:
         super().__init__()
         self._project = project
         self._name_prefix = name_prefix
         self._cwd = cwd
+        self._root_is_shared = root_is_shared
+        self._wt_manual = False  # set once the user edits the worktree field
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -577,8 +580,10 @@ class NewSessionScreen(_PanelScreen):
                   classes="dialog-title"),
             Input(value=self._name_prefix, placeholder="session name", id="ns-name"),
             Input(value=self._cwd, placeholder="working directory", id="ns-cwd"),
-            Checkbox("Create git worktree (-w)", id="ns-wt"),
-            Input(placeholder="worktree name (optional)", id="ns-wtname", disabled=True),
+            Checkbox("Create git worktree (-w)", value=self._root_is_shared, id="ns-wt"),
+            Input(value=(worktree_slug(self._name_prefix) if self._root_is_shared else ""),
+                  placeholder="worktree name (optional)", id="ns-wtname",
+                  disabled=not self._root_is_shared),
             Label("enter create · esc cancel", classes="dialog-hint"),
             id="panel",
         )
@@ -592,7 +597,25 @@ class NewSessionScreen(_PanelScreen):
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "ns-wt":
-            self.query_one("#ns-wtname", Input).disabled = not event.value
+            wt = self.query_one("#ns-wtname", Input)
+            wt.disabled = not event.value
+            if event.value and not self._wt_manual and not wt.value:
+                wt.value = worktree_slug(self.query_one("#ns-name", Input).value)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "ns-name" and not self._wt_manual:
+            if self.query_one("#ns-wt", Checkbox).value:
+                # Programmatic auto-fill: happens while #ns-name has focus, so
+                # the resulting #ns-wtname Changed below sees an unfocused field
+                # and is NOT treated as a manual edit.
+                self.query_one("#ns-wtname", Input).value = worktree_slug(event.value)
+        elif event.input.id == "ns-wtname":
+            # A *user* edit requires #ns-wtname to be focused (the user is typing
+            # in it); our auto-fill writes it while #ns-name is focused. Using
+            # focus — not value comparison — correctly handles a user retyping the
+            # SAME slug, which a value check (value == slug(name)) would miss.
+            if event.input.has_focus:
+                self._wt_manual = True
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(self._result())
@@ -1928,47 +1951,68 @@ class SessionExplorerApp(App):
                                              config_path=self._queue_config_path()))
 
     def action_new_session(self) -> None:
+        from . import project_id as _pid, queue_config as _qc
         project, prefix = self._project_and_prefix_for_cursor()
         if not project:
             self.bell(); return
         sessions = _index.load(self._index_path).get("sessions", {})
         default_cwd = _derive_project_cwd(sessions, project) or os.path.expanduser("~")
+        pid = _pid.project_id(project)
+        root_is_shared = bool(pid and any(
+            r.get("kind") == "root-dir"
+            for r in _qc.list_resources(self._queue_config_path(), pid).values()))
 
         def after(result: "dict | None") -> None:
             if not result:
                 return
-            name = result["name"].strip()
-            cwd = result["cwd"].strip() or os.path.expanduser("~")
-            # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
-            worktree = (result["worktree_name"] or "") if result["worktree"] else None
-            sid = _new_sid()
-
-            # A blank name starts a *temporary* unnamed session: claude writes no
-            # custom-title, so it stays unnamed (hidden by default) and --gc reaps
-            # it on the retention schedule. Don't seed a name in that case.
-            if name:
-                # Seed the chosen name now: claude writes no transcript (and thus
-                # no custom-title) until the first turn, so without this the
-                # session shows under (unnamed) until then. claude -n persists the
-                # identical title later, so there's no divergence.
-                _index.seed_new_session(self._index_path, sid, name, cwd)
-
-            # Remember the new sid so the cursor jumps to its row once it
-            # appears in the tree (consumed by _populate; see select-on-create).
-            self._pending_select_sid = sid
-
-            # No tmux → exit and execvp claude (handled in run()).
-            if not self._tmux_enabled:
-                self._new_session_argv = _new_session_argv(sid, name, worktree)
-                self._new_session_cwd = cwd
-                self.exit()
+            if root_is_shared and not result["worktree"]:
+                def confirmed(ok: bool) -> None:
+                    if ok:
+                        self._finish_new_session(project, result)
+                self.push_screen(
+                    ConfirmScreen("This project's root is a shared sandbox; a "
+                                  "plain root session can be clobbered by a lease. "
+                                  "Create it anyway?"),
+                    confirmed)
                 return
+            self._finish_new_session(project, result)
 
-            _, display = split_path(name)
-            label = display or sid[:8]
-            self._do_new_session(sid, cwd, name, worktree, label)
+        self.push_screen(
+            NewSessionScreen(project, prefix, default_cwd,
+                             root_is_shared=root_is_shared),
+            after)
 
-        self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)
+    def _finish_new_session(self, project: str, result: dict) -> None:
+        name = result["name"].strip()
+        cwd = result["cwd"].strip() or os.path.expanduser("~")
+        # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
+        worktree = (result["worktree_name"] or "") if result["worktree"] else None
+        sid = _new_sid()
+
+        # A blank name starts a *temporary* unnamed session: claude writes no
+        # custom-title, so it stays unnamed (hidden by default) and --gc reaps
+        # it on the retention schedule. Don't seed a name in that case.
+        if name:
+            # Seed the chosen name now: claude writes no transcript (and thus
+            # no custom-title) until the first turn, so without this the
+            # session shows under (unnamed) until then. claude -n persists the
+            # identical title later, so there's no divergence.
+            _index.seed_new_session(self._index_path, sid, name, cwd)
+
+        # Remember the new sid so the cursor jumps to its row once it
+        # appears in the tree (consumed by _populate; see select-on-create).
+        self._pending_select_sid = sid
+
+        # No tmux → exit and execvp claude (handled in run()).
+        if not self._tmux_enabled:
+            self._new_session_argv = _new_session_argv(sid, name, worktree)
+            self._new_session_cwd = cwd
+            self.exit()
+            return
+
+        _, display = split_path(name)
+        label = display or sid[:8]
+        self._do_new_session(sid, cwd, name, worktree, label)
 
     def _do_new_session(self, sid: str, cwd: str, name: str,
                         worktree: "str | None", label: "str | None") -> None:

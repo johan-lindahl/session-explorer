@@ -455,3 +455,63 @@ async def test_queue_help_mentions_protect_and_guide(index_path):
     assert QUEUE_GUIDE_URL in text
     assert QUEUE_GUIDE_URL.startswith("https://github.com/")
     assert QUEUE_GUIDE_URL.endswith("/docs/queue-guide.md")
+
+
+@pytest.mark.asyncio
+async def test_new_session_autoslug_syncs_until_manual_edit(index_path):
+    from _pkg.tui import NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = NewSessionScreen("proj", name_prefix="", cwd="/x",
+                                  root_is_shared=False)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#ns-wt", Checkbox).value = True
+        await pilot.pause()
+        name = screen.query_one("#ns-name", Input)
+        name.value = "Sprint 14 Auth"
+        screen.on_input_changed(Input.Changed(name, "Sprint 14 Auth"))
+        assert screen.query_one("#ns-wtname", Input).value == "sprint-14-auth"
+
+
+@pytest.mark.asyncio
+async def test_new_session_defaults_worktree_on_for_root_dir_project(index_path):
+    from _pkg.tui import NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = NewSessionScreen("proj", name_prefix="", cwd="/x",
+                                  root_is_shared=True)
+        app.push_screen(screen)
+        await pilot.pause()
+        assert screen.query_one("#ns-wt", Checkbox).value is True
+
+
+@pytest.mark.asyncio
+async def test_manual_worktree_edit_persists_even_when_value_equals_slug(index_path):
+    # Finding 4: a user edit to the worktree field stops auto-sync even when the
+    # typed value happens to equal worktree_slug(name) — focus, not value, is the
+    # signal, so retyping the same slug still counts as manual.
+    from _pkg.tui import NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = NewSessionScreen("proj", name_prefix="", cwd="/x", root_is_shared=True)
+        app.push_screen(screen)
+        await pilot.pause()
+        name = screen.query_one("#ns-name", Input)
+        wt = screen.query_one("#ns-wtname", Input)
+        name.focus()
+        await pilot.pause()
+        name.value = "auth"
+        screen.on_input_changed(Input.Changed(name, "auth"))
+        assert wt.value == "auth"                 # auto-filled (name focused)
+        # User focuses the worktree field and retypes the SAME value → manual.
+        wt.focus()
+        await pilot.pause()
+        screen.on_input_changed(Input.Changed(wt, "auth"))
+        # A later name change must NOT overwrite the manual worktree name.
+        name.value = "auth two"
+        screen.on_input_changed(Input.Changed(name, "auth two"))
+        assert screen.query_one("#ns-wtname", Input).value == "auth"
