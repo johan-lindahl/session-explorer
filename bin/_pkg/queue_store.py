@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -182,3 +183,83 @@ def list_tickets(qdir: str) -> List[dict]:
         if data is not None:
             rows.append(data)
     return rows
+
+
+def _history_dir(qdir: str) -> str:
+    return os.path.join(qdir, "history")
+
+
+def _tombstone_name(number: int, sid: str) -> str:
+    safe_sid = "".join(c for c in sid if c.isalnum() or c in "-_") or "anon"
+    return f"cancel-{number:0{_NUM_WIDTH}d}-{safe_sid}.json"
+
+
+def cancel(qdir: str, *, sid: str, reason: str) -> bool:
+    """Cancel a WAITING ticket for `sid`. Returns False (no-op) if `sid` is the
+    current holder or has no ticket. Atomic under the queue lock: unlink the
+    ticket AND write a tombstone, so neither a stale ticket nor a lone tombstone
+    can mis-order the queue."""
+    os.makedirs(qdir, exist_ok=True)
+    with open(_lock_path(qdir), "a") as lockf:
+        fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+        try:
+            # Recompute live set under the lock (also reaps dead tickets).
+            live: List[Tuple[int, str]] = []
+            for number, path in _ticket_files(qdir):
+                if _probe_alive(path):
+                    live.append((number, path))
+                else:
+                    try:
+                        os.unlink(path)
+                    except FileNotFoundError:
+                        pass
+            if not live:
+                return False
+            holder_number = live[0][0]
+            target = next(((n, p) for n, p in live
+                           if _read_ticket(p) and _read_ticket(p).get("sid") == sid),
+                          None)
+            if target is None:
+                return False
+            number, path = target
+            if number == holder_number:
+                return False  # cannot cancel the running holder
+            os.makedirs(_history_dir(qdir), exist_ok=True)
+            tomb = os.path.join(_history_dir(qdir), _tombstone_name(number, sid))
+            with open(tomb, "w", encoding="utf-8") as tf:
+                json.dump({"number": number, "sid": sid, "reason": reason}, tf)
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            return True
+        finally:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+
+
+def cancelled_reason(qdir: str, number: int, sid: str) -> Optional[str]:
+    """If a tombstone exists for (number, sid), return its reason, else None."""
+    tomb = os.path.join(_history_dir(qdir), _tombstone_name(number, sid))
+    data = _read_ticket(tomb)
+    return data.get("reason") if data else None
+
+
+def wait_for_turn(qdir: str, ticket: "Ticket", *, poll_interval: float = 0.5,
+                  timeout: Optional[float] = None) -> str:
+    """Block until `ticket` is the holder. Returns:
+      "acquired"          -> ticket is now the holder
+      "timeout"           -> gave up after `timeout` seconds
+      "cancelled:<reason>"-> the ticket was cancelled by another process
+    The caller still owns the ticket and must release() it in a finally."""
+    waited = 0.0
+    while True:
+        # Cancellation: our ticket file vanished, or a tombstone names us.
+        reason = cancelled_reason(qdir, ticket.number, ticket.sid)
+        if reason is not None or not os.path.exists(ticket.path):
+            return f"cancelled:{reason or 'cancelled'}"
+        if holder(qdir) == ticket.number:
+            return "acquired"
+        if timeout is not None and waited >= timeout:
+            return "timeout"
+        time.sleep(poll_interval)
+        waited += poll_interval

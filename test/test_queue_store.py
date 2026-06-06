@@ -81,3 +81,59 @@ def test_list_tickets_returns_sorted_live_entries(tmp_path):
     assert [r["sid"] for r in rows] == ["a"]
     assert rows[0]["label"] == "Gym/root"
     a.release()
+
+
+import time
+
+
+def test_wait_returns_acquired_when_holder(tmp_path):
+    qdir = _qdir(tmp_path)
+    t = qs.take_ticket(qdir, sid="solo", cwd="/", command=["x"], pid=os.getpid(),
+                       label="l", now_iso="t")
+    outcome = qs.wait_for_turn(qdir, t, poll_interval=0.01, timeout=1.0)
+    assert outcome == "acquired"
+    t.release()
+
+
+def test_wait_times_out_behind_a_live_holder(tmp_path):
+    qdir = _qdir(tmp_path)
+    head = qs.take_ticket(qdir, sid="head", cwd="/", command=["x"], pid=os.getpid(),
+                          label="l", now_iso="t")
+    me = qs.take_ticket(qdir, sid="me", cwd="/", command=["x"], pid=os.getpid(),
+                        label="l", now_iso="t")
+    outcome = qs.wait_for_turn(qdir, me, poll_interval=0.01, timeout=0.2)
+    assert outcome == "timeout"
+    me.release(); head.release()
+
+
+def test_cancel_waiter_unlinks_and_tombstones(tmp_path):
+    qdir = _qdir(tmp_path)
+    head = qs.take_ticket(qdir, sid="head", cwd="/", command=["x"], pid=os.getpid(),
+                          label="l", now_iso="t")
+    waiter = qs.take_ticket(qdir, sid="wait", cwd="/", command=["x"], pid=os.getpid(),
+                            label="l", now_iso="t")
+    assert qs.cancel(qdir, sid="wait", reason="user cancelled") is True
+    assert not os.path.exists(waiter.path)             # ticket unlinked
+    assert qs.cancelled_reason(qdir, waiter.number, "wait") == "user cancelled"
+    head.release(); waiter.release()
+
+
+def test_cancel_refuses_current_holder(tmp_path):
+    qdir = _qdir(tmp_path)
+    head = qs.take_ticket(qdir, sid="head", cwd="/", command=["x"], pid=os.getpid(),
+                          label="l", now_iso="t")
+    assert qs.cancel(qdir, sid="head", reason="nope") is False  # holder protected
+    assert os.path.exists(head.path)
+    head.release()
+
+
+def test_wait_returns_cancelled_when_ticket_removed(tmp_path):
+    qdir = _qdir(tmp_path)
+    head = qs.take_ticket(qdir, sid="head", cwd="/", command=["x"], pid=os.getpid(),
+                          label="l", now_iso="t")
+    me = qs.take_ticket(qdir, sid="me", cwd="/", command=["x"], pid=os.getpid(),
+                        label="l", now_iso="t")
+    qs.cancel(qdir, sid="me", reason="bye")
+    outcome = qs.wait_for_turn(qdir, me, poll_interval=0.01, timeout=1.0)
+    assert outcome == "cancelled:bye"
+    head.release()
