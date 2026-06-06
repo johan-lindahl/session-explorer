@@ -114,3 +114,64 @@ print(count('SessionStart'), count('UserPromptSubmit'), count('Stop'), count('No
 "
   [ "$output" = "1 1 1 1 1" ]
 }
+
+@test "install registers a PreToolUse hook (nested matcher-group, Bash)" {
+  run bash "$REPO/install.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+pt = d['hooks']['PreToolUse']
+# Documented nested shape: a matcher group scoped to Bash with nested command.
+grp = next(h for h in pt if h.get('matcher') == 'Bash')
+cmds = [s.get('command','') for s in grp.get('hooks', [])]
+assert any('pre-tool-use.sh' in c for c in cmds), pt
+print('ok')
+"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "install is idempotent — one PreToolUse guard command after two runs" {
+  bash "$REPO/install.sh"
+  bash "$REPO/install.sh"
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+# Count guard commands in BOTH flat and nested shapes.
+cmds = []
+for h in d['hooks']['PreToolUse']:
+    if h.get('command'):
+        cmds.append(h['command'])
+    for sub in h.get('hooks', []) or []:
+        if sub.get('command'):
+            cmds.append(sub['command'])
+print(sum(1 for c in cmds if 'pre-tool-use.sh' in c))
+"
+  [ "$output" = "1" ]
+}
+
+@test "install preserves a shared-group user hook (even one whose path contains 'session-explorer')" {
+  mkdir -p "$HOME/.claude"
+  # The user hook path deliberately contains 'session-explorer' to prove nested
+  # pruning matches on concrete script names, not the broad marker.
+  python3 -c "
+import json, os
+json.dump({'hooks': {'PreToolUse': [
+    {'matcher': 'Bash', 'hooks': [
+        {'type': 'command', 'command': '/opt/session-explorer-helper/audit.sh'},
+        {'type': 'command', 'command': '$REPO/hooks/pre-tool-use.sh'}]}]}},
+    open(os.path.expanduser('~/.claude/settings.json'), 'w'))
+"
+  run bash "$REPO/install.sh"
+  [ "$status" -eq 0 ]
+  run python3 -c "
+import json
+d = json.load(open('$HOME/.claude/settings.json'))
+cmds = [s.get('command','') for h in d['hooks']['PreToolUse'] for s in h.get('hooks', []) or []]
+assert any('audit.sh' in c for c in cmds), d   # user hook preserved despite 'session-explorer' in path
+assert sum('pre-tool-use.sh' in c for c in cmds) == 1, d   # exactly one of ours
+print('ok')
+"
+  [ "$output" = "ok" ]
+}

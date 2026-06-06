@@ -12,11 +12,17 @@ import json
 import os
 import shutil
 
-_HOOK_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh")
+_HOOK_MARKERS = ("session-explorer", "session-start.sh", "session-live.sh",
+                 "pre-tool-use.sh")
 # Lifecycle events the plugin registers the live dispatcher on (plus SessionStart).
 # Mirrored in install.sh and .claude-plugin/plugin.json; keep all three in sync.
 _HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "Notification",
-                "SessionEnd")
+                "SessionEnd", "PreToolUse")
+# Concrete hook-script basenames — used when pruning sub-hooks inside a possibly
+# shared matcher group, where the broad "session-explorer" substring in
+# _HOOK_MARKERS could over-match a user hook whose path merely contains it. Our
+# own nested hooks are always one of these scripts.
+_HOOK_SCRIPTS = ("session-start.sh", "session-live.sh", "pre-tool-use.sh")
 _OPERATIONAL_SIDECARS = (
     ".session-explorer.current",
     ".session-explorer.help-seen",
@@ -37,10 +43,38 @@ _DATA_FILES = (
 )
 
 
-def _is_our_hook(entry: object) -> bool:
-    return isinstance(entry, dict) and any(
-        m in str(entry.get("command", "")) for m in _HOOK_MARKERS
-    )
+def _cmd_is_ours(cmd: object) -> bool:          # flat top-level entries
+    return any(m in str(cmd) for m in _HOOK_MARKERS)
+
+
+def _sub_is_ours(cmd: object) -> bool:          # nested sub-hooks (narrow)
+    return any(m in str(cmd) for m in _HOOK_SCRIPTS)
+
+
+def _prune_our_hooks(entries: list) -> "tuple[list, bool]":
+    """Return (kept_entries, changed). Drops our flat entries and our nested
+    command-hooks (nested matched by concrete script name, not the broad marker)
+    while preserving user hooks that share a matcher group; a group emptied of all
+    our hooks is dropped."""
+    kept: list = []
+    changed = False
+    for h in entries:
+        if not isinstance(h, dict):
+            kept.append(h)
+            continue
+        if "hooks" in h:
+            subs = h.get("hooks") or []
+            kept_subs = [s for s in subs
+                         if not (isinstance(s, dict) and _sub_is_ours(s.get("command", "")))]
+            if len(kept_subs) != len(subs):
+                changed = True
+            if kept_subs:
+                kept.append(dict(h, hooks=kept_subs) if len(kept_subs) != len(subs) else h)
+        elif _cmd_is_ours(h.get("command", "")):
+            changed = True
+        else:
+            kept.append(h)
+    return kept, changed
 
 
 def teardown(*, claude_dir: str, settings_path: "str | None" = None,
@@ -83,8 +117,8 @@ def teardown(*, claude_dir: str, settings_path: "str | None" = None,
                 entries = hooks.get(evt)
                 if not isinstance(entries, list):
                     continue
-                kept = [h for h in entries if not _is_our_hook(h)]
-                if len(kept) != len(entries):
+                kept, changed = _prune_our_hooks(entries)
+                if changed:
                     actions.append(f"removed {evt} hook entry")
                 if kept:
                     hooks[evt] = kept
