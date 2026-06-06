@@ -100,10 +100,18 @@ paid once.
 
 ### 1. Queue core — daemon-less FIFO + flock crash-reaping
 
-- Store: `~/.claude/session-explorer-queues/<resource>/`, one **ticket file**
-  per participant (monotonic ticket number, session id, cwd, command, PID,
-  heartbeat mtime). Mirrors the existing `flock` + sidecar-`.lock` +
-  temp-file-rename pattern used by `index.py` / `folder_store.py` / `live.py`.
+- **Queue identity — keyed by project *and* resource, never resource alone.**
+  Store: `~/.claude/session-explorer-queues/<project-id>/<resource>/`, where
+  `<project-id>` is a stable hash of the **canonical repo root** (the same
+  project identity the index derives via `index._project_label` / `project_path`,
+  so a worktree collapses onto its parent repo). Resource names like `root` /
+  `db` recur across projects, so keying by resource alone would collide; the
+  project hash disambiguates. The human-readable `‹project› / ‹resource›` label
+  shown in the pane is display metadata stored *inside* the ticket, kept separate
+  from the on-disk key. One **ticket file** per participant holds: monotonic
+  ticket number, session id, cwd, command, PID, heartbeat mtime, display label.
+  Mirrors the existing `flock` + sidecar-`.lock` + temp-file-rename pattern
+  (`index.py` / `folder_store.py` / `live.py`).
 - **Holder = the lowest ticket number whose process is alive.** Ordering from
   the number; the queue *is* the set of ticket files — no daemon remembers order.
 - **Crash-reaping via flock-on-own-ticket.** Each `queue-run` process holds
@@ -112,6 +120,13 @@ paid once.
   grabbable, the holder is dead (kernel released the lock on exit, including
   `SIGKILL`) → the waiter reaps the stale file and advances. Survives `SIGKILL`,
   immune to PID-reuse. PID + heartbeat mtime are recorded for **display only**.
+- **Ticket publication ordering (so a live ticket is never mis-reaped).** All of
+  *allocate number → write temp ticket → acquire `LOCK_EX` on it → atomic rename
+  into the visible queue dir* happens under an exclusive lock on the queue's
+  `.lock` metadata file, and the metadata lock is released only after the rename.
+  A ticket is therefore **published only after it already holds its lifetime
+  lock**, so a waiter's `LOCK_NB` liveness probe can never catch a just-created
+  ticket in the unlocked gap and falsely reap it as dead.
 - No central "holder lock": ticket numbers are unique, so exactly one ticket is
   ever the lowest-live one → exactly one holder. No tie, no TOCTOU.
 - **Capacity (deferred — design room).** v1 forces a single holder. The queue is
@@ -138,7 +153,7 @@ A project opts in by declaring **one or more resources**. "Opted in" simply mean
 |---|---|---|
 | `kind` | `root-dir`/`path`/`port`/`device`/`name` — governs sync + exclusive-or applicability | **core** |
 | `resource` | the resource's name/key (and, for `root-dir`/`path`, its filesystem path; auto-derived from `index._project_label`/`project_path` for `root-dir`) | **core** |
-| `guard` | command patterns that must hold the lease (user-declared; irreducibly project-specific) | **core** |
+| `guard` | commands that must hold the lease — matched on **parsed argv** (executable basename + required subcommand tokens), not substring regex (see below) | **core** |
 | `run_in` | working directory for the command — `root` or `worktree` | **core** |
 | `acquire` / `release` | lifecycle hooks; each = a **strategy**: `sync` \| `none` \| `command` (arbitrary shell) | **core** |
 | `sync{delete,exclude,protect}` | the `sync` strategy's knobs (see below) | **core** |
@@ -153,15 +168,46 @@ Deferred params are **schema-reserved**: adding them later needs no breaking
 change. (The project-level opt-in flag is implicit — a project is opted in iff
 it has ≥1 resource.)
 
-#### The `sync` strategy knobs
+**Guard matching semantics.** A guard is **not** a substring regex over raw shell
+text — `up` must never match `cleanup` or `npm run setup`. Each guard is a
+`{exe, sub?}` rule matched against the command's **parsed argv**: the executable
+**basename** (`/usr/local/bin/docker` → `docker`) plus optional required leading
+**subcommand tokens**. So `{exe: docker, sub: [compose, up]}` matches
+`docker compose up -d` but not `docker ps`. Wrapper commands (`make e2e`,
+`npm run test:e2e`) are deliberately out of the hook's scope and are caught by
+the §6 out-of-lease detection flag instead. Template defaults ship as
+conservative `{exe, sub}` rules, never bare substrings.
 
-- `delete: true` — required for the "next acquire is the reset" property.
-- `exclude: [".git"]` — paths not copied *in* from the worktree.
-- **`protect: []`** — root-only paths that must never be overwritten or deleted
-  (`.env`, local secrets, large root-only binaries). The `--delete` safety valve:
-  without it, `--delete` would destroy root-only files absent from the worktree.
-  The dry-run test (§6) surfaces exactly which files a missing `protect` entry
-  would delete, *before* any destructive run.
+#### The `sync` strategy knobs and exact rsync filters
+
+`sync` is the most dangerous primitive in the design (`--delete` against root),
+so its filters are specified exactly, not as `--exclude .git`.
+
+- `delete: true` — required for the "next acquire is the reset" property. Never
+  pass `--delete-excluded`; excluded/protected paths must always survive deletion.
+- `exclude: ["/.git"]` — paths **not copied in** from the worktree, as
+  **anchored, slash-prefixed, no-trailing-slash** patterns. `.git` is a *file* in
+  a worktree (a gitdir pointer) but a *directory* in root; `/.git/` (trailing
+  slash) would match only the directory and let the worktree's `.git` **file** be
+  copied into root, corrupting root's repo. `/.git` matches either. Rendered as
+  `--filter='exclude /.git'` (and one per extra exclude).
+- **`protect: [...]`** — root-only paths that must never be overwritten or
+  deleted, rendered as rsync **protect** filters `--filter='protect /<path>'`
+  (protect affects deletion only). These are files that exist in root but not in
+  the worktree, so `--delete` would otherwise remove them. `/.git` is always
+  protected in addition to being excluded (belt-and-suspenders).
+- **Conservative default `protect`.** Defaults to `/.git`, `/.env`, `/.env.*`,
+  plus — derived once at setup and shown for confirmation — root's
+  **gitignored top-level entries** (caches, certs, local binaries), since
+  gitignored root files are exactly the "local, absent from worktree, would be
+  deleted" set. The user can prune the list in the editor.
+- **Runtime dry-run refusal (not just the §6 test panel).** Before the real
+  destructive rsync, `queue-run` runs `rsync --dry-run` and, if `--delete` would
+  remove any path **not** covered by `protect`/`exclude` (i.e. an untracked or
+  gitignored root-only file), it **refuses** and prints the would-delete list:
+  *"these root files would be deleted — add to `protect` or remove them."* This
+  closes the gap that the §5 transition guard (git-status-based) leaves open for
+  ignored files. A confirmed-safe sync proceeds without nagging.
 
 ### 3. CLI spine
 
@@ -172,8 +218,17 @@ guaranteed on exit/crash:
 session-explorer queue-run --resource <r> -- <command>
 ```
 
-Plus `session-explorer queue-status` (JSON for the pane + human-readable) and
-`session-explorer queue-cancel` (drop a waiting ticket).
+**Project resolution (resources are per-project, names repeat).** `--resource
+<r>` is resolved against a project: by default the **canonical repo root derived
+from `cwd`** (collapsing worktree → parent, exactly as the index does), so an
+agent in a worktree resolves to its parent project's resource without extra
+flags. Overrides: `--project <root>` to name the project explicitly, and a
+fully-qualified `<project-id>/<resource>` id for non-cwd callers (the TUI, hooks,
+`queue-status`). If `cwd` resolves to no opted-in project, `queue-run` errors
+clearly rather than guessing.
+
+Plus `session-explorer queue-status` (JSON for the pane + human-readable; emits
+fully-qualified ids) and `session-explorer queue-cancel` (drop a waiting ticket).
 
 ### 4. Lease lifecycle
 
@@ -184,13 +239,33 @@ The order is load-bearing:
 > readiness → run `<command>` in `run_in` → run **`release`** hook → **release
 > ticket (strictly last)**
 
-- **`acquire` strategies:** `sync` (`rsync -a --delete --exclude .git/
-  <worktree>/ <root>/`, honoring `protect`); `none` (serialize only); `command`
-  (arbitrary shell, e.g. a DB reset). A worktree session's `sync` always
-  re-syncs its own files, so it never depends on root's prior contents.
+- **`acquire` strategies:** `sync` (`rsync -a --delete <worktree>/ <root>/` with
+  the **exact `--filter` exclude/protect rules and the runtime dry-run refusal
+  specified in §2**, never a bare `--exclude .git`); `none` (serialize only);
+  `command` (arbitrary shell, e.g. a DB reset). A worktree session's `sync`
+  always re-syncs its own files, so it never depends on root's prior contents.
 - **`release` is race-free by ordering** — all file movement (e.g. syncing build
   artifacts back to the holder's own worktree) happens *inside* the exclusive
   window; releasing the ticket is strictly last.
+
+**Failure semantics (explicit).** The lease is always cleaned up and the
+caller's intent is preserved:
+
+- **Ticket release is in a `finally`** — the ticket file is removed (and its
+  lifetime lock dropped) however `queue-run` exits: command success, command
+  failure, exception, or signal.
+- **Exit code is the child's.** `queue-run` exits with the wrapped command's exit
+  status, so it is transparent to callers/CI. A pre-command refusal (exclusive-or
+  block, dry-run refusal, resource-resolution error) uses a distinct reserved
+  non-zero code so it's distinguishable from a test failure.
+- **Signals (`SIGINT`/`SIGTERM`)** are trapped: forward to the child, then run
+  release and exit. Crash/`SIGKILL` is still covered by flock auto-release +
+  reaping (§1).
+- **Release-hook failures don't strand the queue.** The `release` hook is
+  **time-bounded**; if it fails or times out, `queue-run` still **releases the
+  ticket** and records the error in the ticket's final state / `queue-status`
+  (surfaced in the pane) rather than holding the lease open. A failed `release`
+  never blocks the next holder.
 
 ### 5. The "root is exclusive-or" policy (only `kind: root-dir`)
 
@@ -198,18 +273,34 @@ Root is **either** a live working session **or** the lease sandbox — never bot
 This is what makes a destructive `sync` acquire safe. (Does **not** apply to
 `port`/`device`/`name` resources, which are plain named leases.)
 
-1. **Live root session present → sandbox locked out.** If any live session has
-   `cwd == shared-root`, `queue-run` from a worktree **blocks** (no acquire-hook
+1. **Live root session present → sandbox locked out.** If a live session is
+   working *in root*, `queue-run` from a worktree **blocks** (no acquire-hook
    runs); the pane shows *"root held by live session ‹name›."* Root's files stay
-   untouched. (A live root session is an implicit exclusive holder.) Liveness
-   uses the same detection `--gc` relies on: flock on the JSONL / mtime within
-   60s.
+   untouched. (A live root session is an implicit exclusive holder.) Two details
+   the earlier draft got wrong:
+   - **Liveness source = the live registry** (`live.py` /
+     `session-explorer-live.json`), which records each session's `cwd` + `pid`
+     and is judged live by **PID liveness with a 24h TTL backstop** (`live._alive`).
+     *Not* the `--gc` JSONL-flock/60s heuristic — that is a different mechanism
+     for a different purpose.
+   - **Canonical-root matching, not `cwd == shared-root`.** A session counts as
+     "in root" when its `cwd` resolves to **this project's canonical repo root and
+     is *not* inside a `.claude/worktrees/…` subtree** — i.e. the same
+     `_project_label`/worktree-marker logic the index uses. This catches sessions
+     started in a *subdirectory* of root (which exact-match would miss) while
+     correctly excluding worktree sessions (which are the legitimate lease
+     holders).
 2. **No live root session → sandbox free.** The first worktree holder takes it;
    the acquire hook proceeds. From here root belongs to lease holders.
-3. **Transition guard.** Flipping from "a root session existed" to sandbox mode,
-   if root has **uncommitted git changes**, `queue-run` refuses ("root has
-   uncommitted changes the sandbox would overwrite — stash/commit first") rather
-   than silently clobbering. A *clean* root proceeds without nagging.
+3. **Transition guard (two layers — git-tracked *and* ignored).** Flipping from
+   "a root session existed" to sandbox mode, if root has **uncommitted git
+   changes**, `queue-run` refuses ("root has uncommitted changes the sandbox
+   would overwrite — stash/commit first"). But `git status` does **not** see
+   ignored root-only files (`.env`, caches, certs, binaries), which `--delete`
+   would still remove — so the **rsync `--dry-run` deletion refusal** (§2) is the
+   second, authoritative layer: it refuses on any would-delete path not covered by
+   `protect`/`exclude`, ignored or not. A *clean* root that passes both proceeds
+   without nagging.
 4. **Prevention layer (only when the project has a `root-dir` resource).** The
    new-session dialog **defaults the worktree checkbox ON** and warns if the user
    tries to create a plain root session ("this project's root is a shared
@@ -296,11 +387,11 @@ offers these plus `Custom / blank`.
 
 | Template | Documented pain | Isolation ruled out because | `kind` · `acquire` · `run_in` · `release` | guard / protect defaults |
 |---|---|---|---|---|
-| **Bind-mounted stack, well-known ports** | worktrees fight over `:3000/:5432/:8080`; stack serves off one bind-mounted path | heavy/slow boot; ports baked in; one fixed serve path | `root-dir` · `sync` · `root` · none; `health`+`wait_for` on the stack | guard `docker\|compose\|up`; protect `[]` |
-| **Browser e2e vs fixed-URL app** | Playwright/Cypress `reuseExistingServer`+fixed `baseURL` go flaky/`EADDRINUSE` across parallel runs | app-under-test must answer at a known URL/port | `root-dir` · `sync` · `root` · none; `wait_for` the URL | guard `playwright\|cypress\|e2e`; protect `[]` |
-| **iOS `xcodebuild`** | concurrent builds hit `build.db is locked`; keychain/signing/simulator are global singletons | shared `~/Library/Developer`, signing session, one simulator | `device`/`name` · `none` · `worktree` · *(optional build product back)* | guard `xcodebuild`; no sync |
+| **Bind-mounted stack, well-known ports** | worktrees fight over `:3000/:5432/:8080`; stack serves off one bind-mounted path | heavy/slow boot; ports baked in; one fixed serve path | `root-dir` · `sync` · `root` · none; `health`+`wait_for` on the stack | guard `{docker compose up}`, `{docker compose run}`; protect `[/.git]` |
+| **Browser e2e vs fixed-URL app** | Playwright/Cypress `reuseExistingServer`+fixed `baseURL` go flaky/`EADDRINUSE` across parallel runs | app-under-test must answer at a known URL/port | `root-dir` · `sync` · `root` · none; `wait_for` the URL | guard `{playwright test}`, `{cypress run}`; protect `[/.git]` |
+| **iOS `xcodebuild`** | concurrent builds hit `build.db is locked`; keychain/signing/simulator are global singletons | shared `~/Library/Developer`, signing session, one simulator | `device`/`name` · `none` · `worktree` · *(optional build product back)* | guard `{xcodebuild test}`; no sync |
 | **Single shared database** | parallel migrations "instantly wipe out the DB state the other relies on" | one DB instance on a fixed socket/port; per-agent clones not worth it | `port` · `command` (db reset) · `worktree` · none | guard migrate/test cmds; (no protect; `env` deferred) |
-| **Root-only credentials / `.env`** | an "over-helpful `.env`" / root-only secrets poison or are absent in worktrees | secrets exist only at root by policy | `root-dir` · `sync` (`protect:['.env']`) · `root` · none | guard build+test cmds; **protect `['.env']`** |
+| **Root-only credentials / `.env`** | an "over-helpful `.env`" / root-only secrets poison or are absent in worktrees | secrets exist only at root by policy | `root-dir` · `sync` (`protect:[/.env]`) · `root` · none | guard `{<build/test exe>}`; **protect `[/.git, /.env, /.env.*]`** |
 | **Single device / HIL / license seat** | can't run >1 session on one emulator/device; HIL needs an explicit device lock; paid tools have N seats | the resource is *physically* singular (capacity N) | `device`/`name` · `none` · `worktree` · none; (`capacity` deferred) | guard the device/tool cmd; no sync |
 
 The last two rows prove the engine's generality: **resource ≠ root** — a pure
