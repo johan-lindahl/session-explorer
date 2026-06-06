@@ -1,5 +1,6 @@
 """CLI smoke tests for the entry shim."""
 
+import json
 import os
 import subprocess
 import shutil
@@ -307,3 +308,117 @@ def test_queue_cancel_reports_no_waiter(tmp_path):
                 cwd=str(root), env=env, capture_output=True, text=True)
     assert r.returncode != 0
     assert "no waiting ticket" in (r.stdout + r.stderr).lower()
+
+
+def _git_repo_with_root(tmp_path):
+    """git-init a repo and write a queue config opting it in with a 'root' resource.
+
+    Relies on the suite's conftest already putting bin/ on sys.path (the same way
+    test_queue_awareness.py does `from _pkg import ...`)."""
+    from _pkg import project_id, queue_config
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    cfg = tmp_path / "queue-config.json"
+    pid = project_id.project_id(str(repo))
+    queue_config.add_resource(
+        str(cfg), project_id=pid, display_path=str(repo), resource_id="root",
+        resource={"kind": "root-dir", "path": str(repo),
+                  "guard": [{"exe": "docker", "sub": ["compose", "up"]}],
+                  "run_in": "root", "acquire": "sync", "release": "none",
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git"]}})
+    return repo, cfg
+
+
+def test_queue_context_emits_additional_context_when_opted_in(tmp_path):
+    repo, cfg = _git_repo_with_root(tmp_path)
+    result = subprocess.run(
+        [_BIN, "queue-context", "--cwd", str(repo)],
+        capture_output=True, text=True,
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    out = payload["hookSpecificOutput"]
+    assert out["hookEventName"] == "SessionStart"
+    assert "docker compose up" in out["additionalContext"]
+    assert "queue-run" in out["additionalContext"]
+
+
+def test_queue_context_silent_when_not_opted_in(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    cfg = tmp_path / "queue-config.json"
+    result = subprocess.run(
+        [_BIN, "queue-context", "--cwd", str(repo)],
+        capture_output=True, text=True,
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
+def _run_guard(cmd_obj, cfg, repo):
+    import json as _json
+    payload = _json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd_obj},
+        "cwd": str(repo),
+    })
+    return subprocess.run(
+        [_BIN, "queue-guard"], input=payload, capture_output=True, text=True,
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+
+
+def test_queue_guard_denies_guarded_command(tmp_path):
+    repo, cfg = _git_repo_with_root(tmp_path)
+    result = _run_guard("docker compose up -d", cfg, repo)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecision"] == "deny"
+    assert "queue-run --resource root --" in out["permissionDecisionReason"]
+
+
+def test_queue_guard_allows_unguarded_command(tmp_path):
+    repo, cfg = _git_repo_with_root(tmp_path)
+    result = _run_guard("docker ps", cfg, repo)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_queue_guard_ignores_non_bash_tool(tmp_path):
+    repo, cfg = _git_repo_with_root(tmp_path)
+    import json as _json
+    payload = _json.dumps({"tool_name": "Read",
+                           "tool_input": {"file_path": "/x"}, "cwd": str(repo)})
+    result = subprocess.run(
+        [_BIN, "queue-guard"], input=payload, capture_output=True, text=True,
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+def test_queue_guard_fails_open_on_garbage_stdin(tmp_path):
+    _, cfg = _git_repo_with_root(tmp_path)
+    result = subprocess.run(
+        [_BIN, "queue-guard"], input="not json at all",
+        capture_output=True, text=True,
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+
+
+def test_queue_guard_fails_open_when_cwd_missing(tmp_path):
+    # Payload-schema drift: no cwd. Must NOT guess via os.getcwd() (which could be
+    # another opted-in project) -> allow silently.
+    repo, cfg = _git_repo_with_root(tmp_path)
+    import json as _json
+    payload = _json.dumps({"tool_name": "Bash",
+                           "tool_input": {"command": "docker compose up -d"}})
+    result = subprocess.run(
+        [_BIN, "queue-guard"], input=payload, capture_output=True, text=True,
+        cwd=str(repo),  # hook cwd happens to be an opted-in repo; must be ignored
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
