@@ -30,6 +30,7 @@ grep -rn "$NEW" .claude-plugin/plugin.json bin/_pkg/__init__.py README.md SPEC.m
 | Status line + milestone footer | `SPEC.md` (`**Status:** Shipped — **vX.Y.Z**` and `current release: vX.Y.Z`) | |
 | New section | `CHANGELOG.md` | See below |
 | **Help screen** | `bin/_pkg/tui.py` → `_help_text()` | Version renders **dynamically** from `__version__` (no edit). But the **keybinding descriptions are hand-written** — if the release changed/added keys, update the `key(...)` lines AND the matching `Binding(...)` rows. |
+| **Queue guide** | `docs/queue-guide.md` | Linked from the editor's `?` help (`QUEUE_GUIDE_URL` in `tui.py`); if the shared-resource model, `--delete`/`protect` rule, or template catalog changed, keep the guide in sync so the in-dialog link doesn't silently diverge. |
 
 ### CHANGELOG.md
 
@@ -84,7 +85,8 @@ gh release create vX.Y.Z --latest=false --title "..." --notes-file /tmp/relnotes
 - [ ] `__init__.py` + `plugin.json` both bumped and **equal**
 - [ ] README, SPEC (x2) status lines updated
 - [ ] CHANGELOG.md section added, newest-on-top
-- [ ] Help screen keybinding descriptions updated **iff** keys changed
+- [ ] Help screen keybinding descriptions updated **iff** keys changed (covers the `q`/`x`/`s` queue keys)
+- [ ] `docs/queue-guide.md` kept in sync **iff** the shared-resource model/templates changed
 - [ ] `grep -rn "$NEW"` shows every file incl. CHANGELOG.md (no laggards)
 - [ ] Bump merged to `main`; `HEAD == origin/main`; CI/tests green
 - [ ] Notes file written (mirrors CHANGELOG); `gh release create vX.Y.Z --target main` run; shows as Latest

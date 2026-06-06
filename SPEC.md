@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns the JSONL transcripts under `~/.claude/projects/` into a file-explorer-style tree: browse, organize, rename, move, delete, and resume sessions from a single TUI launched by one slash command.
 
-**Status:** Shipped — **v1.12.1**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision; v1.12.0 adds reversible worktree cleanup — `w` to reclaim a stopped worktree's directory, an offer when a docked worktree session exits clean, and `--gc` pruning of idle (>14d) clean worktrees, all keeping the branch + transcript so resume rebuilds; v1.12.1 makes the explorer immune to legacy basename folder-store keys re-added by a stale older hook (render-time folding + self-healing re-key), which had caused ghost project nodes and spurious parent-prefixed labels.
+**Status:** Shipped — **v1.13.0**, installable from the Claude Code marketplace. All milestones below (M1–M8) are complete; this document is the maintained design reference, with the milestone table and design-decision log kept as a delivery record. v1.8.0 added a subscription-usage progress bar in the tmux status line; v1.9.1 fixes explorer renames reverting when a live session re-emits its old `custom-title` (see *Design decisions (resolved)*); v1.10.0 adds the F2 rename alias, blank-name temporary sessions, a `Tab`-cycled three-mode view filter (replacing the `u` toggle), collapse-to-roots (`z`), and select-on-create; v1.11.0 adds the worktree indicator column; v1.11.1 darkens the deleted-worktree glyph (`dark_red`) to match the live `dark_green`; v1.11.2 makes resuming a deleted-worktree session recreate a real `git worktree` (on the `worktree-<leaf>` branch) instead of an empty directory; v1.11.3 repaints that session's indicator green immediately on recreate (no rescan) and treats an empty worktree dir as dead; v1.11.4 makes the context-window % model-aware (Opus 4.6+/Sonnet 4.6 measured against 1M from the first turn) so it no longer jumps when a 1M session crosses 200K; v1.11.5 groups sessions by repo root (not basename) so several same-named repos (e.g. multiple `magento2` checkouts) no longer collapse into one tree node, disambiguating the display label with the parent path only on collision; v1.12.0 adds reversible worktree cleanup — `w` to reclaim a stopped worktree's directory, an offer when a docked worktree session exits clean, and `--gc` pruning of idle (>14d) clean worktrees, all keeping the branch + transcript so resume rebuilds; v1.12.1 makes the explorer immune to legacy basename folder-store keys re-added by a stale older hook (render-time folding + self-healing re-key), which had caused ghost project nodes and spurious parent-prefixed labels; v1.13.0 adds the shared-resource lease engine's TUI surface (Phase 2) — a read-only Queues pane (`q`), per-project resource setup/editor dialogs (`s`, template catalog + destructive-`sync` dry-run test panel), the `x`-to-exit rebind, new-session worktree auto-slug + worktree-default-on for `root-dir` projects, a best-effort out-of-lease detection toast, offline `?` help, and `docs/queue-guide.md`.
 
 ## Goals
 
@@ -586,8 +586,68 @@ full design; this records the shipped Phase-1 surface.
 - **Probes:** `health` warns (never auto-starts; `ensure` deferred); `wait_for`
   polls port/url/command until ready or timeout.
 - **Deferred (schema-reserved):** `ensure`, `reload`, `env`, `capacity`>1; the
-  TUI (Phase 2) and the SessionStart/PreToolUse hooks + cooperative skill
-  (Phase 3).
+  SessionStart/PreToolUse hooks + cooperative skill (Phase 3).
+
+### Queues pane and setup dialogs (Phase 2)
+
+The TUI surface for the lease engine. It reads the Phase-1 stores directly from
+`tui.py` (the way it already reads `live.poll()`/`index.load()`), never by
+shelling out to `queue-status`. Three new **pure, Textual-free** modules hold
+the testable logic: `queue_view.snapshot()` (display-ready rows), `ui_state.py`
+(`session-explorer-ui.json` toggle store), `queue_detect.py` (root-dir change
+detector), plus `guard_match.py` (parsed-argv guard matching, shared with the
+Phase-3 hook).
+
+- **Keymap change (global, one for everyone):** `q` toggles the **Queues pane**
+  (this reassigns quit), `x` is **Exit**, and `s` opens the selected project's
+  **resource list** (hidden binding, gated by `check_action` to a project
+  selection). The only added footer key is `q`; `s`/`a`/`e`/`Del` are
+  pane-local. **`x` is *only* Exit — never a remove action** (no double-bound
+  destructive key). Don't reintroduce `q`→quit.
+- **Queues pane** (`Static`, `id="queues"`, under the tree) is **read-only** and
+  **content-gated**: with the persisted flag on it takes space only when there
+  is ≥1 *active* queue anywhere OR the selected project has configured
+  resources. A persisted `true` with only an idle, unrelated resource renders
+  **nothing** (zero-footprint). An explicit `q` with nothing to show surfaces a
+  one-line activation hint *this session only* (not persisted). The gating set
+  and the rendered set are the same filtered rows. Live on the existing ~2s
+  `_poll_live` loop. Cancellation stays CLI-only (`queue-cancel`).
+- **Per-project setup** (`s` → `ResourceListScreen` → `ResourceEditorScreen`):
+  the editor is **template-first** (spec §7 catalog in `QUEUE_TEMPLATES`) and
+  **reflows per `kind`** — a `device`/`port`/`name` hides the path + protect
+  inputs and forces `run_in: worktree`; a `root-dir` shows `protect` and a
+  **read-only** path. The root-dir **`path` is always `project_id.main_root()`**
+  (the repo's main working tree, spec §1), never the selected node (which may be
+  an arbitrary `git worktree add`) and never the editable input. The form is
+  **authoritative on save**: clearing a command/health/`wait_for` field removes
+  the stale value (and reverts a now-empty command strategy to `none`); a
+  non-empty but **unparseable** `wait_for` **refuses** the save rather than
+  silently dropping it. Save validates through `queue_config.add_resource`.
+- **Test panel** (de-risks the destructive `sync`): a **guard tester** (built
+  from the *current* form, no side effects), an **rsync dry-run**
+  (`qsync.dry_run_deletions` with the exact Phase-1 filters) that also surfaces
+  the **exclusive-or check** (live-root block + dirty-root transition guard) and
+  **refuses** when the source equals root (no false "no deletions"), and a
+  **health probe**. Honest: dry-run is fully safe only for `sync`; custom shells
+  can't be simulated.
+- **New-session dialog:** no opt-in checkbox (opt-in is `q`→`s`). Checking
+  *Create git worktree* auto-fills the worktree name with `worktree_slug(name)`;
+  a *manual* edit (detected by **focus**, robust to retyping the same slug)
+  stops the auto-sync. When the project has a `root-dir` resource the checkbox
+  **defaults ON** and submitting a *plain root* session warns (§5.4).
+- **Out-of-lease detection toast** (`queue_detect`): a **best-effort, debounced,
+  weak** signal — snapshots the root-dir top-level entry set + mtimes between
+  polls and toasts on a change while in **neither** valid exclusive-or state (no
+  holder AND no live root session, which legitimately owns root). Catches
+  creates/deletes/renames, **misses in-place content writes**; excludes the
+  `protect` baseline + `.git` + optional `detect_exclude` (glob-matched, so
+  `.env.*` excludes `.env.local`); re-arms after a stable poll. Never
+  enforcement.
+- **Offline help:** in-dialog `?` (`QueueHelpScreen`) leads with isolate-first
+  and the `--delete`/`protect` rule, and shows the guide link as a **plain,
+  copyable** `https://…` URL (never relying on OSC-8) wrapped in a best-effort
+  click action. Full guide: `docs/queue-guide.md` (added to the release
+  checklist so it can't silently diverge).
 
 ## Disabling native auto-cleanup
 
@@ -724,7 +784,7 @@ The earlier spec's "stdlib only" promise is **dropped**: replacing fzf with a re
 
 ## Milestones
 
-All milestones below are **shipped** (current release: v1.12.1). The table is kept as a delivery record of what each one added.
+All milestones below are **shipped** (current release: v1.13.0). The table is kept as a delivery record of what each one added.
 
 | M | Scope |
 |---|---|

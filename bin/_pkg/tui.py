@@ -28,6 +28,132 @@ from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path, session_root
 
 
+def worktree_slug(name: str) -> str:
+    """Slug a session name into a git-worktree name (spec §9).
+
+    Uses the display portion after the last '/'; lowercases; turns spaces,
+    underscores and dots into '-'; drops anything outside [a-z0-9-]; collapses
+    and trims dashes. Blank in → blank out (so a temporary unnamed session
+    leaves the worktree name empty, i.e. a bare `-w`).
+    """
+    import re
+    display = name.rsplit("/", 1)[-1].strip().lower()
+    display = re.sub(r"[ _.]+", "-", display)
+    display = re.sub(r"[^a-z0-9-]+", "", display)
+    display = re.sub(r"-{2,}", "-", display).strip("-")
+    return display
+
+
+# Spec §7 template catalog. `defaults` is merged into a resource dict; the editor
+# overlays user edits. Kept as pure data so it is unit-tested without Textual.
+QUEUE_TEMPLATES = [
+    {"key": "bind-mounted-stack", "title": "Bind-mounted stack, well-known ports",
+     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
+                  "run_in": "root",
+                  "guard": [{"exe": "docker", "sub": ["compose", "up"]},
+                            {"exe": "docker", "sub": ["compose", "run"]}],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]},
+                  "wait_for": {"type": "url", "target": "http://localhost:8080",
+                               "timeout": 120}}},
+    {"key": "browser-e2e", "title": "Browser e2e vs fixed-URL app",
+     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
+                  "run_in": "root",
+                  "guard": [{"exe": "playwright", "sub": ["test"]},
+                            {"exe": "cypress", "sub": ["run"]}],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]},
+                  "wait_for": {"type": "url", "target": "http://localhost:3000",
+                               "timeout": 120}}},
+    {"key": "ios-sim", "title": "iOS simulator / xcodebuild",
+     "defaults": {"kind": "device", "acquire": "none", "release": "none",
+                  "run_in": "worktree",
+                  "guard": [{"exe": "xcodebuild", "sub": ["test"]}]}},
+    # acquire defaults to "none" (valid as-saved); filling the editor's acquire
+    # field promotes it to "command" with the user's DB-reset shell. Shipping
+    # acquire="command" with an empty command_acquire would fail queue_config
+    # validation on save (queue_config.py:121-122).
+    {"key": "shared-db", "title": "Single shared database",
+     "defaults": {"kind": "port", "acquire": "none", "release": "none",
+                  "run_in": "worktree",
+                  "guard": [{"exe": "npm", "sub": ["run", "migrate"]}]}},
+    {"key": "root-env", "title": "Root-only credentials / .env",
+     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
+                  "run_in": "root", "guard": [],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env", "/.env.*"]}}},
+    {"key": "device-seat", "title": "Single device / HIL / license seat",
+     "defaults": {"kind": "name", "acquire": "none", "release": "none",
+                  "run_in": "worktree", "guard": []}},
+    {"key": "custom", "title": "Custom / blank",
+     "defaults": {"kind": "name", "acquire": "none", "release": "none",
+                  "run_in": "worktree", "guard": []}},
+]
+
+
+def template_resource(key: str, *, path: str) -> dict:
+    """Build a fresh resource dict from a template key. Pure."""
+    import copy
+    tpl = next((t for t in QUEUE_TEMPLATES if t["key"] == key), None)
+    if tpl is None:
+        tpl = next(t for t in QUEUE_TEMPLATES if t["key"] == "custom")
+    res = copy.deepcopy(tpl["defaults"])
+    if res.get("kind") in ("root-dir", "path") and path:
+        res["path"] = path
+    return res
+
+
+# --- Editor form <-> resource-dict conversions (pure, unit-tested) ---
+
+def parse_guard_lines(text: str) -> list:
+    """Each non-empty line 'exe sub1 sub2' -> {'exe': exe, 'sub': [sub1, ...]}.
+    Blank/whitespace-only lines are dropped. So 'docker compose up' becomes
+    {'exe': 'docker', 'sub': ['compose', 'up']}. Pure."""
+    rules = []
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        rules.append({"exe": parts[0], "sub": parts[1:]})
+    return rules
+
+
+def format_guard_lines(rules: list) -> str:
+    """Inverse of parse_guard_lines, to pre-fill the guard editor."""
+    return "\n".join(" ".join([r.get("exe", "")] + list(r.get("sub", [])))
+                     for r in (rules or []))
+
+
+def parse_path_lines(text: str) -> list:
+    """One path per line; blanks dropped, whitespace trimmed (for protect)."""
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
+def parse_wait_for(text: str, timeout_text: str) -> "dict | None":
+    """'<url|port|command> <target>' + a timeout string -> a wait_for spec, or
+    None when empty/invalid (so a cleared field removes the spec). Pure."""
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        return None
+    wtype, target = parts[0], parts[1].strip()
+    if wtype not in ("url", "port", "command") or not target:
+        return None
+    try:
+        timeout = float(timeout_text.strip()) if timeout_text.strip() else 60.0
+    except ValueError:
+        timeout = 60.0
+    return {"type": wtype, "target": target, "timeout": timeout}
+
+
+def format_wait_for(spec: dict) -> tuple:
+    """Inverse of parse_wait_for: ('type target', 'timeout') for pre-filling."""
+    if not spec:
+        return ("", "")
+    line = f"{spec.get('type', '')} {spec.get('target', '')}".strip()
+    t = spec.get("timeout")
+    return (line, "" if t is None else str(t))
+
+
 def _index_path() -> str:
     return os.environ.get("SESSION_EXPLORER_INDEX") or os.path.expanduser(
         "~/.claude/session-explorer-index.json"
@@ -269,7 +395,7 @@ def _help_text() -> str:
         "  • [b]F9[/] (or click a pane) switches focus between tree and session.",
         "  • [b]F12[/] zooms the focused pane fullscreen; press again to restore.",
         "  • [b]Space[/] peeks a live snapshot of any session without docking it.",
-        "  • [b]q[/] with sessions running asks whether to shut them all down or",
+        "  • [b]x[/] with sessions running asks whether to shut them all down or",
         "    leave them running (reattach next time you open the explorer).",
         "",
         "[b]Keys[/]",
@@ -293,13 +419,38 @@ def _help_text() -> str:
         key("/", "Live filter across name, notes, first prompt"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
-        key("q", "Quit"),
+        key("q", "Toggle the Queues pane (shared-resource leases)"),
+        key("x", "Exit"),
         "",
         "[dim]Esc, q, h, or Space closes this help.[/]",
         "",
         f"[b]session-explorer v{__version__}[/]  ·  Made by Johan Lindahl  <johan.lindahl@snojken.com>",
         '[link="https://github.com/johan-lindahl/session-explorer"]https://github.com/johan-lindahl/session-explorer[/link]',
     ])
+
+
+def _render_queue_rows(rows: list) -> str:
+    """Render queue_view.snapshot() rows as pane markup (spec §9 mockup)."""
+    lines = ["[b]Queues[/]"]
+    for r in rows:
+        name = f"{_basename(r['project'])} / {r['resource']}"
+        if r["live_root_block"]:
+            who = r["live_root_block"].get("name", "?")
+            lines.append(f"  {name:<26}⛔ held by live session ‹{who}›")
+            continue
+        if r["holder"]:
+            h = r["holder"]
+            lines.append(f"  {name:<26}● holder: {h['label']} ({h['elapsed']})")
+            if r["waiting"]:
+                waits = " · ".join(f"{w['label']} ({w['pos']})" for w in r["waiting"])
+                lines.append(f"  {'':<26}waiting: {waits}")
+        else:
+            lines.append(f"  {name:<26}○ free")
+    return "\n".join(lines)
+
+
+def _basename(path: str) -> str:
+    return os.path.basename(path.rstrip("/")) or path
 
 
 class _PanelScreen(ModalScreen):
@@ -414,11 +565,14 @@ class NewSessionScreen(_PanelScreen):
 
     BINDINGS = [Binding("escape", "dismiss(None)", "Cancel")]
 
-    def __init__(self, project: str, name_prefix: str = "", cwd: str = "") -> None:
+    def __init__(self, project: str, name_prefix: str = "", cwd: str = "",
+                 *, root_is_shared: bool = False) -> None:
         super().__init__()
         self._project = project
         self._name_prefix = name_prefix
         self._cwd = cwd
+        self._root_is_shared = root_is_shared
+        self._wt_manual = False  # set once the user edits the worktree field
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -426,8 +580,10 @@ class NewSessionScreen(_PanelScreen):
                   classes="dialog-title"),
             Input(value=self._name_prefix, placeholder="session name", id="ns-name"),
             Input(value=self._cwd, placeholder="working directory", id="ns-cwd"),
-            Checkbox("Create git worktree (-w)", id="ns-wt"),
-            Input(placeholder="worktree name (optional)", id="ns-wtname", disabled=True),
+            Checkbox("Create git worktree (-w)", value=self._root_is_shared, id="ns-wt"),
+            Input(value=(worktree_slug(self._name_prefix) if self._root_is_shared else ""),
+                  placeholder="worktree name (optional)", id="ns-wtname",
+                  disabled=not self._root_is_shared),
             Label("enter create · esc cancel", classes="dialog-hint"),
             id="panel",
         )
@@ -441,7 +597,25 @@ class NewSessionScreen(_PanelScreen):
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "ns-wt":
-            self.query_one("#ns-wtname", Input).disabled = not event.value
+            wt = self.query_one("#ns-wtname", Input)
+            wt.disabled = not event.value
+            if event.value and not self._wt_manual and not wt.value:
+                wt.value = worktree_slug(self.query_one("#ns-name", Input).value)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "ns-name" and not self._wt_manual:
+            if self.query_one("#ns-wt", Checkbox).value:
+                # Programmatic auto-fill: happens while #ns-name has focus, so
+                # the resulting #ns-wtname Changed below sees an unfocused field
+                # and is NOT treated as a manual edit.
+                self.query_one("#ns-wtname", Input).value = worktree_slug(event.value)
+        elif event.input.id == "ns-wtname":
+            # A *user* edit requires #ns-wtname to be focused (the user is typing
+            # in it); our auto-fill writes it while #ns-name is focused. Using
+            # focus — not value comparison — correctly handles a user retyping the
+            # SAME slug, which a value check (value == slug(name)) would miss.
+            if event.input.has_focus:
+                self._wt_manual = True
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(self._result())
@@ -527,6 +701,402 @@ class NotesScreen(_PanelScreen):
         self.dismiss(self._ta.text)
 
 
+class ResourceListScreen(_PanelScreen):
+    """Per-project shared-resource list (spec §6). a add · e edit · Del remove ·
+    ? help · esc close. The destructive editor + test panel live in
+    ResourceEditorScreen."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Close"),
+        Binding("a", "add", "Add", show=False),
+        Binding("e", "edit", "Edit", show=False),
+        Binding("delete", "remove", "Remove", show=False),
+        Binding("question_mark", "help", "Help", show=False),
+    ]
+
+    def __init__(self, *, project_root: str, project_id: str, config_path: str) -> None:
+        super().__init__()
+        self._project_root = project_root
+        self._project_id = project_id
+        self._config_path = config_path
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(f"Shared resources — {_basename(self._project_root)}",
+                  classes="dialog-title"),
+            OptionList(id="reslist"),
+            Label("a add · e edit · Del remove · ? help · esc close",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._reload()
+
+    def _reload(self) -> None:
+        from . import queue_config as _qc
+        ol = self.query_one("#reslist", OptionList)
+        ol.clear_options()
+        resources = _qc.list_resources(self._config_path, self._project_id)
+        if not resources:
+            ol.add_option(Option("(no resources yet — press a to add)", id=None))
+            return
+        for rid, res in sorted(resources.items()):
+            label = (f"{rid:<14} {res.get('kind',''):<9} "
+                     f"acquire:{res.get('acquire','')}  run_in:{res.get('run_in','')}")
+            ol.add_option(Option(label, id=rid))
+
+    def action_add(self) -> None:
+        def after(saved):
+            if saved:
+                self._reload()
+        self.app.push_screen(
+            ResourceEditorScreen(project_root=self._project_root,
+                                 project_id=self._project_id,
+                                 config_path=self._config_path,
+                                 resource_id=None),
+            after)
+
+    def action_edit(self) -> None:
+        rid = self._selected_rid()
+        if not rid:
+            return
+        def after(saved):
+            if saved:
+                self._reload()
+        self.app.push_screen(
+            ResourceEditorScreen(project_root=self._project_root,
+                                 project_id=self._project_id,
+                                 config_path=self._config_path,
+                                 resource_id=rid),
+            after)
+
+    def action_remove(self) -> None:
+        from . import queue_config as _qc
+        rid = self._selected_rid()
+        if not rid:
+            return
+        def after(ok: bool) -> None:
+            if ok:
+                _qc.remove_resource(self._config_path, self._project_id, rid)
+                self._reload()
+        self.app.push_screen(
+            ConfirmScreen(f"Remove shared resource '{rid}'? (queue config only; "
+                          "no files are touched)"), after)
+
+    def action_help(self) -> None:
+        self.app.push_screen(QueueHelpScreen())
+
+    def _selected_rid(self) -> "str | None":
+        ol = self.query_one("#reslist", OptionList)
+        idx = ol.highlighted
+        if idx is None:
+            return None
+        opt = ol.get_option_at_index(idx)
+        return opt.id
+
+
+class ResourceEditorScreen(_PanelScreen):
+    """Template-first resource editor that reflows per kind (spec §6). Saves via
+    queue_config.add_resource (which enforces the §2 invariants). Returns True on
+    a successful save, False on cancel. The destructive test panel is mounted by
+    the test-panel task."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(False)", "Cancel"),
+        Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+t", "test_guard", "Test guard"),
+        Binding("ctrl+r", "dry_run", "Dry-run"),
+        Binding("ctrl+h", "health", "Health"),
+    ]
+
+    def __init__(self, *, project_root, project_id, config_path, resource_id) -> None:
+        super().__init__()
+        self._project_root = project_root
+        self._project_id = project_id
+        self._config_path = config_path
+        self._resource_id = resource_id          # None == add
+        self._template_key = "custom"
+        from . import project_id as _pid
+        # A root-dir resource's path is the repo's MAIN working tree, never the
+        # selected tree node — which can be an arbitrary `git worktree add`
+        # shown as its own project (spec §1). Derive it via the git-common-dir
+        # helper; fall back to the node path if git can't resolve it.
+        self._root_path = _pid.main_root(project_root) or project_root
+        self._existing = None
+        self._kind = "name"
+
+    def compose(self) -> ComposeResult:
+        from . import queue_config as _qc
+        existing = (_qc.get_resource(self._config_path, self._project_id,
+                                     self._resource_id) if self._resource_id else None)
+        self._existing = existing
+        if existing:
+            self._template_key = "custom"   # edit: seed fields from the stored shape
+        base = existing or template_resource("custom", path=self._root_path)
+        self._kind = base.get("kind", "name")
+        title = ("Edit resource" if existing else "Add resource") + \
+                f" — {_basename(self._project_root)}"
+        opts = [Option(t["title"], id=t["key"]) for t in QUEUE_TEMPLATES]
+        yield Vertical(
+            Label(title, classes="dialog-title"),
+            Label("Template", classes="dialog-hint"),
+            OptionList(*opts, id="res-template"),
+            Input(value=self._resource_id or "", placeholder="resource id (e.g. ios-sim)",
+                  id="res-id", disabled=bool(self._resource_id)),
+            Label(f"kind: {self._kind}", id="res-kind", classes="dialog-hint"),
+            Input(value=base.get("path", self._root_path),
+                  placeholder="path (path-kind editable; root-dir is auto-derived)",
+                  id="res-path"),
+            Label("Guard — one 'exe sub…' rule per line (empty = unguarded)",
+                  classes="dialog-hint"),
+            TextArea(format_guard_lines(base.get("guard", [])), id="res-guard"),
+            Label("Protect — root-only paths to keep, one per line (root-dir/path)",
+                  id="res-protect-label", classes="dialog-hint"),
+            TextArea("\n".join(base.get("sync", {}).get("protect", [])), id="res-protect"),
+            Input(value=base.get("command_acquire", ""),
+                  placeholder="acquire command (when acquire=command)", id="res-acq"),
+            Input(value=base.get("command_release", ""),
+                  placeholder="release command (optional)", id="res-rel"),
+            Checkbox("release required (fail the run if release fails)",
+                     value=bool(base.get("release_required")), id="res-req"),
+            Input(value=base.get("health", ""),
+                  placeholder="health check command (optional)", id="res-health"),
+            Input(value=format_wait_for(base.get("wait_for"))[0],
+                  placeholder="readiness: '<url|port|command> <target>' (optional)",
+                  id="res-wait"),
+            Input(value=format_wait_for(base.get("wait_for"))[1],
+                  placeholder="readiness timeout seconds (default 60)", id="res-wait-timeout"),
+            Label("", id="res-error", classes="dialog-hint"),
+            Label("Test panel", classes="dialog-title"),
+            Input(placeholder="command to test against the guard", id="test-cmd"),
+            Label("", id="test-out", classes="dialog-hint"),
+            Label("Dry-run is safe only for sync and needs a worktree source "
+                  "distinct from root; custom shells can't be simulated.",
+                  classes="dialog-hint"),
+            Label("ctrl-s save · ctrl-t guard · ctrl-r dry-run · ctrl-h health · esc cancel",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._reflow(self._kind)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "res-template":
+            return
+        self._template_key = event.option.id or "custom"
+        res = template_resource(self._template_key, path=self._root_path)
+        self._kind = res["kind"]
+        self.query_one("#res-kind", Label).update(f"kind: {res['kind']}")
+        # Repopulate the form from the chosen template's defaults.
+        self.query_one("#res-guard", TextArea).text = format_guard_lines(res.get("guard", []))
+        self.query_one("#res-protect", TextArea).text = "\n".join(
+            res.get("sync", {}).get("protect", []))
+        self.query_one("#res-acq", Input).value = res.get("command_acquire", "")
+        wline, wt = format_wait_for(res.get("wait_for"))
+        self.query_one("#res-wait", Input).value = wline
+        self.query_one("#res-wait-timeout", Input).value = wt
+        self._reflow(res["kind"])
+
+    def _reflow(self, kind: str) -> None:
+        """Hide the path + protect inputs for non-file kinds (spec §6 reflow). A
+        root-dir path is auto-derived (spec §1), so its input is shown read-only
+        as the canonical main-worktree path; only a `path`-kind path is editable."""
+        is_file = kind in ("root-dir", "path")
+        path_input = self.query_one("#res-path", Input)
+        path_input.display = is_file
+        path_input.disabled = (kind == "root-dir")
+        if kind == "root-dir":
+            path_input.value = self._root_path     # canonical, not user-editable
+        self.query_one("#res-protect", TextArea).display = is_file
+        self.query_one("#res-protect-label", Label).display = is_file
+
+    def _build_resource(self) -> dict:
+        if self._existing is not None and self._template_key == "custom":
+            res = dict(self._existing)
+        else:
+            res = template_resource(self._template_key, path=self._root_path)
+        kind = res.get("kind")
+        # root-dir path is ALWAYS the canonical main worktree (spec §1) — never
+        # the editable input. Only a `path`-kind path is taken from the form.
+        if kind == "root-dir":
+            res["path"] = self._root_path
+        elif kind == "path":
+            p = self.query_one("#res-path", Input).value.strip()
+            if p:
+                res["path"] = p
+        # The guard form is authoritative — an empty form means unguarded.
+        res["guard"] = parse_guard_lines(self.query_one("#res-guard", TextArea).text)
+        # Protect only has meaning when syncing; fold the form into the sync dict.
+        if res.get("acquire") == "sync":
+            sync = res.setdefault("sync", {"delete": True, "exclude": ["/.git"]})
+            sync["protect"] = parse_path_lines(self.query_one("#res-protect", TextArea).text)
+        # Command/health/wait_for: the form is authoritative, so a CLEARED field
+        # removes the stale value (and reverts a now-empty command strategy to
+        # 'none') rather than silently keeping the old one (Finding 3).
+        acq = self.query_one("#res-acq", Input).value.strip()
+        if acq:
+            res["command_acquire"] = acq
+            res["acquire"] = "command"
+        else:
+            res.pop("command_acquire", None)
+            if res.get("acquire") == "command":
+                res["acquire"] = "none"
+        rel = self.query_one("#res-rel", Input).value.strip()
+        if rel:
+            res["command_release"] = rel
+            res["release"] = "command"
+        else:
+            res.pop("command_release", None)
+            if res.get("release") == "command":
+                res["release"] = "none"
+        res["release_required"] = self.query_one("#res-req", Checkbox).value
+        health = self.query_one("#res-health", Input).value.strip()
+        if health:
+            res["health"] = health
+        else:
+            res.pop("health", None)
+        wf = parse_wait_for(self.query_one("#res-wait", Input).value,
+                            self.query_one("#res-wait-timeout", Input).value)
+        if wf:
+            res["wait_for"] = wf
+        else:
+            res.pop("wait_for", None)
+        return res
+
+    def action_save(self) -> None:
+        from . import queue_config as _qc
+        rid = self.query_one("#res-id", Input).value.strip()
+        # A non-empty but unparseable readiness field is a typo, not "no
+        # readiness" — refuse rather than silently drop it. (Empty still clears,
+        # handled in _build_resource.) Kept here, not in _build_resource, so the
+        # test-panel actions that also build the resource never raise on a typo.
+        wait_text = self.query_one("#res-wait", Input).value.strip()
+        if wait_text and parse_wait_for(
+                self.query_one("#res-wait", Input).value,
+                self.query_one("#res-wait-timeout", Input).value) is None:
+            self.query_one("#res-error", Label).update(
+                "[red]readiness must be '<url|port|command> <target>'[/]")
+            return
+        try:
+            res = self._build_resource()
+            _qc.add_resource(self._config_path, project_id=self._project_id,
+                             display_path=self._project_root, resource_id=rid,
+                             resource=res)
+        except ValueError as e:
+            self.query_one("#res-error", Label).update(f"[red]{e}[/]")
+            return
+        self.dismiss(True)
+
+    def action_test_guard(self) -> None:
+        from . import guard_match as _gm
+        # Build from the CURRENT form (edits + existing saved guard), not the
+        # bare template — otherwise an edited or existing guard isn't tested.
+        rules = self._build_resource().get("guard") or []
+        cmd = self.query_one("#test-cmd", Input).value.strip()
+        if not cmd:
+            return
+        if _gm.matches(cmd, rules):
+            self.query_one("#test-out", Label).update("[yellow]→ QUEUED (guarded)[/]")
+        else:
+            self.query_one("#test-out", Label).update("[green]→ RUNS FREE (unguarded)[/]")
+
+    def action_dry_run(self) -> None:
+        """rsync --dry-run preview for sync resources: deletions PLUS the
+        exclusive-or check (spec §6) — a live root session and/or a dirty root
+        that would block/refuse the real acquire, surfaced before the user trusts
+        the preview."""
+        from . import qsync as _qs, exclusive as _ex
+        res = self._build_resource()
+        if res.get("acquire") != "sync":
+            self.query_one("#test-out", Label).update(
+                "[dim]dry-run only applies to acquire=sync[/]")
+            return
+        # A real lease syncs from a WORKTREE over root. If the panel's source
+        # (the selected node) is the root itself, rsync would diff root against
+        # root and report "no deletions" — false safety. Refuse rather than lie.
+        src = self._project_root
+        if os.path.realpath(src) == os.path.realpath(res["path"]):
+            self.query_one("#test-out", Label).update(
+                "[yellow]dry-run needs a worktree source distinct from root — "
+                "open this panel from a worktree session to preview deletions[/]")
+            return
+        lines = []
+        # Exclusive-or check (spec §6): these would block/refuse the real acquire.
+        # NB: _live_path() lives on the App, not this modal screen — use self.app.
+        block = _ex.live_root_session(self.app._live_path(), res["path"])
+        if block:
+            lines.append(f"[red]⛔ root held by live session ‹{block.get('name')}› "
+                         f"— acquire would block[/]")
+        tg = _ex.transition_guard(res["path"])
+        if tg:
+            lines.append(f"[yellow]{tg}[/]")
+        sync = res.get("sync", {})
+        try:
+            dels = _qs.dry_run_deletions(src, res["path"],
+                                         exclude=sync.get("exclude", []),
+                                         protect=sync.get("protect", []))
+        except _qs.SyncDryRunError as e:
+            lines.append(f"[red]dry-run failed: {e}[/]")
+            self.query_one("#test-out", Label).update("\n".join(lines))
+            return
+        if dels:
+            shown = ", ".join(dels[:6]) + (" …" if len(dels) > 6 else "")
+            lines.append(f"[red]would DELETE {len(dels)}: {shown}[/]")
+        else:
+            lines.append("[green]no deletions[/]")
+        self.query_one("#test-out", Label).update("\n".join(lines))
+
+    def action_health(self) -> None:
+        from . import probes as _p
+        cmd = self.query_one("#res-health", Input).value.strip() or None
+        ok, detail = _p.health_check(cmd)
+        sev = "[green]" if ok else "[red]"
+        self.query_one("#test-out", Label).update(f"{sev}health: {detail}[/]")
+
+
+QUEUE_GUIDE_URL = ("https://github.com/johan-lindahl/session-explorer"
+                   "/blob/main/docs/queue-guide.md")
+
+
+def _queue_help_text() -> str:
+    return "\n".join([
+        "[b]Shared resources — quick help[/]",
+        "",
+        "[b]Isolate first.[/] If you can give each worktree its own port, DB, or",
+        "derived-data dir, do that instead — this engine is for singletons that",
+        "genuinely can't be isolated (one bind-mounted root, one simulator, one DB).",
+        "",
+        "[b]sync is destructive.[/] A root-dir 'sync' acquire runs",
+        "[b]rsync --delete[/] from your worktree over the shared root — it blows",
+        "away whatever the previous holder left. [b]protect[/] lists root-only",
+        "paths to keep untouched (secrets, certs); [b].git/.env[/] are protected",
+        "by default. Use the [b]dry-run[/] test (ctrl-r) to see deletions first.",
+        "",
+        "[b]Guards[/] are matched on the parsed command (exe + subcommand), never",
+        "as substrings. Test a command with ctrl-t before relying on it.",
+        "",
+        # Plain, copyable URL (always visible) wrapped in a best-effort click
+        # link — terminals without OSC-8 still show the bare URL to copy.
+        "Full guide (opens / copyable):",
+        f"  [link={QUEUE_GUIDE_URL}]{QUEUE_GUIDE_URL}[/link]",
+    ])
+
+
+class QueueHelpScreen(_PanelScreen):
+    """Offline shared-resource help. esc closes."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "Close")]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(_queue_help_text()),
+            Label("esc close", classes="dialog-hint"),
+            id="panel",
+        )
+
+
 class RescanScreen(_PanelScreen):
     """Progress panel for the F5 rescan. A centered _PanelScreen (matching the
     other dialogs) holding an indeterminate-then-determinate bar and an X/N
@@ -578,6 +1148,7 @@ class SessionExplorerApp(App):
     #treepane { width: 1fr; }
     #colheader { height: 1; padding: 0 1; color: $accent; text-style: bold; }
     #empty-state { padding: 2 2; color: $text-muted; }
+    #queues { height: auto; max-height: 40%; padding: 0 1; border-top: solid $accent; }
     Tree { padding: 0 1; width: 1fr; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
     HelpScreen { align: center middle; }
@@ -602,7 +1173,9 @@ class SessionExplorerApp(App):
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
-        Binding("q", "quit", "Quit"),
+        Binding("q", "toggle_queues", "Queues"),
+        Binding("x", "quit", "Exit"),
+        Binding("s", "resource_setup", "Shared resources", show=False),
         Binding("escape", "close_preview", "Close preview", show=False),
         # The Tree's own toggle keys (enter/space) are taken over by resume and
         # preview above, and this Textual version has no left/right binding, so
@@ -665,16 +1238,26 @@ class SessionExplorerApp(App):
         self._sync_timer = None
         # Usage-bar refresh timer (5-min interval); None when the bar is off.
         self._usage_timer = None
+        # Queues pane (shared-resource leases). Visibility persists globally;
+        # _queue_hint_forced shows a one-line activation hint after an explicit
+        # `q` press even when nothing is configured (cleared on next toggle-off).
+        self._queue_visible: bool = False
+        self._queue_hint_forced: bool = False
+        # Best-effort out-of-lease detector: per-resource last top-level snapshot
+        # and a debounce set. A change-burst toasts once; the set re-arms after a
+        # stable (unchanged) poll, so a *later* distinct change toasts again.
+        self._detect_snaps: dict[str, dict] = {}
+        self._detect_warned: set[str] = set()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup") and isinstance(self.screen, ModalScreen):
             return False
-        # While the filter Input is focused, never let `q` quit the TUI — the
-        # keystroke belongs in the filter text, not the global quit binding.
-        if action == "quit" and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+        # While the filter Input is focused, never let `q`/`x` fire the global
+        # Queues-toggle or Exit bindings — the keystrokes belong in the text.
+        if action in ("quit", "toggle_queues") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # Tab is a priority binding (it must beat Textual's focus traversal), so
         # explicitly suppress it while the filter Input is focused — there, Tab
@@ -684,6 +1267,10 @@ class SessionExplorerApp(App):
         # The usage bar only exists in the tmux-hosted layout.
         if action == "toggle_usage" and not self._tmux_enabled:
             return False
+        # `s` (shared-resource setup) is only meaningful with a project selected.
+        if action == "resource_setup":
+            proj, _ = self._project_and_prefix_for_cursor()
+            return proj is not None
         return True
 
     def on_click(self, event) -> None:
@@ -718,8 +1305,10 @@ class SessionExplorerApp(App):
         self._preview.display = False
         self._empty = Static("", id="empty-state")
         self._empty.display = False
+        self._queues = Static("", id="queues")
+        self._queues.display = False
         yield Horizontal(
-            Vertical(self._colheader, self._tree, self._empty, id="treepane"),
+            Vertical(self._colheader, self._tree, self._queues, self._empty, id="treepane"),
             self._preview,
         )
         self._filter = Input(placeholder="filter…", id="filter")
@@ -735,9 +1324,23 @@ class SessionExplorerApp(App):
         from . import live as _live
         return os.environ.get("SESSION_EXPLORER_LIVE") or _live.default_path_for(self._index_path)
 
+    def _ui_path(self) -> str:
+        from . import ui_state as _ui
+        return _ui.default_path_for(self._index_path)
+
+    def _queue_config_path(self) -> str:
+        from . import queue_config as _qc
+        return os.environ.get("SESSION_EXPLORER_QUEUE_CONFIG") or _qc.default_path_for(self._index_path)
+
+    def _queues_root(self) -> str:
+        return os.environ.get("SESSION_EXPLORER_QUEUES_ROOT") or os.path.join(self._claude_dir(), "session-explorer-queues")
+
     def on_mount(self) -> None:
         self.title = "session-explorer"
         self._populate()
+        from . import ui_state as _ui
+        self._queue_visible = bool(_ui.load(self._ui_path()).get("queue_pane_visible"))
+        self._render_queues()  # content-gated; renders nothing if empty
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
         # Opt-in retention: neutralising cleanupPeriodDays modifies the user's
@@ -1339,48 +1942,82 @@ class SessionExplorerApp(App):
 
         self.push_screen(NewFolderScreen(project, prefix), after)
 
+    def action_resource_setup(self) -> None:
+        from . import project_id as _pid
+        project, _ = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+        pid = _pid.project_id(project)
+        if pid is None:
+            self.notify("This project is not a git repository — shared resources "
+                        "need a repo.", severity="warning")
+            return
+        self.push_screen(ResourceListScreen(project_root=project, project_id=pid,
+                                             config_path=self._queue_config_path()))
+
     def action_new_session(self) -> None:
+        from . import project_id as _pid, queue_config as _qc
         project, prefix = self._project_and_prefix_for_cursor()
         if not project:
             self.bell(); return
         sessions = _index.load(self._index_path).get("sessions", {})
         default_cwd = _derive_project_cwd(sessions, project) or os.path.expanduser("~")
+        pid = _pid.project_id(project)
+        root_is_shared = bool(pid and any(
+            r.get("kind") == "root-dir"
+            for r in _qc.list_resources(self._queue_config_path(), pid).values()))
 
         def after(result: "dict | None") -> None:
             if not result:
                 return
-            name = result["name"].strip()
-            cwd = result["cwd"].strip() or os.path.expanduser("~")
-            # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
-            worktree = (result["worktree_name"] or "") if result["worktree"] else None
-            sid = _new_sid()
-
-            # A blank name starts a *temporary* unnamed session: claude writes no
-            # custom-title, so it stays unnamed (hidden by default) and --gc reaps
-            # it on the retention schedule. Don't seed a name in that case.
-            if name:
-                # Seed the chosen name now: claude writes no transcript (and thus
-                # no custom-title) until the first turn, so without this the
-                # session shows under (unnamed) until then. claude -n persists the
-                # identical title later, so there's no divergence.
-                _index.seed_new_session(self._index_path, sid, name, cwd)
-
-            # Remember the new sid so the cursor jumps to its row once it
-            # appears in the tree (consumed by _populate; see select-on-create).
-            self._pending_select_sid = sid
-
-            # No tmux → exit and execvp claude (handled in run()).
-            if not self._tmux_enabled:
-                self._new_session_argv = _new_session_argv(sid, name, worktree)
-                self._new_session_cwd = cwd
-                self.exit()
+            if root_is_shared and not result["worktree"]:
+                def confirmed(ok: bool) -> None:
+                    if ok:
+                        self._finish_new_session(project, result)
+                self.push_screen(
+                    ConfirmScreen("This project's root is a shared sandbox; a "
+                                  "plain root session can be clobbered by a lease. "
+                                  "Create it anyway?"),
+                    confirmed)
                 return
+            self._finish_new_session(project, result)
 
-            _, display = split_path(name)
-            label = display or sid[:8]
-            self._do_new_session(sid, cwd, name, worktree, label)
+        self.push_screen(
+            NewSessionScreen(project, prefix, default_cwd,
+                             root_is_shared=root_is_shared),
+            after)
 
-        self.push_screen(NewSessionScreen(project, prefix, default_cwd), after)
+    def _finish_new_session(self, project: str, result: dict) -> None:
+        name = result["name"].strip()
+        cwd = result["cwd"].strip() or os.path.expanduser("~")
+        # worktree tri-state: None (off), "" (bare -w), or a name (-w name).
+        worktree = (result["worktree_name"] or "") if result["worktree"] else None
+        sid = _new_sid()
+
+        # A blank name starts a *temporary* unnamed session: claude writes no
+        # custom-title, so it stays unnamed (hidden by default) and --gc reaps
+        # it on the retention schedule. Don't seed a name in that case.
+        if name:
+            # Seed the chosen name now: claude writes no transcript (and thus
+            # no custom-title) until the first turn, so without this the
+            # session shows under (unnamed) until then. claude -n persists the
+            # identical title later, so there's no divergence.
+            _index.seed_new_session(self._index_path, sid, name, cwd)
+
+        # Remember the new sid so the cursor jumps to its row once it
+        # appears in the tree (consumed by _populate; see select-on-create).
+        self._pending_select_sid = sid
+
+        # No tmux → exit and execvp claude (handled in run()).
+        if not self._tmux_enabled:
+            self._new_session_argv = _new_session_argv(sid, name, worktree)
+            self._new_session_cwd = cwd
+            self.exit()
+            return
+
+        _, display = split_path(name)
+        label = display or sid[:8]
+        self._do_new_session(sid, cwd, name, worktree, label)
 
     def _do_new_session(self, sid: str, cwd: str, name: str,
                         worktree: "str | None", label: "str | None") -> None:
@@ -1523,6 +2160,52 @@ class SessionExplorerApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def _gating_rows(self) -> list:
+        """The rows that justify showing the pane AND are rendered in it (spec
+        §9): every *active* queue across all projects, plus all resources of the
+        currently-selected project (so its idle ones are visible). An idle,
+        unrelated resource is in neither set, so it never opens the pane and is
+        never rendered."""
+        from . import project_id as _pid, queue_view as _qv
+        try:
+            rows = _qv.snapshot(self._queue_config_path(), self._queues_root(),
+                                self._live_path())
+        except Exception:
+            rows = []
+        sel_proj, _ = self._project_and_prefix_for_cursor()
+        sel_pid = _pid.project_id(sel_proj) if sel_proj else None
+        return [r for r in rows
+                if r["active"] or (sel_pid is not None and r["project_id"] == sel_pid)]
+
+    def action_toggle_queues(self) -> None:
+        from . import ui_state as _ui
+        self._queue_visible = not self._queue_visible
+        _ui.set_queue_pane_visible(self._ui_path(), self._queue_visible)
+        # Force the one-line hint ONLY when turning the pane on with nothing to
+        # show — so the keypress isn't a silent no-op on an unconfigured project.
+        # Never force when there is real content (else the pane stays stuck open
+        # as a "hint" if that content later disappears this session).
+        self._queue_hint_forced = self._queue_visible and not self._gating_rows()
+        self._render_queues()
+
+    def _render_queues(self) -> None:
+        """Content-gated render (spec §9). The gating set and the rendered set are
+        the SAME filtered rows, so the pane never shows an unrelated idle resource
+        — when that set is empty it shows the activation hint (or nothing, if the
+        hint wasn't forced this session)."""
+        gating = self._gating_rows()
+        show = self._queue_visible and (bool(gating) or self._queue_hint_forced)
+        self._queues.display = show
+        if not show:
+            return
+        if not gating:
+            self._queues.update(
+                "[b]Queues[/]  ·  this project is not using shared resources\n"
+                "[dim]Select a project and press [b]s[/] to set up · "
+                "guide: docs/queue-guide.md[/]")
+            return
+        self._queues.update(_render_queue_rows(gating))
 
     def _running_sids(self) -> list:
         """All sessions running in our server: background windows plus the
@@ -1678,6 +2361,56 @@ class SessionExplorerApp(App):
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
+        # Keep the Queues pane current on the same cadence (cheap when hidden).
+        if self._queue_visible:
+            self._render_queues()
+        self._detect_out_of_lease()
+
+    def _detect_out_of_lease(self) -> None:
+        """Compare root-dir snapshots between polls; toast on a change while the
+        resource is in NEITHER valid exclusive-or state — i.e. no lease holder
+        AND no live root session (which legitimately owns root, spec §5). Weak
+        signal (spec §6); excludes the protect baseline + globs."""
+        from . import queue_detect as _qd, queue_view as _qv
+        try:
+            rows = _qv.snapshot(self._queue_config_path(), self._queues_root(),
+                                self._live_path())
+        except Exception:
+            return
+        from . import queue_config as _qc
+        for r in rows:
+            if r["kind"] != "root-dir":
+                continue
+            res = _qc.get_resource(self._queue_config_path(), r["project_id"],
+                                   r["resource"]) or {}
+            path = res.get("path")
+            if not path:
+                continue
+            exclude = set(p.lstrip("/") for p in res.get("sync", {}).get("protect", []))
+            exclude |= {".git"}
+            # Optional generated/served-path exclusions (spec §6). Schema-reserved:
+            # read if present, not yet editable in the v1 form.
+            exclude |= set(p.lstrip("/") for p in res.get("detect_exclude", []))
+            snap = _qd.top_level_snapshot(path, exclude=exclude)
+            prev = self._detect_snaps.get(r["id"])
+            self._detect_snaps[r["id"]] = snap
+            if prev is None:
+                continue
+            # A live root session is a legitimate exclusive-or holder, so its
+            # edits are NOT out-of-lease (spec §5) — treat it as "held" too.
+            held = r["holder"] is not None or r["live_root_block"] is not None
+            if _qd.changed(prev, snap):
+                if not held and r["id"] not in self._detect_warned:
+                    self._detect_warned.add(r["id"])
+                    self.notify(f"⚠ possible out-of-lease access on "
+                                f"{_basename(r['project'])}/{r['resource']}",
+                                severity="warning")
+            else:
+                # Stable poll → re-arm so the NEXT distinct change warns again
+                # (instead of one warning sticking forever while idle).
+                self._detect_warned.discard(r["id"])
+            if held:
+                self._detect_warned.discard(r["id"])  # re-arm once a lease runs too
 
     def _ours_flag(self, sid: str) -> "bool | None":
         """For _glyph: None when not tmux-hosted (no accessibility distinction),
