@@ -2739,3 +2739,23 @@ async def test_w_refuses_live_worktree(tmp_path, monkeypatch):
         await pilot.pause()
         await pilot.press("w"); await pilot.pause()
         assert called == []                            # refused, never removed
+
+from _pkg.tui import worktree_slug
+
+
+def test_worktree_slug_basic():
+    assert worktree_slug("Sprint 14 Auth") == "sprint-14-auth"
+
+
+def test_worktree_slug_uses_display_portion_after_last_slash():
+    assert worktree_slug("team/planning/Sprint 14") == "sprint-14"
+
+
+def test_worktree_slug_strips_punctuation_and_collapses_dashes():
+    assert worktree_slug("Feature: __Foo.Bar__!!") == "feature-foo-bar"
+
+
+def test_worktree_slug_blank_is_blank():
+    assert worktree_slug("") == ""
+    assert worktree_slug("   ") == ""
+    assert worktree_slug("team/") == ""
