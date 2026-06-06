@@ -71,14 +71,19 @@ resources** (the pane is **Queues**); there is no privileged "root queue."
 | `kind` | Example | sync applies? | exclusive-or-root policy? | typical `run_in` |
 |---|---|---|---|---|
 | `root-dir` | bind-mounted repo root | yes | **yes** | `root` |
-| `path` | a non-root shared dir/artifact cache | yes | no | `root`/`worktree` |
+| `path` | a non-root shared dir/artifact cache | yes *(v1: deferred — see below)* | no | `root`/`worktree` |
 | `port` / `service` | a single local DB / dev server | no (usually) | no | `worktree` |
 | `device` | one simulator / HIL rig | no | no | `worktree` |
 | `name` | abstract singleton / license seat | no | no | `worktree` |
 
 Two behaviors that earlier drafts treated as universal are **`kind`-specific**:
 
-- **`sync`** (rsync worktree↔root) only makes sense for `root-dir` / `path`.
+- **`sync`** (rsync worktree↔root) only makes sense for `root-dir` / `path` — and
+  in **v1 is restricted to `root-dir`**. `path`+`sync`+`--delete` is equally
+  destructive but the baseline/sandbox-transition safety model (§2) and the
+  exclusive-or policy (§5) are framed around root; extending them to arbitrary
+  shared paths is deferred (no v1 template needs it). v1 `path` resources are
+  `acquire: none`/`command` only.
 - **The exclusive-or-with-live-root-session policy (§5)**, the new-session
   prevention layer, and the pane's out-of-lease **detection flag** all apply
   **only to `kind: root-dir`**. A simulator, DB, or seat is a plain named lease
@@ -102,9 +107,15 @@ paid once.
 
 - **Queue identity — keyed by project *and* resource, never resource alone.**
   Store: `~/.claude/session-explorer-queues/<project-id>/<resource>/`, where
-  `<project-id>` is a stable hash of the **canonical repo root** (the same
-  project identity the index derives via `index._project_label` / `project_path`,
-  so a worktree collapses onto its parent repo). Resource names like `root` /
+  `<project-id>` is a stable hash of the **canonical repo root**, computed by a
+  **new shared helper** (used identically by queue identity, `cwd` resolution in
+  §3, and live-root matching in §5): `git rev-parse --show-toplevel` to resolve an
+  arbitrary subdirectory cwd to the git top-level, `realpath` to canonicalize
+  symlinks, then the existing `/.claude/worktrees/` collapse (git common-dir
+  identity) so a worktree maps onto its parent repo. The current
+  `index.project_root()` only string-strips the worktree marker and resolves
+  neither subdirs nor symlinks, so it is **insufficient on its own** — the helper
+  must be added. Resource names like `root` /
   `db` recur across projects, so keying by resource alone would collide; the
   project hash disambiguates. The human-readable `‹project› / ‹resource›` label
   shown in the pane is display metadata stored *inside* the ticket, kept separate
@@ -204,12 +215,17 @@ so its filters are specified exactly, not as `--exclude .git`.
 - **Protected *baseline* vs prior-holder residue — what makes the reset safe.**
   A `--delete` acquire must remove the *previous lease holder's* files (that is
   the reset) while never touching genuine root-only/local files (`.env`, caches,
-  certs). They are distinguished by a **baseline captured at the first sandbox
-  transition** (real root → sandbox): the set of root files absent from the first
-  holder's worktree becomes the baseline, auto-added to `protect` and seeded from
-  `/.git`, `/.env`, `/.env.*`, and root's **gitignored top-level entries** (shown
-  for confirmation). A small per-resource **sandbox marker** records that the
-  resource is now in sandbox mode and the baseline is established.
+  certs). The baseline is therefore defined **purely from git**, *not* from a
+  diff against the first holder's worktree: it is the set of root's
+  **gitignored + untracked** paths (`git status --ignored --porcelain` /
+  `git ls-files --others`), captured at the **first sandbox transition** and
+  auto-added to `protect` (seeded from `/.git`, `/.env`, `/.env.*`). Deriving it
+  from the worktree diff would be wrong — files a branch *intentionally deleted*,
+  or files missing because the first worktree is dirty/divergent, would get
+  permanently protected and root would stop matching the holder. A small
+  per-resource **sandbox marker** records that the resource is in sandbox mode and
+  the baseline is established. (Tracked files absent from a later holder's
+  worktree are legitimately deleted by the reset — they are not in the baseline.)
 - **Dry-run refusal fires *only* at that first transition, never in steady
   state.** At the first transition `queue-run` runs `rsync --dry-run`; any
   would-delete path **not** already in the baseline is a candidate root-only file
@@ -279,16 +295,23 @@ caller's intent is preserved:
   (last-N or TTL-pruned), **not** the now-deleted ticket — which `queue-status`
   and the pane read. A failed `release` never blocks the next holder.
 
-**Waiting & cancellation.** A `queue-run` that hasn't acquired yet **holds its
-ticket** (its FIFO place) while waiting — on an earlier ticket *or* on a
-live-root block. `Ctrl-C`/`SIGINT` removes its ticket and leaves the line (the
-`finally` release). `queue-cancel` can drop **any waiting ticket**, including the
-head-of-line one stuck behind a live root session. Head-of-line blocking is *not*
-a special hazard for the live-root case: the exclusive-or rule blocks **all**
-worktree acquires while a root session is live, so every waiter is stalled by the
-session — not by the first ticket — and they all proceed in FIFO order once it
-ends (the accepted starvation tradeoff, §5). An optional `--timeout` bounds how
-long a `queue-run` waits before giving up and releasing its ticket.
+**Waiting & cancellation (observable by the waiter).** A `queue-run` that hasn't
+acquired yet **holds its ticket** (its FIFO place) while waiting — on an earlier
+ticket *or* on a live-root block. `Ctrl-C`/`SIGINT` removes its ticket and leaves
+the line (the `finally` release). Cancellation by *another* process needs a real
+protocol, because merely unlinking a waiting ticket would not stop the waiter
+(which still holds its open fd/flock and keeps polling): the **wait loop
+re-checks its own ticket each poll**, and `queue-cancel` **writes a tombstone**
+(replacing the ticket / recording a durable cancel reason in `…/history/`) that
+the waiter detects on its next poll and then **exits non-zero with that reason**.
+`queue-cancel` targets **waiting tickets only — a current holder cannot be
+canceled this way** (aborting a running command is out of scope; the holder
+releases via its own lifecycle). Head-of-line blocking is *not* a special hazard
+for the live-root case: the exclusive-or rule blocks **all** worktree acquires
+while a root session is live, so every waiter is stalled by the session — not by
+the first ticket — and all proceed in FIFO order once it ends (the accepted
+starvation tradeoff, §5). An optional `--timeout` bounds the wait before a
+`queue-run` gives up and releases its ticket.
 
 ### 5. The "root is exclusive-or" policy (only `kind: root-dir`)
 
@@ -308,11 +331,11 @@ This is what makes a destructive `sync` acquire safe. (Does **not** apply to
      for a different purpose.
    - **Canonical-root matching, not `cwd == shared-root`.** A session counts as
      "in root" when its `cwd` resolves to **this project's canonical repo root and
-     is *not* inside a `.claude/worktrees/…` subtree** — i.e. the same
-     `_project_label`/worktree-marker logic the index uses. This catches sessions
-     started in a *subdirectory* of root (which exact-match would miss) while
-     correctly excluding worktree sessions (which are the legitimate lease
-     holders).
+     is *not* inside a `.claude/worktrees/…` subtree**, computed by the shared
+     canonical-root helper (§1) — which resolves a subdirectory cwd to the git
+     top-level, *not* the weaker `index.project_root()` string-strip. This catches
+     sessions started in a *subdirectory* of root (which exact-match would miss)
+     while correctly excluding worktree sessions (the legitimate lease holders).
 2. **No live root session → sandbox free.** The first worktree holder takes it;
    the acquire hook proceeds. From here root belongs to lease holders.
 3. **Transition guard (two layers — git-tracked *and* ignored).** Flipping from
@@ -400,9 +423,17 @@ first-class):
 **Queues pane semantics:** live on the existing ~2s refresh loop. Per resource:
 holder (+ elapsed) and the waiting line with **position ("2 of 3")**. When the
 selected project has no resources, the pane shows **activation help** (how to set
-up) instead of being empty. The **detection flag** — a `root-dir` resource
-touched (mtime change) with no ticket held → *"out-of-lease access"* — surfaces
-as a transient toast (§9), converting silent bypass into a visible signal.
+up) instead of being empty. The **detection flag** is an explicitly *best-effort*
+heuristic, not a guarantee: a background snapshot of the `root-dir` resource
+(top-level entry set + mtimes) is compared between polls, and a change with **no
+ticket held** raises a transient *"possible out-of-lease access"* toast (§9). Its
+limits are stated honestly — entry/directory mtimes catch creates/deletes/renames
+but **miss in-place content writes**, and warm services writing generated files
+just after a lease releases can false-positive — so it is **debounced**, scoped to
+the synced tree, and **excludes** known generated/served paths and the `protect`
+baseline. A stronger snapshot/sentinel detector is deferred; v1 sells this as a
+weak signal consistent with "bypass is visible, not impossible," never as
+enforcement.
 
 ### 7. Template library (grounded in common pain)
 
@@ -436,17 +467,20 @@ command-guard nudge:
   **never build its own stack** (it collides on the well-known ports), and to run
   guarded commands via `queue-run`.
 - **`PreToolUse` Bash hook**, registered once at install, that **no-ops unless
-  the current repo is opted in**. The hook receives **raw shell text**, so
-  matching is defined concretely: split on `&&`, `||`, `;`, and `|` into
-  simple-command segments; for each segment strip a leading `cd … &&`, `VAR=val`
-  env-assignments, and `env`/`command`/`nohup`/`time` prefixes; resolve the
-  segment's executable **basename** and leading **subcommand tokens** and test
-  them against the `{exe, sub}` guard rules (§2). **Any** matching segment →
-  **deny + redirect** ("re-run as `queue-run -- …`"). It deliberately does **not**
-  descend into scripts, `make`/`npm` targets, or `bash -c "…"` bodies — those are
-  the acknowledged residual caught by the §6 detection flag. Denying (rather than
-  silently wrapping) keeps the lease lifecycle inside the one `queue-run` process.
-  Fails open, never blocks startup.
+  the current repo is opted in**. The hook receives **raw shell text**; because a
+  match *denies*, parsing is **conservative and fail-open** — a false block is
+  worse than a missed guard (the §6 detection flag + awareness are the backstop).
+  It uses a **shell-aware lexer** (not a naive operator split) to enumerate
+  simple-command segments across `&&`/`||`/`;`/`|`, stripping a leading `cd … &&`,
+  `VAR=val` env-assignments, and `env`/`command`/`nohup`/`time` prefixes, then
+  matches each segment's executable **basename** + leading **subcommand tokens**
+  against the `{exe, sub}` rules (§2). On **anything it cannot confidently parse**
+  — quoting/word-split ambiguity, command substitution `$(…)`, shell functions,
+  heredocs, `bash -c "…"` bodies, `make`/`npm` targets — it **fails open (allows)**
+  rather than guessing. Only a confidently-parsed matching segment → **deny +
+  redirect** ("re-run as `queue-run -- …`"); the unparseable residual is the §6
+  detection flag's job. Denying (rather than silently wrapping) keeps the lease
+  lifecycle inside the one `queue-run` process. Fails open, never blocks startup.
 - **Skill + `CLAUDE.md` snippet** for graceful cooperation — don't busy-spin,
   report queue position, understand sync-overwrite semantics, never boot a
   competing stack.
@@ -470,9 +504,12 @@ case-variant bindings.
 
 - **`q` → toggle the Queues pane.** (This reassigns quit, which today is `q`.)
 - **`x` → Exit.** (`x` is currently unbound; verified against `tui.py` BINDINGS.)
-- **`s` / `a` / `e` / `x`** for set-up / add / edit / remove are **pane-local** —
-  live only while the pane is open/focused, so they never appear in the main
-  footer. The only global addition is `q`.
+- **`s` / `a` / `e`** for set-up / add / edit, and **`Del` (with a confirmation
+  dialog)** for remove, are **pane-local** — live only while the resource list is
+  focused, so they never appear in the main footer. Crucially **`x` is *only*
+  global Exit, never a pane action**: an earlier draft double-bound `x` to remove,
+  an accidental-destruction trap in the resource list — that is removed, and
+  resource removal is the confirmed `Del`. The only global addition is `q`.
 
 This is a deliberate trade: a `q Queue` entry shows in *everyone's* footer and
 quit moves to `x` for everyone. We accept it for consistency + discoverability;
@@ -505,7 +542,7 @@ plain-root** only when the project has a `root-dir` resource (§5.4).
 │ (no active queues)                       │   │  Resource  Kind     Guard    Run in │   │ Template:[iOS simulator ▾] kind:device│
 │                                          │   │  ─────────────────────────────────  │   │ Name:   ios-sim                      │
 │ GymCompanion — not using shared resources│   │  (none yet)                         │   │ Guard:  xcodebuild | xcrun simctl    │
-│   [s] Set up   guide: …/queue-guide.md   │   │  [a] Add  [e] Edit  [x] Remove  [?] │   │ Run in: ( )root (•)worktree  (sync   │
+│   [s] Set up   guide: …/queue-guide.md   │   │  [a] Add  [e] Edit  [Del] Remove [?]│   │ Run in: ( )root (•)worktree  (sync   │
 └───────────────────────────────────────────┘   └──────────────────────────────────────┘   │         knobs hidden)  Health: …      │
                                                                                             │ ┌Test: `xcodebuild test`→QUEUE ─────┐ │
                                                                                             │ [Save] [Cancel]                       │
@@ -528,10 +565,10 @@ plain-root** only when the project has a `root-dir` resource (§5.4).
 the transition-guard refusal surfaces in the editor's test panel and at
 `queue-run` time as *"root has uncommitted changes — stash/commit first."*
 
-**Detection toast** (pane may be closed): a `root-dir` resource touched with no
-ticket held raises a transient `notify()` — *"⚠ out-of-lease access on
-GymCompanion/root"* — plus a subtle marker visible if the pane is open. No
-persistent banner.
+**Detection toast** (pane may be closed): the best-effort detector (§6) raises a
+transient `notify()` — *"⚠ possible out-of-lease access on GymCompanion/root"* —
+plus a subtle marker visible if the pane is open. No persistent banner; a weak
+signal, not a block.
 
 **Persistent pane visibility (global, but content-gated).** `q` is a sticky
 toggle persisted as a single global boolean
