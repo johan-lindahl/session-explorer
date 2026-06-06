@@ -42,6 +42,19 @@ These are the constraints to preserve — violating any breaks the spec's contra
 - **tmux is an optional, consented dependency.** Detect + offer install (declined-marker at `~/.claude/.session-explorer.tmux-declined`), never bundle a binary, never silent-sudo. The dedicated `-L session-explorer` server never touches the user's tmux.
 - **Snapshots are read-only.** `capture-pane` for our tmux windows, transcript-tail otherwise. No embedded interactive terminal widget.
 - **Abrupt window-close shuts sessions down via the persist-flag sentinel (Option C).** Only the deliberate "leave running" quit path (`[b]`) sets the persist-flag before detaching; without it the `client-detached` hook kills the server. Don't leave lingering claude sessions on red-button close.
+- **Shared-resource queue keys by git-common-dir, not `project_root`.** The
+  Phase-1 lease engine (`queue-run`/`queue-status`/`queue-cancel`,
+  `bin/_pkg/queue_*.py` + `project_id.py` + `qsync.py` + `exclusive.py` +
+  `probes.py`) identifies a project by `project_id.project_id(cwd)` (a hash of
+  `git rev-parse --git-common-dir`), so every worktree of a repo collapses to
+  one queue identity — `index.project_root()` (a `/.claude/worktrees/`
+  string-strip) is NOT used for queues. The queue is the set of ticket files;
+  the holder is the lowest-numbered ticket whose owner still holds its lifetime
+  `fcntl.flock` (no daemon, crash-safe). The `sync` acquire strategy runs
+  `rsync -a --delete` with anchored `--filter=exclude` rules and refuses the
+  first sandbox transition until untracked/ignored would-delete paths are
+  classified into `protect`/`allow_delete`. Never reintroduce `--delete-excluded`
+  or rsync `P`/`protect` rules. See `SPEC.md` → "Shared-resource lease engine".
 
 ## Commands
 
