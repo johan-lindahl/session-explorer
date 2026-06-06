@@ -3,6 +3,44 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.14.0
+
+### Added
+- **Shared-resource lease engine — agent awareness & command-guard (Phase 3).**
+  Every Claude session in an opted-in project is now told the project shares
+  singleton resources, and guarded commands are nudged toward `queue-run`.
+  - **SessionStart awareness injection.** For an opted-in project the
+    SessionStart hook injects `additionalContext` (via the new
+    `session-explorer queue-context`) listing the declared shared resources,
+    their guarded commands, and how to cooperate (use `queue-run`, never boot a
+    second copy of a warm shared stack, don't busy-spin on a busy resource,
+    expect a `sync` lease to overwrite the shared root).
+  - **PreToolUse command-guard.** A new fail-open `PreToolUse` Bash hook
+    (`hooks/pre-tool-use.sh` → `session-explorer queue-guard`) denies a guarded
+    command and redirects it to `session-explorer queue-run --resource <name> --
+    <command>`. Compound commands (shell operators, newlines) are wrapped whole
+    in `bash -c` so every separator runs inside the lease. Matching reuses the
+    Phase-1 parsed-argv `guard_match` (never a substring regex), so already-
+    wrapped `queue-run` invocations and `echo queue-run && …` bypasses are
+    handled correctly.
+  - **Cooperative guidance.** `docs/queue-guide.md` gains a "Cooperating as an
+    agent" section with a copy-paste `CLAUDE.md` snippet.
+- Decision text and guard matching are single-sourced in the new pure
+  `bin/_pkg/queue_awareness.py` module.
+
+### Changed
+- The `PreToolUse` hook is registered on all install paths — the marketplace
+  manifest (`.claude-plugin/plugin.json`), the plain `install.sh`, and torn down
+  by `uninstall.py` — using the documented nested matcher-group form. Install/
+  uninstall now prune nested sub-hooks by concrete script name so a user hook
+  sharing the `Bash` matcher group is never dropped.
+
+### Notes
+- **Fail open, always.** Both hooks emit nothing and exit 0 on any error (bad
+  payload, missing config, parse ambiguity) — a false deny is worse than a
+  missed guard. Accepted v1 blind spot: wrappers (`make`/`npm run`) that hide a
+  guarded command are not caught; the awareness injection is the backstop.
+
 ## 1.13.0
 
 ### Added
