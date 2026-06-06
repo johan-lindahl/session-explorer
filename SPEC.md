@@ -649,6 +649,18 @@ Phase-3 hook).
   click action. Full guide: `docs/queue-guide.md` (added to the release
   checklist so it can't silently diverge).
 
+### Agent awareness & command-guard (Phase 3)
+
+**Phase 3 (shipped):** awareness + command-guard. The SessionStart hook injects
+`additionalContext` for opted-in projects (via `session-explorer queue-context`);
+a new `PreToolUse` Bash hook (`hooks/pre-tool-use.sh` → `queue-guard`) denies a
+guarded command and redirects it to `queue-run`. Both fail open. Decision text
+and guard matching are single-sourced in `bin/_pkg/queue_awareness.py` (reusing
+`guard_match`). Accepted v1 blind spot: wrappers (`make`/`npm`) that hide a
+guarded command are not caught — mitigated by the awareness injection, not the
+hook. The `PreToolUse` hook is new install wiring, mirrored across
+`.claude-plugin/plugin.json`, `install.sh`, and `uninstall.py`.
+
 ## Disabling native auto-cleanup
 
 **Opt-in.** Modifying the user's `settings.json` without consent is a marketplace-review concern, so the plugin does NOT neutralise native cleanup automatically. The TUI asks on first launch (`tui.on_mount` → `retention.enable`/`retention.decline`); neither the `SessionStart` hook nor `install.sh` ever touches `settings.json`. Only when the user agrees is `cleanupPeriodDays` in `~/.claude/settings.json` set to `36500` (100 years) — with the prior value backed up — so Claude's expiry never touches user sessions and the plugin's `session-explorer index --gc` does deletion instead:

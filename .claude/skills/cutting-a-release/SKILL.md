@@ -87,6 +87,11 @@ gh release create vX.Y.Z --latest=false --title "..." --notes-file /tmp/relnotes
 - [ ] CHANGELOG.md section added, newest-on-top
 - [ ] Help screen keybinding descriptions updated **iff** keys changed (covers the `q`/`x`/`s` queue keys)
 - [ ] `docs/queue-guide.md` kept in sync **iff** the shared-resource model/templates changed
+- [ ] `PreToolUse` hook mirrored across `.claude-plugin/plugin.json`, `install.sh`
+      (markers + registration + chmod), and `uninstall.py` (`_HOOK_MARKERS`/
+      `_HOOK_EVENTS`) — never marketplace-only
+- [ ] `docs/queue-guide.md` "Cooperating as an agent" snippet kept in sync with
+      the SessionStart injection text in `queue_awareness.py`
 - [ ] `grep -rn "$NEW"` shows every file incl. CHANGELOG.md (no laggards)
 - [ ] Bump merged to `main`; `HEAD == origin/main`; CI/tests green
 - [ ] Notes file written (mirrors CHANGELOG); `gh release create vX.Y.Z --target main` run; shows as Latest
