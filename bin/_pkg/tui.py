@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import uuid
 
 from textual import work
@@ -26,6 +27,39 @@ from . import usage as _usage
 from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path, session_root
+
+
+LAUNCH_CHECK_DELAY = 1.5  # seconds after a new-session launch to verify it stuck
+
+
+def _launch_err_path(sid: str) -> str:
+    """Per-sid temp file capturing a new session's startup stderr."""
+    return os.path.join(tempfile.gettempdir(), f"session-explorer-launch-{sid}.err")
+
+
+def _summarize_launch_error(raw: str) -> str:
+    """One-line summary of captured startup stderr for a toast/preview. Prefers
+    the line that names the failure ('Error creating worktree…'); else the first
+    non-empty line. Truncated. Blank in → blank out."""
+    lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    chosen = next((ln for ln in lines if "Error creating worktree" in ln), None)
+    chosen = chosen or next((ln for ln in lines if "worktree" in ln.lower()
+                             or ln.lower().startswith("error")), None)
+    chosen = chosen or lines[0]
+    return chosen[:200]
+
+
+def _log_line(msg: str) -> None:
+    """Best-effort append to ~/.claude/session-explorer.log. Never raises."""
+    try:
+        from datetime import datetime, timezone
+        log = os.path.expanduser("~/.claude/session-explorer.log")
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now(timezone.utc).isoformat()}] {msg}\n")
+    except Exception:
+        pass
 
 
 def worktree_slug(name: str) -> str:
@@ -2040,13 +2074,46 @@ class SessionExplorerApp(App):
     def _do_new_session(self, sid: str, cwd: str, name: str,
                         worktree: "str | None", label: "str | None") -> None:
         """Start a fresh claude session as a background window and dock it as
-        the right pane, swapping out whatever was docked. Mirrors _dock but
-        uses start_new_session_window (a new session, not a resume)."""
+        the right pane, swapping out whatever was docked. A short-delay liveness
+        check surfaces a startup failure (e.g. `claude -w` could not create its
+        worktree) instead of letting it vanish into a closed window."""
         self._undock_current()
-        _tmux.start_new_session_window(sid, cwd, name, worktree, label)
+        err_path = _launch_err_path(sid)
+        _tmux.start_new_session_window(sid, cwd, name, worktree, label,
+                                       err_path=err_path)
         self._join_docked(sid)
         self._populate()           # show the newly-named session immediately
         self._poll_live()
+        # Textual cancels pending timers on app exit, so quitting within the
+        # delay window simply skips the check (the errfile is left in tmp).
+        self.set_timer(LAUNCH_CHECK_DELAY,
+                       lambda: self._check_launch(sid, err_path, name))
+
+    def _check_launch(self, sid: str, err_path: str, name: str) -> None:
+        """~1.5 s after a new-session launch, verify it actually stuck. If the
+        window died at startup (claude exited — e.g. `claude -w` failed), read
+        the captured stderr, surface it, log it, and stamp the stub so the row
+        explains itself. Alive → just clean up the errfile."""
+        alive = (sid in _tmux.session_windows()
+                 or sid == self._docked_sid
+                 or sid in self._live_states)
+        if not alive:
+            raw = ""
+            try:
+                with open(err_path, encoding="utf-8", errors="replace") as f:
+                    raw = f.read()
+            except OSError:
+                pass
+            msg = _summarize_launch_error(raw) or "Session failed to start."
+            _log_line(f"launch failed sid={sid} name={name!r}: {raw!r}")
+            self.notify(f"Couldn't start “{name or sid[:8]}”: {msg}",
+                        severity="warning", timeout=10)
+            _index.set_launch_error(self._index_path, sid, msg)
+            self._populate()
+        try:
+            os.remove(err_path)
+        except OSError:
+            pass
 
     def _start_stub_fresh(self, sid: str, data: dict) -> None:
         """Launch a transcript-less stub as a fresh session, reusing its sid and

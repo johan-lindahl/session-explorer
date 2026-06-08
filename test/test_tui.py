@@ -2081,7 +2081,7 @@ async def test_new_session_docks_into_the_split(index_path, monkeypatch):
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_new_session_window",
-                        lambda sid, cwd, name, worktree, label=None:
+                        lambda sid, cwd, name, worktree, label=None, **kw:
                             calls.append(("new", sid, name)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.append(("dock", sid)) or 0)
@@ -2793,3 +2793,78 @@ async def test_resume_on_stub_non_tmux_sets_execvp_argv(tmp_path):
         app.action_resume()
     assert app._new_session_argv == ["claude", "--session-id", "S9", "-n", "feature/x"]
     assert app._new_session_cwd == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: detect new-session launch death
+# ---------------------------------------------------------------------------
+
+def test_launch_err_path_is_sid_specific():
+    from _pkg.tui import _launch_err_path
+    p = _launch_err_path("abc-123")
+    assert "abc-123" in p and p.endswith(".err")
+
+
+def test_summarize_launch_error_prefers_worktree_line():
+    from _pkg.tui import _summarize_launch_error
+    raw = ("Preparing worktree (new branch 'worktree-x')\n"
+           "Error creating worktree: worktree \"x\" already exists\n")
+    out = _summarize_launch_error(raw)
+    assert "already exists" in out
+    assert out.startswith("Error creating worktree")
+
+
+def test_summarize_launch_error_blank_returns_empty():
+    from _pkg.tui import _summarize_launch_error
+    assert _summarize_launch_error("") == ""
+
+
+@pytest.mark.asyncio
+async def test_check_launch_dead_window_surfaces_and_stamps(tmp_path, monkeypatch):
+    from _pkg import index, tui as tuimod
+    from _pkg.tui import SessionExplorerApp, _launch_err_path
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))
+    err = _launch_err_path("S9")
+    with open(err, "w") as f:
+        f.write("Error creating worktree: worktree \"x\" already exists\n")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])  # dead
+    app = SessionExplorerApp(index_path=idx)
+    notes = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = None
+        app._live_states = {}
+        app.notify = lambda *a, **k: notes.append((a, k))
+        app._check_launch("S9", err, "feature/x")
+        await pilot.pause()
+    row = index.load(idx)["sessions"]["S9"]
+    assert "already exists" in row["last_launch_error"]
+    assert notes, "expected a warning toast"
+    assert not os.path.exists(err)  # errfile cleaned up
+
+
+@pytest.mark.asyncio
+async def test_check_launch_alive_window_no_stamp(tmp_path, monkeypatch):
+    from _pkg import index, tui as tuimod
+    from _pkg.tui import SessionExplorerApp, _launch_err_path
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))
+    err = _launch_err_path("S9")
+    with open(err, "w") as f:
+        f.write("(stale output from a session that actually started)\n")
+    # Alive: the session is a background window.
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["S9"])
+    app = SessionExplorerApp(index_path=idx)
+    notes = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = None
+        app._live_states = {}
+        app.notify = lambda *a, **k: notes.append((a, k))
+        app._check_launch("S9", err, "feature/x")
+        await pilot.pause()
+    row = index.load(idx)["sessions"]["S9"]
+    assert "last_launch_error" not in row   # alive → not stamped
+    assert not notes                        # no toast
+    assert not os.path.exists(err)          # errfile still cleaned up
