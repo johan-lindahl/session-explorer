@@ -1909,14 +1909,12 @@ async def test_enter_refuses_session_live_elsewhere(index_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
+async def test_quit_background_detaches_without_flag(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp
     calls = {}
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
-    monkeypatch.setattr(tuimod._tmux, "set_persist_flag",
-                        lambda p: calls.setdefault("flag", p))
     monkeypatch.setattr(tuimod._tmux, "detach_client",
                         lambda: calls.setdefault("detach", True) or 0)
     monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda text: 0)
@@ -1927,7 +1925,6 @@ async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
         await pilot.pause()
         await pilot.press("b")            # leave running in background
         await pilot.pause()
-    assert "flag" in calls               # persist-flag set before detaching
     assert calls.get("detach") is True
 
 
@@ -2084,7 +2081,7 @@ async def test_new_session_docks_into_the_split(index_path, monkeypatch):
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_new_session_window",
-                        lambda sid, cwd, name, worktree, label=None:
+                        lambda sid, cwd, name, worktree, label=None, **kw:
                             calls.append(("new", sid, name)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.append(("dock", sid)) or 0)
@@ -2725,3 +2722,149 @@ def test_worktree_slug_blank_is_blank():
     assert worktree_slug("") == ""
     assert worktree_slug("   ") == ""
     assert worktree_slug("team/") == ""
+
+
+def test_preview_shows_last_launch_error():
+    from _pkg.tui import _preview_text
+    s = {"sid": "S9", "name_cached": "feature/x", "project_path": "/p",
+         "last_launch_error": "Error creating worktree: already exists"}
+    text = _preview_text(s)
+    assert "Launch" in text
+    assert "Error creating worktree: already exists" in text
+
+
+def test_preview_no_launch_line_when_clean():
+    from _pkg.tui import _preview_text
+    s = {"sid": "S9", "name_cached": "feature/x", "project_path": "/p"}
+    assert "failed:" not in _preview_text(s)
+
+
+@pytest.mark.asyncio
+async def test_resume_on_stub_starts_fresh(tmp_path):
+    from _pkg import index
+    from _pkg.tui import SessionExplorerApp
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))  # no transcript_path
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    app = SessionExplorerApp(index_path=idx)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = True
+        app._do_new_session = lambda sid, cwd, name, wt, label: captured.update(
+            sid=sid, name=name, wt=wt)
+        # Put the cursor on the stub row (display label contains "x").
+        node = _find(app._tree.root, "x")
+        app._tree.select_node(node); app._tree.cursor_line = node.line
+        await pilot.pause()
+        app.action_resume()
+        await pilot.pause()
+    assert captured.get("sid") == "S9"          # reuses the stub's id
+    assert captured.get("name") == "feature/x"  # not claude --resume
+    assert captured.get("wt") is None           # tmp_path is not a shared-resource root
+
+
+@pytest.mark.asyncio
+async def test_resume_on_stub_non_tmux_sets_execvp_argv(tmp_path):
+    from _pkg import index
+    from _pkg.tui import SessionExplorerApp
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))  # no transcript_path
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = False
+        # position cursor on the stub leaf (find by sid to avoid matching the
+        # project-node label, which may also contain letters in the label string)
+        def _find_by_sid(node, sid):
+            for c in node.children:
+                if c.data and c.data.get("sid") == sid:
+                    return c
+                g = _find_by_sid(c, sid)
+                if g:
+                    return g
+            return None
+        leaf = _find_by_sid(app._tree.root, "S9")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        app.action_resume()
+    assert app._new_session_argv == ["claude", "--session-id", "S9", "-n", "feature/x"]
+    assert app._new_session_cwd == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: detect new-session launch death
+# ---------------------------------------------------------------------------
+
+def test_launch_err_path_is_sid_specific():
+    from _pkg.tui import _launch_err_path
+    p = _launch_err_path("abc-123")
+    assert "abc-123" in p and p.endswith(".err")
+
+
+def test_summarize_launch_error_prefers_worktree_line():
+    from _pkg.tui import _summarize_launch_error
+    raw = ("Preparing worktree (new branch 'worktree-x')\n"
+           "Error creating worktree: worktree \"x\" already exists\n")
+    out = _summarize_launch_error(raw)
+    assert "already exists" in out
+    assert out.startswith("Error creating worktree")
+
+
+def test_summarize_launch_error_blank_returns_empty():
+    from _pkg.tui import _summarize_launch_error
+    assert _summarize_launch_error("") == ""
+
+
+@pytest.mark.asyncio
+async def test_check_launch_dead_window_surfaces_and_stamps(tmp_path, monkeypatch):
+    from _pkg import index, tui as tuimod
+    from _pkg.tui import SessionExplorerApp, _launch_err_path
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))
+    err = _launch_err_path("S9")
+    with open(err, "w") as f:
+        f.write("Error creating worktree: worktree \"x\" already exists\n")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])  # dead
+    app = SessionExplorerApp(index_path=idx)
+    notes = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = None
+        app._live_states = {}
+        app.notify = lambda *a, **k: notes.append((a, k))
+        app._check_launch("S9", err, "feature/x")
+        await pilot.pause()
+    row = index.load(idx)["sessions"]["S9"]
+    assert "already exists" in row["last_launch_error"]
+    assert notes, "expected a warning toast"
+    assert not os.path.exists(err)  # errfile cleaned up
+
+
+@pytest.mark.asyncio
+async def test_check_launch_alive_window_no_stamp(tmp_path, monkeypatch):
+    from _pkg import index, tui as tuimod
+    from _pkg.tui import SessionExplorerApp, _launch_err_path
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))
+    err = _launch_err_path("S9")
+    with open(err, "w") as f:
+        f.write("(stale output from a session that actually started)\n")
+    # Alive: the session is a background window.
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["S9"])
+    app = SessionExplorerApp(index_path=idx)
+    notes = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = None
+        app._live_states = {}
+        app.notify = lambda *a, **k: notes.append((a, k))
+        app._check_launch("S9", err, "feature/x")
+        await pilot.pause()
+    row = index.load(idx)["sessions"]["S9"]
+    assert "last_launch_error" not in row   # alive → not stamped
+    assert not notes                        # no toast
+    assert not os.path.exists(err)          # errfile still cleaned up

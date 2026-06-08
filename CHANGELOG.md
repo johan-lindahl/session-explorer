@@ -3,6 +3,33 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.15.0
+
+### Changed
+- **Sessions now persist across every explorer exit except an explicit "shut
+  down all."** Closing the terminal window (red button / `Cmd+W`) or a crash no
+  longer kills your running Claude sessions — the dedicated tmux server stays
+  alive and the next `/session-explorer:open` reattaches you to exactly where
+  you left off. Only `x` → `[s]` ("shut down all") tears the server down; `x` →
+  `[b]` ("leave running") and any abrupt close are now equivalent. This reverses
+  the prior "Option C" behavior (the `client-detached` kill hook and persist-flag
+  marker are removed). Trade-off: background sessions can accumulate — the tree's
+  live indicators and the `q` quit prompt list what is still running.
+
+### Fixed
+- **New-session launch failures are surfaced instead of vanishing.** When a new
+  session can't start — most often `claude -w` unable to create its git worktree
+  (a stray `.claude/worktrees/<slug>` directory or a transient `.git` lock) — the
+  `claude` process exits and its tmux window closes before anything is visible.
+  The explorer now captures that startup stderr, shows it as a warning toast,
+  logs it to `~/.claude/session-explorer.log`, and records it on the session so
+  the preview shows `Launch failed: …`.
+- **A named session whose first turn never happened no longer refuses to open.**
+  Such a session has no transcript, so resuming it with `claude --resume` could
+  never work. Pressing Enter now starts it fresh (reusing its id and name, with
+  the worktree defaulted the same way new-session creation does) instead of
+  failing silently.
+
 ## 1.14.0
 
 ### Added

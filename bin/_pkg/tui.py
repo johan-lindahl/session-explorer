@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import uuid
 
 from textual import work
@@ -26,6 +27,39 @@ from . import usage as _usage
 from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .tree_model import build_nested_tree, split_path, session_root
+
+
+LAUNCH_CHECK_DELAY = 1.5  # seconds after a new-session launch to verify it stuck
+
+
+def _launch_err_path(sid: str) -> str:
+    """Per-sid temp file capturing a new session's startup stderr."""
+    return os.path.join(tempfile.gettempdir(), f"session-explorer-launch-{sid}.err")
+
+
+def _summarize_launch_error(raw: str) -> str:
+    """One-line summary of captured startup stderr for a toast/preview. Prefers
+    the line that names the failure ('Error creating worktree…'); else the first
+    non-empty line. Truncated. Blank in → blank out."""
+    lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    chosen = next((ln for ln in lines if "Error creating worktree" in ln), None)
+    chosen = chosen or next((ln for ln in lines if "worktree" in ln.lower()
+                             or ln.lower().startswith("error")), None)
+    chosen = chosen or lines[0]
+    return chosen[:200]
+
+
+def _log_line(msg: str) -> None:
+    """Best-effort append to ~/.claude/session-explorer.log. Never raises."""
+    try:
+        from datetime import datetime, timezone
+        log = os.path.expanduser("~/.claude/session-explorer.log")
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now(timezone.utc).isoformat()}] {msg}\n")
+    except Exception:
+        pass
 
 
 def worktree_slug(name: str) -> str:
@@ -293,6 +327,10 @@ def _preview_text(s: dict) -> str:
         field("Context", context),
         field("Model", s.get("model") or "(unknown)"),
         field("Session", sid or "—"),
+    ]
+    if s.get("last_launch_error"):
+        lines += ["", "[b]Launch[/]", f"failed: {s['last_launch_error']}"]
+    lines += [
         "",
         "[b]Notes[/]",
         s.get("notes") or "(no notes)",
@@ -1675,10 +1713,19 @@ class SessionExplorerApp(App):
         if not node or not node.data or "sid" not in node.data:
             self.bell()
             return
-        sid = node.data["sid"]
-        project_path = node.data.get("project_path")
+        data = node.data
+        sid = data["sid"]
+        # A transcript-less stub has no conversation to --resume (its first turn
+        # never happened, e.g. `claude -w` failed at startup). record_session
+        # always writes transcript_path AND message_count together, and a
+        # seed-only stub has neither — so "no transcript and no messages" is the
+        # stub signal. Start it fresh (reusing the seeded id + name) instead.
+        if not data.get("transcript_path") and not data.get("message_count"):
+            self._start_stub_fresh(sid, data)
+            return
+        project_path = data.get("project_path")
         # Human label for the tmux status bar (the window name stays the sid).
-        _, _display = split_path(node.data.get("name_cached"))
+        _, _display = split_path(data.get("name_cached"))
         label = _display or sid[:8]
 
         # No tmux → today's behaviour: exit and execvp claude (handled in run()).
@@ -1955,17 +2002,22 @@ class SessionExplorerApp(App):
         self.push_screen(ResourceListScreen(project_root=project, project_id=pid,
                                              config_path=self._queue_config_path()))
 
-    def action_new_session(self) -> None:
+    def _project_root_is_shared(self, cwd: str) -> bool:
+        """True if the project containing `cwd` has a `root-dir` shared resource
+        configured — so a new session there should default to a worktree."""
         from . import project_id as _pid, queue_config as _qc
+        pid = _pid.project_id(cwd)
+        return bool(pid and any(
+            r.get("kind") == "root-dir"
+            for r in _qc.list_resources(self._queue_config_path(), pid).values()))
+
+    def action_new_session(self) -> None:
         project, prefix = self._project_and_prefix_for_cursor()
         if not project:
             self.bell(); return
         sessions = _index.load(self._index_path).get("sessions", {})
         default_cwd = _derive_project_cwd(sessions, project) or os.path.expanduser("~")
-        pid = _pid.project_id(project)
-        root_is_shared = bool(pid and any(
-            r.get("kind") == "root-dir"
-            for r in _qc.list_resources(self._queue_config_path(), pid).values()))
+        root_is_shared = self._project_root_is_shared(project)
 
         def after(result: "dict | None") -> None:
             if not result:
@@ -2022,13 +2074,65 @@ class SessionExplorerApp(App):
     def _do_new_session(self, sid: str, cwd: str, name: str,
                         worktree: "str | None", label: "str | None") -> None:
         """Start a fresh claude session as a background window and dock it as
-        the right pane, swapping out whatever was docked. Mirrors _dock but
-        uses start_new_session_window (a new session, not a resume)."""
+        the right pane, swapping out whatever was docked. A short-delay liveness
+        check surfaces a startup failure (e.g. `claude -w` could not create its
+        worktree) instead of letting it vanish into a closed window."""
         self._undock_current()
-        _tmux.start_new_session_window(sid, cwd, name, worktree, label)
+        err_path = _launch_err_path(sid)
+        _tmux.start_new_session_window(sid, cwd, name, worktree, label,
+                                       err_path=err_path)
         self._join_docked(sid)
         self._populate()           # show the newly-named session immediately
         self._poll_live()
+        # Textual cancels pending timers on app exit, so quitting within the
+        # delay window simply skips the check (the errfile is left in tmp).
+        self.set_timer(LAUNCH_CHECK_DELAY,
+                       lambda: self._check_launch(sid, err_path, name))
+
+    def _check_launch(self, sid: str, err_path: str, name: str) -> None:
+        """~1.5 s after a new-session launch, verify it actually stuck. If the
+        window died at startup (claude exited — e.g. `claude -w` failed), read
+        the captured stderr, surface it, log it, and stamp the stub so the row
+        explains itself. Alive → just clean up the errfile."""
+        alive = (sid in _tmux.session_windows()
+                 or sid == self._docked_sid
+                 or sid in self._live_states)
+        if not alive:
+            raw = ""
+            try:
+                with open(err_path, encoding="utf-8", errors="replace") as f:
+                    raw = f.read()
+            except OSError:
+                pass
+            msg = _summarize_launch_error(raw) or "Session failed to start."
+            _log_line(f"launch failed sid={sid} name={name!r}: {raw!r}")
+            self.notify(f"Couldn't start “{name or sid[:8]}”: {msg}",
+                        severity="warning", timeout=10)
+            _index.set_launch_error(self._index_path, sid, msg)
+            self._populate()
+        try:
+            os.remove(err_path)
+        except OSError:
+            pass
+
+    def _start_stub_fresh(self, sid: str, data: dict) -> None:
+        """Launch a transcript-less stub as a fresh session, reusing its sid and
+        name. Worktree defaults exactly as `c` does for the project: a
+        shared-resource root → `-w <slug>`, else no worktree."""
+        name = data.get("name_cached") or ""
+        cwd = data.get("project_path") or os.path.expanduser("~")
+        root_is_shared = self._project_root_is_shared(cwd)
+        slug = worktree_slug(name)
+        worktree = slug if (root_is_shared and slug) else None
+        _, display = split_path(name)
+        label = display or sid[:8]
+        self._pending_select_sid = sid
+        if not self._tmux_enabled:
+            self._new_session_argv = _new_session_argv(sid, name, worktree)
+            self._new_session_cwd = cwd
+            self.exit()
+            return
+        self._do_new_session(sid, cwd, name, worktree, label)
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project, prefix), where `project` is the repo root (the
@@ -2237,10 +2341,9 @@ class SessionExplorerApp(App):
                 _tmux.kill_server()
                 self.exit()
             elif choice == "background":
+                # Persist-by-default: detaching leaves the server running; the
+                # next /open reattaches. (Equivalent to an abrupt close now.)
                 _tmux.set_status_left("")
-                flag = os.path.join(self._claude_dir(),
-                                    ".session-explorer.tmux-persist")
-                _tmux.set_persist_flag(flag)   # Option C: this detach is deliberate
                 _tmux.detach_client()
             # None → cancel: stay in the explorer.
         self.push_screen(QuitScreen(running), after)

@@ -209,6 +209,9 @@ def record_session(index_path: str, session_id: str, transcript_path: str,
         }
         if "created_at" not in new_entry:
             new_entry["created_at"] = datetime.now(timezone.utc).isoformat()
+        # A transcript appearing means the launch succeeded; drop any error stub
+        # carried forward from `existing` (set_launch_error stamps it on failure).
+        new_entry.pop("last_launch_error", None)
         data["sessions"][session_id] = new_entry
         return data
     result = mutate(index_path, mutator)
@@ -242,6 +245,18 @@ def seed_new_session(index_path: str, session_id: str, name: str,
             "created_at": existing.get("created_at", now),
             "last_active_at": now,
         }
+        return data
+    return mutate(index_path, mutator)
+
+
+def set_launch_error(index_path: str, session_id: str, error: str) -> dict:
+    """Record why a session's launch failed (e.g. `claude -w` could not create
+    its worktree). Shown in the preview so an unopenable stub explains itself;
+    cleared by record_session once a transcript appears (a successful start)."""
+    def mutator(data: dict) -> dict:
+        row = data["sessions"].get(session_id)
+        if row is not None:
+            row["last_launch_error"] = error
         return data
     return mutate(index_path, mutator)
 

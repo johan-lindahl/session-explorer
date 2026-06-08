@@ -713,6 +713,34 @@ def test_context_window_uses_model_map(monkeypatch):
     assert index._context_window("future-model-500k", 700_000) == 1_000_000
 
 
+def test_set_launch_error_stamps_row(tmp_path):
+    idx_path = str(tmp_path / "index.json")
+    index.seed_new_session(idx_path, "S9", "feature/x", str(tmp_path))
+    index.set_launch_error(idx_path, "S9", "Error creating worktree: already exists")
+    row = index.load(idx_path)["sessions"]["S9"]
+    assert row["last_launch_error"] == "Error creating worktree: already exists"
+
+
+def test_set_launch_error_missing_session_is_noop(tmp_path):
+    idx_path = str(tmp_path / "index.json")
+    index.seed_new_session(idx_path, "S9", "feature/x", str(tmp_path))
+    index.set_launch_error(idx_path, "does-not-exist", "boom")  # no raise
+    sessions = index.load(idx_path)["sessions"]
+    assert "does-not-exist" not in sessions
+    assert "last_launch_error" not in sessions["S9"]
+
+
+def test_record_session_clears_launch_error(tmp_path):
+    idx_path = str(tmp_path / "index.json")
+    index.seed_new_session(idx_path, "S9", "feature/x", str(tmp_path))
+    index.set_launch_error(idx_path, "S9", "boom")
+    transcript = tmp_path / "S9.jsonl"
+    transcript.write_text('{"type":"custom-title","customTitle":"feature/x","sessionId":"S9"}\n')
+    index.record_session(idx_path, "S9", str(transcript), str(tmp_path), skip_git=True)
+    row = index.load(idx_path)["sessions"]["S9"]
+    assert "last_launch_error" not in row
+
+
 def test_record_session_sets_model_and_window_pct(tmp_path):
     """A >200K session records its model and computes pct against the 1M window."""
     import json as _json

@@ -8,7 +8,6 @@ bottom are thin subprocess calls. Mirrors launcher.py's builder/launch split.
 
 from __future__ import annotations
 
-import os
 import re
 import shlex
 import shutil
@@ -52,7 +51,8 @@ def build_start_window(sid: str, cwd: str) -> List[str]:
 
 
 def build_new_session_window(sid: str, cwd: str, name: str,
-                             worktree: "str | None" = None) -> List[str]:
+                             worktree: "str | None" = None,
+                             err_path: "str | None" = None) -> List[str]:
     """new-window argv for starting a *fresh* claude session (not a resume).
 
     The window command is one shell string tmux runs via /bin/sh -c, so the
@@ -64,6 +64,11 @@ def build_new_session_window(sid: str, cwd: str, name: str,
     worktree, "" for a bare `-w` (claude auto-names), or a name for `-w <name>`.
     An empty `name` omits `-n`, starting an unnamed (temporary) session that
     stays hidden by default and is reaped by `--gc`.
+
+    When `err_path` is given, claude's stderr is redirected to that file so a
+    startup failure (e.g. `git worktree add` collision under `-w`) is captured
+    even though the window closes when claude exits. The redirect is appended
+    after shlex.join so the `2>` operator is not quoted; the path is quoted.
     """
     inner = ["exec", "claude", "--session-id", sid]
     if name:
@@ -72,8 +77,11 @@ def build_new_session_window(sid: str, cwd: str, name: str,
         inner.append("-w")
         if worktree:
             inner.append(worktree)
+    cmd = shlex.join(inner)
+    if err_path:
+        cmd += f" 2>{shlex.quote(err_path)}"
     return build_base() + [
-        "new-window", "-d", "-n", sid, "-c", cwd, shlex.join(inner)]
+        "new-window", "-d", "-n", sid, "-c", cwd, cmd]
 
 
 def build_set_label(sid: str, label: str) -> List[str]:
@@ -166,24 +174,19 @@ def build_detach() -> List[str]:
     return build_base() + ["detach-client"]
 
 
-def build_config(*, persist_flag_path: str, switch_key: str = "F9",
+def build_config(*, switch_key: str = "F9",
                  zoom_key: str = "F12", socket: str = SOCKET) -> str:
     """tmux config for the dedicated server. Self-contained; never touches the
-    user's ~/.tmux.conf. The split-pane layout (spec
-    2026-06-02-split-pane-explorer-claude): the explorer is the left pane and the
-    active claude session is docked as a right pane. `switch_key` flips focus
-    between the two panes; `zoom_key` toggles the focused pane fullscreen. The
-    client-detached hook implements Option C: an abrupt window close (no
-    persist-flag) kills the server; a deliberate detach that first touched the
-    flag is left to persist."""
-    detach_hook = (
-        f"set-hook -g client-detached "
-        f"'run-shell -b \"if [ ! -f {persist_flag_path} ]; then "
-        f"tmux -L {socket} kill-server; fi\"'"
-    )
-    # Hints live in the status line so they survive the zoomed-fullscreen case
-    # (where the Textual footer is hidden). Always shown — there is effectively
-    # one window now, so no per-window suppression.
+    user's ~/.tmux.conf. The split-pane layout: the explorer is the left pane
+    and the active claude session docks as a right pane. `switch_key` flips
+    focus; `zoom_key` toggles fullscreen.
+
+    Persist-by-default: there is NO client-detached hook. Detaching the client
+    by any means (red-button/Cmd-W, crash, or the deliberate `x → b`) leaves the
+    server — background sessions and the detached explorer — running. Only an
+    explicit `x → s` ("shut down all") calls kill-server. The next `/open`
+    reattaches via `new-session -A`.
+    """
     hint = (f"#[fg=black,bg=green] {switch_key} ⇄ switch "
             f"· {zoom_key} ⤢ full #[default]")
     return "\n".join([
@@ -191,37 +194,14 @@ def build_config(*, persist_flag_path: str, switch_key: str = "F9",
         "set -g status on",
         'set -g status-left ""',
         "set -g status-left-length 40",
-        # No window-tab list: sessions are panes/background windows, not
-        # user-facing window tabs. The explorer tree is the only switcher.
         'set -g window-status-format ""',
         'set -g window-status-current-format ""',
         f'set -g status-right "{hint}"',
         "set -g status-right-length 40",
-        # No `remain-on-exit`: when claude exits its pane closes and the
-        # explorer reclaims the full width.
         f"bind -n {switch_key} select-pane -t :.+",
         f"bind -n {zoom_key} resize-pane -Z",
-        detach_hook,
         "",
     ])
-
-
-# --- persist-flag helpers ---
-
-def set_persist_flag(path: str) -> None:
-    with open(path, "a"):
-        os.utime(path, None)
-
-
-def clear_persist_flag(path: str) -> None:
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        pass
-
-
-def persist_flag_set(path: str) -> bool:
-    return os.path.exists(path)
 
 
 # --- thin executing wrappers (not unit-tested; covered by spikes + TUI tests) ---
@@ -250,10 +230,11 @@ def start_window(sid: str, cwd: str, label: "str | None" = None) -> int:
 
 def start_new_session_window(sid: str, cwd: str, name: str,
                              worktree: "str | None" = None,
-                             label: "str | None" = None) -> int:
+                             label: "str | None" = None,
+                             err_path: "str | None" = None) -> int:
     """Start a fresh session window; see build_new_session_window for the
-    worktree tri-state (None / "" / name) semantics."""
-    rc = _call(build_new_session_window(sid, cwd, name, worktree))
+    worktree tri-state and the err_path stderr-capture semantics."""
+    rc = _call(build_new_session_window(sid, cwd, name, worktree, err_path))
     if label:
         _call(build_set_label(sid, label))
     return rc
