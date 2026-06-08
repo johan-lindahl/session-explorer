@@ -137,6 +137,22 @@ def test_build_new_session_window_named_still_has_dash_n():
     assert "-n feature" in inner
 
 
+def test_build_new_session_window_redirects_stderr_when_err_path():
+    argv = tmux.build_new_session_window("sid-9", "/proj", "feature",
+                                         err_path="/tmp/se-launch-sid-9.err")
+    assert argv[-1] == (
+        "exec claude --session-id sid-9 -n feature 2>/tmp/se-launch-sid-9.err")
+
+
+def test_build_new_session_window_quotes_err_path_with_spaces():
+    # The `2>` operator stays unquoted while the path is shlex-quoted, so a path
+    # with spaces (or shell metacharacters) can never break out of the redirect.
+    argv = tmux.build_new_session_window("sid-9", "/proj", "feature",
+                                         err_path="/tmp/a b/err.log")
+    assert argv[-1] == (
+        "exec claude --session-id sid-9 -n feature 2>'/tmp/a b/err.log'")
+
+
 def test_build_dock_joins_session_into_explorer_on_the_right():
     # -h = horizontal split (side by side); source window `sid` becomes the
     # right pane of the `explorer` window. `-l 65%` sizes the joined (claude)

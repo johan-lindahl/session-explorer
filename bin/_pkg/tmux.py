@@ -51,7 +51,8 @@ def build_start_window(sid: str, cwd: str) -> List[str]:
 
 
 def build_new_session_window(sid: str, cwd: str, name: str,
-                             worktree: "str | None" = None) -> List[str]:
+                             worktree: "str | None" = None,
+                             err_path: "str | None" = None) -> List[str]:
     """new-window argv for starting a *fresh* claude session (not a resume).
 
     The window command is one shell string tmux runs via /bin/sh -c, so the
@@ -63,6 +64,11 @@ def build_new_session_window(sid: str, cwd: str, name: str,
     worktree, "" for a bare `-w` (claude auto-names), or a name for `-w <name>`.
     An empty `name` omits `-n`, starting an unnamed (temporary) session that
     stays hidden by default and is reaped by `--gc`.
+
+    When `err_path` is given, claude's stderr is redirected to that file so a
+    startup failure (e.g. `git worktree add` collision under `-w`) is captured
+    even though the window closes when claude exits. The redirect is appended
+    after shlex.join so the `2>` operator is not quoted; the path is quoted.
     """
     inner = ["exec", "claude", "--session-id", sid]
     if name:
@@ -71,8 +77,11 @@ def build_new_session_window(sid: str, cwd: str, name: str,
         inner.append("-w")
         if worktree:
             inner.append(worktree)
+    cmd = shlex.join(inner)
+    if err_path:
+        cmd += f" 2>{shlex.quote(err_path)}"
     return build_base() + [
-        "new-window", "-d", "-n", sid, "-c", cwd, shlex.join(inner)]
+        "new-window", "-d", "-n", sid, "-c", cwd, cmd]
 
 
 def build_set_label(sid: str, label: str) -> List[str]:
@@ -221,10 +230,11 @@ def start_window(sid: str, cwd: str, label: "str | None" = None) -> int:
 
 def start_new_session_window(sid: str, cwd: str, name: str,
                              worktree: "str | None" = None,
-                             label: "str | None" = None) -> int:
+                             label: "str | None" = None,
+                             err_path: "str | None" = None) -> int:
     """Start a fresh session window; see build_new_session_window for the
-    worktree tri-state (None / "" / name) semantics."""
-    rc = _call(build_new_session_window(sid, cwd, name, worktree))
+    worktree tri-state and the err_path stderr-capture semantics."""
+    rc = _call(build_new_session_window(sid, cwd, name, worktree, err_path))
     if label:
         _call(build_set_label(sid, label))
     return rc
