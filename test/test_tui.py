@@ -2722,3 +2722,18 @@ def test_worktree_slug_blank_is_blank():
     assert worktree_slug("") == ""
     assert worktree_slug("   ") == ""
     assert worktree_slug("team/") == ""
+
+
+def test_preview_shows_last_launch_error():
+    from _pkg.tui import _preview_text
+    s = {"sid": "S9", "name_cached": "feature/x", "project_path": "/p",
+         "last_launch_error": "Error creating worktree: already exists"}
+    text = _preview_text(s)
+    assert "Launch" in text
+    assert "Error creating worktree: already exists" in text
+
+
+def test_preview_no_launch_line_when_clean():
+    from _pkg.tui import _preview_text
+    s = {"sid": "S9", "name_cached": "feature/x", "project_path": "/p"}
+    assert "failed:" not in _preview_text(s)

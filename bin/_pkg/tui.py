@@ -293,6 +293,10 @@ def _preview_text(s: dict) -> str:
         field("Context", context),
         field("Model", s.get("model") or "(unknown)"),
         field("Session", sid or "—"),
+    ]
+    if s.get("last_launch_error"):
+        lines += ["", "[b]Launch[/]", f"failed: {s['last_launch_error']}"]
+    lines += [
         "",
         "[b]Notes[/]",
         s.get("notes") or "(no notes)",
