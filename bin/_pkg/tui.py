@@ -1679,10 +1679,19 @@ class SessionExplorerApp(App):
         if not node or not node.data or "sid" not in node.data:
             self.bell()
             return
-        sid = node.data["sid"]
-        project_path = node.data.get("project_path")
+        data = node.data
+        sid = data["sid"]
+        # A transcript-less stub has no conversation to --resume (its first turn
+        # never happened, e.g. `claude -w` failed at startup). record_session
+        # always writes transcript_path AND message_count together, and a
+        # seed-only stub has neither — so "no transcript and no messages" is the
+        # stub signal. Start it fresh (reusing the seeded id + name) instead.
+        if not data.get("transcript_path") and not data.get("message_count"):
+            self._start_stub_fresh(sid, data)
+            return
+        project_path = data.get("project_path")
         # Human label for the tmux status bar (the window name stays the sid).
-        _, _display = split_path(node.data.get("name_cached"))
+        _, _display = split_path(data.get("name_cached"))
         label = _display or sid[:8]
 
         # No tmux → today's behaviour: exit and execvp claude (handled in run()).
@@ -1959,17 +1968,22 @@ class SessionExplorerApp(App):
         self.push_screen(ResourceListScreen(project_root=project, project_id=pid,
                                              config_path=self._queue_config_path()))
 
-    def action_new_session(self) -> None:
+    def _project_root_is_shared(self, cwd: str) -> bool:
+        """True if the project containing `cwd` has a `root-dir` shared resource
+        configured — so a new session there should default to a worktree."""
         from . import project_id as _pid, queue_config as _qc
+        pid = _pid.project_id(cwd)
+        return bool(pid and any(
+            r.get("kind") == "root-dir"
+            for r in _qc.list_resources(self._queue_config_path(), pid).values()))
+
+    def action_new_session(self) -> None:
         project, prefix = self._project_and_prefix_for_cursor()
         if not project:
             self.bell(); return
         sessions = _index.load(self._index_path).get("sessions", {})
         default_cwd = _derive_project_cwd(sessions, project) or os.path.expanduser("~")
-        pid = _pid.project_id(project)
-        root_is_shared = bool(pid and any(
-            r.get("kind") == "root-dir"
-            for r in _qc.list_resources(self._queue_config_path(), pid).values()))
+        root_is_shared = self._project_root_is_shared(project)
 
         def after(result: "dict | None") -> None:
             if not result:
@@ -2033,6 +2047,25 @@ class SessionExplorerApp(App):
         self._join_docked(sid)
         self._populate()           # show the newly-named session immediately
         self._poll_live()
+
+    def _start_stub_fresh(self, sid: str, data: dict) -> None:
+        """Launch a transcript-less stub as a fresh session, reusing its sid and
+        name. Worktree defaults exactly as `c` does for the project: a
+        shared-resource root → `-w <slug>`, else no worktree."""
+        name = data.get("name_cached") or ""
+        cwd = data.get("project_path") or os.path.expanduser("~")
+        root_is_shared = self._project_root_is_shared(cwd)
+        slug = worktree_slug(name)
+        worktree = slug if (root_is_shared and slug) else None
+        _, display = split_path(name)
+        label = display or sid[:8]
+        self._pending_select_sid = sid
+        if not self._tmux_enabled:
+            self._new_session_argv = _new_session_argv(sid, name, worktree)
+            self._new_session_cwd = cwd
+            self.exit()
+            return
+        self._do_new_session(sid, cwd, name, worktree, label)
 
     def _project_and_prefix_for_cursor(self) -> "tuple[str | None, str]":
         """Return (project, prefix), where `project` is the repo root (the

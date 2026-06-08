@@ -2737,3 +2737,59 @@ def test_preview_no_launch_line_when_clean():
     from _pkg.tui import _preview_text
     s = {"sid": "S9", "name_cached": "feature/x", "project_path": "/p"}
     assert "failed:" not in _preview_text(s)
+
+
+@pytest.mark.asyncio
+async def test_resume_on_stub_starts_fresh(tmp_path):
+    from _pkg import index
+    from _pkg.tui import SessionExplorerApp
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))  # no transcript_path
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    app = SessionExplorerApp(index_path=idx)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = True
+        app._do_new_session = lambda sid, cwd, name, wt, label: captured.update(
+            sid=sid, name=name, wt=wt)
+        # Put the cursor on the stub row (display label contains "x").
+        node = _find(app._tree.root, "x")
+        app._tree.select_node(node); app._tree.cursor_line = node.line
+        await pilot.pause()
+        app.action_resume()
+        await pilot.pause()
+    assert captured.get("sid") == "S9"          # reuses the stub's id
+    assert captured.get("name") == "feature/x"  # not claude --resume
+    assert captured.get("wt") is None           # tmp_path is not a shared-resource root
+
+
+@pytest.mark.asyncio
+async def test_resume_on_stub_non_tmux_sets_execvp_argv(tmp_path):
+    from _pkg import index
+    from _pkg.tui import SessionExplorerApp
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))  # no transcript_path
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = False
+        # position cursor on the stub leaf (find by sid to avoid matching the
+        # project-node label, which may also contain letters in the label string)
+        def _find_by_sid(node, sid):
+            for c in node.children:
+                if c.data and c.data.get("sid") == sid:
+                    return c
+                g = _find_by_sid(c, sid)
+                if g:
+                    return g
+            return None
+        leaf = _find_by_sid(app._tree.root, "S9")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        app.action_resume()
+    assert app._new_session_argv == ["claude", "--session-id", "S9", "-n", "feature/x"]
+    assert app._new_session_cwd == str(tmp_path)
