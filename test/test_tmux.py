@@ -61,33 +61,24 @@ def test_build_kill_window_and_server_and_detach():
 
 
 def test_build_config_contains_core_settings():
-    conf = tmux.build_config(persist_flag_path="/tmp/se.flag")
+    conf = tmux.build_config()
     assert "set -g mouse on" in conf
     assert "set -g status on" in conf
-    # remain-on-exit must NOT be set — exited claude panes auto-close so the
-    # explorer reclaims the full width.
     assert "remain-on-exit" not in conf
-    # F9 switches focus between the two panes; F12 zooms the focused pane.
     assert "bind -n F9 select-pane -t :.+" in conf
     assert "bind -n F12 resize-pane -Z" in conf
-    # Window tabs are gone — the explorer tree is the only session switcher.
     assert 'window-status-format ""' in conf
     assert 'window-status-current-format ""' in conf
-    # Status-right advertises both keys (always visible, incl. when zoomed).
-    # Status-right advertises both keys (always visible, incl. when zoomed).
     assert "F9 ⇄ switch · F12 ⤢ full" in conf
-    # Option C: kill the server on detach unless the persist-flag is present.
-    assert "client-detached" in conf
-    assert "/tmp/se.flag" in conf
-    assert "kill-server" in conf
+    # Persist-by-default: detaching the client must NOT kill the server.
+    assert "client-detached" not in conf
+    assert "kill-server" not in conf
 
 
 def test_build_config_respects_custom_keys():
-    conf = tmux.build_config(persist_flag_path="/tmp/f",
-                             switch_key="C-g", zoom_key="C-f")
+    conf = tmux.build_config(switch_key="C-g", zoom_key="C-f")
     assert "bind -n C-g select-pane -t :.+" in conf
     assert "bind -n C-f resize-pane -Z" in conf
-    assert "C-g" in conf and "C-f" in conf
 
 
 def test_build_set_label_targets_window_by_sid():
@@ -95,15 +86,6 @@ def test_build_set_label_targets_window_by_sid():
         "tmux", "-L", "session-explorer",
         "set-option", "-w", "-t", "sid-7", "@se_label", "sprint14"]
 
-
-def test_persist_flag_set_clear_check(tmp_path):
-    flag = str(tmp_path / "persist.flag")
-    assert tmux.persist_flag_set(flag) is False
-    tmux.set_persist_flag(flag)
-    assert tmux.persist_flag_set(flag) is True
-    tmux.clear_persist_flag(flag)
-    assert tmux.persist_flag_set(flag) is False
-    tmux.clear_persist_flag(flag)  # idempotent, no raise
 
 
 def test_session_windows_excludes_explorer():
@@ -289,5 +271,5 @@ def test_build_set_status_left_escapes_percent():
 
 
 def test_build_config_sets_status_left_length():
-    cfg = tmux.build_config(persist_flag_path="/tmp/flag")
+    cfg = tmux.build_config()
     assert "set -g status-left-length 40" in cfg

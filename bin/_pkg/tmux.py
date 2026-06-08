@@ -8,7 +8,6 @@ bottom are thin subprocess calls. Mirrors launcher.py's builder/launch split.
 
 from __future__ import annotations
 
-import os
 import re
 import shlex
 import shutil
@@ -166,24 +165,19 @@ def build_detach() -> List[str]:
     return build_base() + ["detach-client"]
 
 
-def build_config(*, persist_flag_path: str, switch_key: str = "F9",
+def build_config(*, switch_key: str = "F9",
                  zoom_key: str = "F12", socket: str = SOCKET) -> str:
     """tmux config for the dedicated server. Self-contained; never touches the
-    user's ~/.tmux.conf. The split-pane layout (spec
-    2026-06-02-split-pane-explorer-claude): the explorer is the left pane and the
-    active claude session is docked as a right pane. `switch_key` flips focus
-    between the two panes; `zoom_key` toggles the focused pane fullscreen. The
-    client-detached hook implements Option C: an abrupt window close (no
-    persist-flag) kills the server; a deliberate detach that first touched the
-    flag is left to persist."""
-    detach_hook = (
-        f"set-hook -g client-detached "
-        f"'run-shell -b \"if [ ! -f {persist_flag_path} ]; then "
-        f"tmux -L {socket} kill-server; fi\"'"
-    )
-    # Hints live in the status line so they survive the zoomed-fullscreen case
-    # (where the Textual footer is hidden). Always shown — there is effectively
-    # one window now, so no per-window suppression.
+    user's ~/.tmux.conf. The split-pane layout: the explorer is the left pane
+    and the active claude session docks as a right pane. `switch_key` flips
+    focus; `zoom_key` toggles fullscreen.
+
+    Persist-by-default: there is NO client-detached hook. Detaching the client
+    by any means (red-button/Cmd-W, crash, or the deliberate `x → b`) leaves the
+    server — background sessions and the detached explorer — running. Only an
+    explicit `x → s` ("shut down all") calls kill-server. The next `/open`
+    reattaches via `new-session -A`.
+    """
     hint = (f"#[fg=black,bg=green] {switch_key} ⇄ switch "
             f"· {zoom_key} ⤢ full #[default]")
     return "\n".join([
@@ -191,37 +185,14 @@ def build_config(*, persist_flag_path: str, switch_key: str = "F9",
         "set -g status on",
         'set -g status-left ""',
         "set -g status-left-length 40",
-        # No window-tab list: sessions are panes/background windows, not
-        # user-facing window tabs. The explorer tree is the only switcher.
         'set -g window-status-format ""',
         'set -g window-status-current-format ""',
         f'set -g status-right "{hint}"',
         "set -g status-right-length 40",
-        # No `remain-on-exit`: when claude exits its pane closes and the
-        # explorer reclaims the full width.
         f"bind -n {switch_key} select-pane -t :.+",
         f"bind -n {zoom_key} resize-pane -Z",
-        detach_hook,
         "",
     ])
-
-
-# --- persist-flag helpers ---
-
-def set_persist_flag(path: str) -> None:
-    with open(path, "a"):
-        os.utime(path, None)
-
-
-def clear_persist_flag(path: str) -> None:
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        pass
-
-
-def persist_flag_set(path: str) -> bool:
-    return os.path.exists(path)
 
 
 # --- thin executing wrappers (not unit-tested; covered by spikes + TUI tests) ---
