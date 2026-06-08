@@ -49,10 +49,9 @@ import sys; sys.path.insert(0, __import__("os").path.join("bin"))
 from _pkg import tmux
 work = sys.argv[1]
 open(f"{work}/tmux.conf", "w").write(
-    tmux.build_config(persist_flag_path=f"{work}/.persist"))
+    tmux.build_config())
 PY
 
-touch "$WORK/.persist"   # keep the server up across an accidental detach
 tmux -L "$SOCK" kill-server 2>/dev/null || true
 tmux -L "$SOCK" -f "$WORK/tmux.conf" new-session -d -s main -n explorer -x 220 -y 50 \
   "env SESSION_EXPLORER_TMUX=1 SESSION_EXPLORER_INDEX=$WORK/index.json SESSION_EXPLORER_TMUX_NO_OFFER=1 $BIN tui"

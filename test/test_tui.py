@@ -1909,14 +1909,12 @@ async def test_enter_refuses_session_live_elsewhere(index_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
+async def test_quit_background_detaches_without_flag(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp
     calls = {}
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])
-    monkeypatch.setattr(tuimod._tmux, "set_persist_flag",
-                        lambda p: calls.setdefault("flag", p))
     monkeypatch.setattr(tuimod._tmux, "detach_client",
                         lambda: calls.setdefault("detach", True) or 0)
     monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda text: 0)
@@ -1927,7 +1925,6 @@ async def test_quit_background_persists_and_detaches(index_path, monkeypatch):
         await pilot.pause()
         await pilot.press("b")            # leave running in background
         await pilot.pause()
-    assert "flag" in calls               # persist-flag set before detaching
     assert calls.get("detach") is True
 
 

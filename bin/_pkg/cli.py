@@ -272,13 +272,9 @@ def _cmd_launch() -> int:
     if _tmux.available() and _tmux.meets_floor(_tmux.detected_version()):
         claude_dir = os.path.expanduser("~/.claude")
         os.makedirs(claude_dir, exist_ok=True)   # may not exist yet (CI / first run)
-        flag = os.path.join(claude_dir, ".session-explorer.tmux-persist")
         conf = os.path.join(claude_dir, ".session-explorer.tmux.conf")
         with open(conf, "w") as f:
-            f.write(_tmux.build_config(persist_flag_path=flag))
-        # Stale persist-flag from a prior run must not suppress the next
-        # abrupt-close kill; clear it on every fresh launch.
-        _tmux.clear_persist_flag(flag)
+            f.write(_tmux.build_config())
         target = _launcher.wrap_in_tmux(target, config_path=conf)
     return _launcher.launch(target)
 

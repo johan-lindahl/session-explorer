@@ -33,7 +33,7 @@ _OPERATIONAL_SIDECARS = (
     "session-explorer-live.json.lock",
     # tmux interaction-layer artifacts.
     ".session-explorer.tmux.conf",
-    ".session-explorer.tmux-persist",
+    ".session-explorer.tmux-persist",  # legacy (pre-1.15): persist mechanism removed; clean leftovers
     ".session-explorer.tmux-declined",
 )
 _DATA_FILES = (

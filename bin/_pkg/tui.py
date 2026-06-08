@@ -2237,10 +2237,9 @@ class SessionExplorerApp(App):
                 _tmux.kill_server()
                 self.exit()
             elif choice == "background":
+                # Persist-by-default: detaching leaves the server running; the
+                # next /open reattaches. (Equivalent to an abrupt close now.)
                 _tmux.set_status_left("")
-                flag = os.path.join(self._claude_dir(),
-                                    ".session-explorer.tmux-persist")
-                _tmux.set_persist_flag(flag)   # Option C: this detach is deliberate
                 _tmux.detach_client()
             # None → cancel: stay in the explorer.
         self.push_screen(QuitScreen(running), after)
