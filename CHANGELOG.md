@@ -3,6 +3,30 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.16.4
+
+### Changed
+- **The Phase-3 awareness text is reframed at location altitude.** It previously
+  enumerated guarded *commands* and forbade one specific anti-pattern, which left
+  a "host-side setup doesn't need the lease" loophole — observed in the field, a
+  session read the guidance, narrated it ("run through the lease"), then ran
+  `cp *.sample` + `npm install` **directly at the shared root with no lease
+  held** before invoking `queue-run` for the final build. The text now states
+  that the shared root is *leased ground*: ANY command whose working directory or
+  write target is the root — setup, scaffolding, `cp` into root, `npm install` /
+  `composer install`, builds, "host-side prep" — must run inside a lease, with
+  **no host-side exception**, and the *entire* sequence (not just the final
+  build) must be wrapped in one `queue-run`. The guidance is harm-reduction; the
+  `overlay-installed-root` dirty-root precondition remains the fail-closed
+  backstop. Synced across `queue_awareness.py` and `docs/queue-guide.md`.
+- **The dirty-root overlay refusal is multi-tenant-aware.** `transition_guard`
+  still refuses any dirty root (behavior unchanged), but its message no longer
+  gives single-tenant advice. In a root shared across worktrees the dirt may have
+  been left by another session that bypassed the lease, so "stash/commit first"
+  could destroy a neighbor's work. The refusal now tells the holder the root is
+  shared, to run `queue-status`, and *not* to blindly stash/restore a root it
+  didn't dirty.
+
 ## 1.16.3
 
 ### Fixed

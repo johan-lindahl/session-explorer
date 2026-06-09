@@ -50,6 +50,13 @@ def _render_context(resources: dict) -> str:
     lines += [
         "",
         "Cooperate with the lease engine:",
+        "  - The shared root is leased ground. ANY command whose working "
+        "directory or write target is the shared root - including setup, "
+        "scaffolding, file copies (`cp ... root/`), `npm install` / "
+        "`composer install`, builds, and anything you might think of as "
+        "'host-side prep' - must run inside a lease. There is no host-side "
+        "exception: if you are touching the root, you hold the lease or you are "
+        "doing it wrong.",
         "  - Never start your own copy of a shared stack / server / database. It "
         "is already running and warm; a second copy collides on its fixed ports "
         "and paths.",
@@ -65,8 +72,11 @@ def _render_context(resources: dict) -> str:
         "`session-explorer queue-run --resource <name> -- <command>`. The lease "
         "overlays your worktree's changed files into the root and restores them "
         "after (on completion, failure, or interrupt).",
-        "  - Do NOT hand-roll your own overlay (cp files into the root, run, "
-        "`git restore`). It bypasses the queue and collides with other sessions.",
+        "  - Do NOT hand-roll your own overlay or stage files into the root "
+        "yourself (cp into root, run, `git restore`). Wrap the ENTIRE sequence "
+        "- setup, copies, installs, and build - in ONE queue-run, never just "
+        "the final step. It bypasses the queue and collides with other "
+        "sessions.",
         "  - Inspect state anytime with `session-explorer queue-status`.",
     ]
     return "\n".join(lines)

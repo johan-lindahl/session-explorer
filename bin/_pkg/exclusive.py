@@ -45,6 +45,11 @@ def transition_guard(main_root: str) -> Optional[str]:
     except (OSError, subprocess.TimeoutExpired):
         return None  # fail open: the dry-run refusal still guards deletes
     if r.returncode == 0 and r.stdout.strip():
-        return ("root has uncommitted changes the sandbox would overwrite — "
-                "stash/commit first")
+        return ("root has uncommitted changes the sandbox would overwrite. "
+                "This root is shared across worktrees — the changes may be "
+                "yours OR left by another session that bypassed the lease. Do "
+                "NOT blindly stash/restore a root you didn't dirty (you may "
+                "destroy another session's work). Run `session-explorer "
+                "queue-status` to see who's active, work out whose changes "
+                "these are, and only commit/stash if they are genuinely yours")
     return None

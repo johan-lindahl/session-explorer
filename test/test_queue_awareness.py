@@ -171,3 +171,6 @@ def test_context_mentions_overlay_and_experimental(tmp_path):
     assert "experimental" in text.lower()
     assert "queue-run" in text
     assert "git restore" in text or "hand-roll" in text
+    # Location-altitude framing: the root is leased ground, no host-side escape.
+    assert "leased ground" in text
+    assert "host-side exception" in text
