@@ -86,6 +86,11 @@ template, edit its fields, test the guard and dry-run, and save. The Queues pane
 If you are a Claude session working in a project that shares singleton resources,
 the SessionStart hook already told you which resources exist. To cooperate:
 
+- **The shared root is leased ground.** ANY command whose working directory or
+  write target is the shared root — setup, scaffolding, `cp` into root,
+  `npm install` / `composer install`, builds, anything you'd call "host-side
+  prep" — must run inside a lease. There is no host-side exception, and the
+  *entire* sequence (not just the final build) goes in one `queue-run`.
 - **Never boot your own copy of a shared stack / server / database.** It is
   already running and warm; a second copy collides on its fixed ports and paths.
 - **Run guarded commands through a lease:**
@@ -102,6 +107,8 @@ the SessionStart hook already told you which resources exist. To cooperate:
 ## Shared resources
 
 This repo shares singleton resources across worktrees via session-explorer.
+- The shared root is leased ground: ANYTHING touching the root (setup, `cp`,
+  `npm install`, builds — no host-side exception) runs inside one `queue-run`.
 - Do NOT start your own stack/server/db — it is already warm and will collide.
 - Run guarded commands as: `session-explorer queue-run --resource <name> -- <cmd>`.
 - Check who holds a resource with `session-explorer queue-status`.
