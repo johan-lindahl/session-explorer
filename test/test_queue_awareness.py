@@ -151,3 +151,23 @@ def test_guard_reason_none_when_not_opted_in(tmp_path):
     repo = _git_repo(tmp_path)
     cfg = tmp_path / "queue-config.json"
     assert qa.guard_reason(str(cfg), "docker compose up", str(repo)) is None
+
+
+def test_context_mentions_overlay_and_experimental(tmp_path):
+    from _pkg import project_id as _pid, queue_config as qc, queue_awareness as qa_local
+    root = tmp_path / "main"; root.mkdir()
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    cfg = str(tmp_path / "qc.json")
+    pid = _pid.project_id(str(root))
+    qc.add_resource(cfg, project_id=pid, display_path=str(root),
+                    resource_id="ov",
+                    resource={"kind": "root-dir", "path": str(root),
+                              "run_in": "root", "acquire": "command",
+                              "release": "command",
+                              "command_acquire": "session-explorer queue-overlay in",
+                              "command_release": "session-explorer queue-overlay out"})
+    text = qa_local.session_context(cfg, str(root))
+    assert text is not None
+    assert "experimental" in text.lower()
+    assert "queue-run" in text
+    assert "git restore" in text or "hand-roll" in text

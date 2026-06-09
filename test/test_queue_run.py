@@ -287,3 +287,34 @@ def test_sync_marker_not_written_when_real_rsync_fails(tmp_path, monkeypatch):
                                 root=resource["path"], qdir=qdir)
     assert msg == "rsync acquire failed"
     assert qsync.in_sandbox(qdir) is False
+
+
+def test_command_hooks_receive_all_se_queue_env(tmp_path, paths):
+    """Both acquire AND release hooks see all three SE_QUEUE_* vars. Run from a
+    real worktree so WORKTREE, ROOT and STATE_DIR are three distinct values — a
+    bug omitting any one fails here, not silently at runtime."""
+    root = _repo(tmp_path)
+    from _pkg import project_id as _pid
+    pid = _pid.project_id(str(root))
+    wt = tmp_path / "wt"
+    _git(root, "worktree", "add", "-q", "-b", "feat", str(wt))
+    acq, rel = tmp_path / "acq.txt", tmp_path / "rel.txt"
+    dump = ("(printenv SE_QUEUE_WORKTREE; printenv SE_QUEUE_ROOT; "
+            "printenv SE_QUEUE_STATE_DIR)")
+    qc.add_resource(paths["config"], project_id=pid, display_path=str(root),
+                    resource_id="ov",
+                    resource={"kind": "root-dir", "path": _pid.main_root(str(root)),
+                              "run_in": "root", "acquire": "command",
+                              "release": "command",
+                              "command_acquire": f"{dump} > {acq}",
+                              "command_release": f"{dump} > {rel}"})
+    rc = queue_run.run_lease(
+        config_path=paths["config"], queues_root=paths["queues_root"],
+        live_path=paths["live"], project_id=pid, resource_id="ov",
+        command=["true"], cwd=str(wt), sid="s1", pid=os.getpid())
+    assert rc == 0
+    qdir = queue_run.queue_dir(paths["queues_root"], pid, "ov")
+    expected = [os.path.realpath(str(wt)), _pid.main_root(str(root)),
+                os.path.realpath(qdir)]
+    assert acq.read_text().splitlines() == expected   # acquire saw all three
+    assert rel.read_text().splitlines() == expected   # release saw all three

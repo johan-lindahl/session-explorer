@@ -62,3 +62,28 @@ def test_wait_for_roundtrip():
     line, t = format_wait_for(spec)
     assert parse_wait_for(line, t) == spec
     assert format_wait_for(None) == ("", "")
+
+
+def test_overlay_template_is_command_mutex_with_curated_guard():
+    res = template_resource("overlay-installed-root", path="/repo")
+    assert res["kind"] == "root-dir"
+    assert res["acquire"] == "command"      # NOT sync — no rsync --delete
+    assert res["release"] == "command"
+    assert res["run_in"] == "root"
+    assert res["path"] == "/repo"
+    assert res["command_acquire"] == "session-explorer queue-overlay in"
+    assert res["command_release"] == "session-explorer queue-overlay out"
+    exes = {(r["exe"], tuple(r["sub"])) for r in res["guard"]}
+    assert ("phpunit", ()) in exes
+    assert ("phpstan", ()) in exes
+    assert ("magento", ("setup:di:compile",)) in exes
+    assert ("magento", ("setup:upgrade",)) in exes
+    # phpcs is worktree-safe and must NOT be guarded through the root mutex.
+    assert not any(r["exe"] in ("phpcs", "php-cs-fixer") for r in res["guard"])
+
+
+def test_queues_header_and_help_are_labeled_experimental():
+    from _pkg.tui import _render_queue_rows, _queue_help_text, QUEUE_EXPERIMENTAL
+    assert "cooperative" in QUEUE_EXPERIMENTAL.lower()
+    assert "experimental" in _render_queue_rows([]).lower()   # pane header tag
+    assert QUEUE_EXPERIMENTAL in _queue_help_text()           # full caveat in help

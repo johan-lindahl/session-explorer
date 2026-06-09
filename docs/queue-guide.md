@@ -1,5 +1,8 @@
 # Shared-resource queue — user guide
 
+> ⚠️ **Experimental — cooperative only.** This system coordinates by convention.
+> It cannot prevent an uncoordinated process from touching a shared resource.
+
 > Reach for this only when isolation is genuinely impossible.
 
 ## When NOT to use this
@@ -54,6 +57,21 @@ sessions, in shared-root projects — the new-session dialog defaults to this.
 | Single shared database | one DB on a fixed socket/port | port · none by default (command once you add a DB-reset shell) · worktree |
 | Root-only credentials / .env | secrets exist only at root | root-dir · sync (protect .env) · root |
 | Single device / HIL / license seat | physically singular resource | device/name · none · worktree |
+
+## Shared installed app root (overlay tests)
+
+When only your repo's main checkout is a fully installed app (vendor/, generated/,
+DB, env) and worktrees are bare checkouts, tests must run *in* the root. Use the
+"Shared installed app root (overlay tests)" template: it takes a FIFO mutex on the
+root, copies your worktree's changed files in, runs your command, and restores
+them after — even if the command fails. Run tests as:
+
+    session-explorer queue-run --resource <name> -- phpunit path/to/Test.php
+
+Guard the tools that need the root (phpunit, phpstan, `bin/magento setup:*`). Do
+NOT guard phpcs / php-cs-fixer — they run fine in a bare worktree and must not be
+serialized. `php bin/magento …` is a known guard blind spot (mitigated by the
+awareness injection).
 
 ## Setting up
 

@@ -121,6 +121,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read a PreToolUse payload on stdin; emit a deny+redirect for "
              "guarded Bash commands (used by the PreToolUse hook). Fails open.")
 
+    qov = sub.add_parser(
+        "queue-overlay",
+        help="Engine-invoked overlay helper (in|out) for the shared installed "
+             "app root template. Reads SE_QUEUE_WORKTREE/ROOT/STATE_DIR env.")
+    qov.add_argument("direction", choices=["in", "out"])
+
     uninstall_p = sub.add_parser(
         "uninstall",
         help="Restore cleanupPeriodDays and remove session-explorer's files.")
@@ -405,6 +411,38 @@ def _cmd_queue_guard(args) -> int:
     return 0
 
 
+def _cmd_queue_overlay(args) -> int:
+    """Overlay (`in`) or restore (`out`) the shared installed app root. Reads
+    the SE_QUEUE_* env the engine exports. `in` refuses on a dirty root so the
+    engine treats acquire as failed; `out` returns nonzero if any path could not
+    be restored, so the engine records a release failure."""
+    from . import exclusive as _ex
+    from . import overlay as _ov
+    worktree = os.environ.get("SE_QUEUE_WORKTREE", "")
+    root = os.environ.get("SE_QUEUE_ROOT", "")
+    state_dir = os.environ.get("SE_QUEUE_STATE_DIR", "")
+    if not root or not state_dir:
+        print("queue-overlay: missing SE_QUEUE_ROOT/SE_QUEUE_STATE_DIR env",
+              file=sys.stderr)
+        return 1
+    if args.direction == "in":
+        if not worktree:
+            print("queue-overlay: missing SE_QUEUE_WORKTREE env", file=sys.stderr)
+            return 1
+        guard = _ex.transition_guard(root)
+        if guard:
+            print(f"queue-overlay: refusing overlay — {guard}", file=sys.stderr)
+            return 1
+        _ov.apply_overlay(worktree, root, state_dir)
+        return 0
+    failed = _ov.restore_overlay(root, state_dir)
+    if failed:
+        print(f"queue-overlay: {len(failed)} path(s) not restored: "
+              f"{', '.join(failed)}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from . import folder_store as _fs
     parser = build_parser()
@@ -457,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_queue_status(args)
     if args.cmd == "queue-cancel":
         return _cmd_queue_cancel(args)
+    if args.cmd == "queue-overlay":
+        return _cmd_queue_overlay(args)
     if args.cmd == "tui":
         from .tui import run
         return run()

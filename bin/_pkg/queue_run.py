@@ -67,8 +67,17 @@ def _refuse(msg: str) -> int:
     return REFUSAL_EXIT
 
 
-def _run_shell(command: str, cwd: Optional[str], timeout: Optional[float]) -> int:
-    return subprocess.run(command, shell=True, cwd=cwd, timeout=timeout).returncode
+def _run_shell(command: str, cwd: Optional[str], timeout: Optional[float],
+               env: Optional[dict] = None) -> int:
+    run_env = {**os.environ, **env} if env else None
+    return subprocess.run(command, shell=True, cwd=cwd, timeout=timeout,
+                          env=run_env).returncode
+
+
+def _hook_env(*, src: str, root: str, qdir: str) -> dict:
+    """Env exported to command_acquire/command_release (overlay helper contract)."""
+    return {"SE_QUEUE_WORKTREE": src, "SE_QUEUE_ROOT": root,
+            "SE_QUEUE_STATE_DIR": qdir}
 
 
 def _do_acquire(resource: dict, *, src: str, root: str, qdir: str) -> Optional[str]:
@@ -78,7 +87,8 @@ def _do_acquire(resource: dict, *, src: str, root: str, qdir: str) -> Optional[s
         return None
     if strategy == "command":
         cmd = resource.get("command_acquire")
-        if cmd and _run_shell(cmd, cwd=root, timeout=None) != 0:
+        env = _hook_env(src=src, root=root, qdir=qdir)
+        if cmd and _run_shell(cmd, cwd=root, timeout=None, env=env) != 0:
             return "acquire command failed"
         return None
     if strategy == "sync":
@@ -119,7 +129,7 @@ def _do_acquire(resource: dict, *, src: str, root: str, qdir: str) -> Optional[s
     return f"unknown acquire strategy {strategy!r}"
 
 
-def _do_release(resource: dict, *, root: str) -> bool:
+def _do_release(resource: dict, *, root: str, src: str, qdir: str) -> bool:
     """Run the release hook (time-bounded). Returns True on success/none."""
     if resource.get("release") != "command":
         return True
@@ -127,7 +137,8 @@ def _do_release(resource: dict, *, root: str) -> bool:
     if not cmd:
         return True
     try:
-        return _run_shell(cmd, cwd=root, timeout=_RELEASE_TIMEOUT) == 0
+        return _run_shell(cmd, cwd=root, timeout=_RELEASE_TIMEOUT,
+                          env=_hook_env(src=src, root=root, qdir=qdir)) == 0
     except subprocess.TimeoutExpired:
         return False
 
@@ -267,7 +278,7 @@ def run_lease(*, config_path: str, queues_root: str, live_path: str,
             if acquired:
                 err = None
                 try:
-                    ok = _do_release(resource, root=root)
+                    ok = _do_release(resource, root=root, src=src, qdir=qdir)
                 except Exception as e:   # a buggy release hook must not strand the queue
                     ok = False
                     err = f"release hook raised: {e}"
