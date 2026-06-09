@@ -5,6 +5,8 @@ import os
 import subprocess
 import shutil
 
+from _pkg import overlay
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BIN = os.path.join(_REPO_ROOT, "bin", "session-explorer")
 
@@ -414,3 +416,72 @@ def test_queue_guard_fails_open_when_cwd_missing(tmp_path):
         env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+
+
+def test_queue_overlay_in_out_roundtrip(tmp_path):
+    def g(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True,
+                       capture_output=True, text=True)
+    root = tmp_path / "main"; root.mkdir()
+    g(root, "init", "-q"); g(root, "config", "user.email", "t@t")
+    g(root, "config", "user.name", "t")
+    (root / "a.txt").write_text("ROOT\n"); g(root, "add", "a.txt")
+    g(root, "commit", "-qm", "init")
+    wt = tmp_path / "wt"; g(root, "worktree", "add", "-q", "-b", "feat", str(wt))
+    (wt / "a.txt").write_text("WT\n")
+    state = tmp_path / "state"
+    env = {**os.environ, "SE_QUEUE_WORKTREE": str(wt),
+           "SE_QUEUE_ROOT": str(root), "SE_QUEUE_STATE_DIR": str(state)}
+    r = subprocess.run([_BIN, "queue-overlay", "in"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (root / "a.txt").read_text() == "WT\n"
+    r = subprocess.run([_BIN, "queue-overlay", "out"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (root / "a.txt").read_text() == "ROOT\n"
+
+
+def test_queue_overlay_in_refuses_dirty_root(tmp_path):
+    def g(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True,
+                       capture_output=True, text=True)
+    root = tmp_path / "main"; root.mkdir()
+    g(root, "init", "-q"); g(root, "config", "user.email", "t@t")
+    g(root, "config", "user.name", "t")
+    (root / "a.txt").write_text("ROOT\n"); g(root, "add", "a.txt")
+    g(root, "commit", "-qm", "init")
+    wt = tmp_path / "wt"; g(root, "worktree", "add", "-q", "-b", "feat", str(wt))
+    (wt / "a.txt").write_text("WT\n")          # worktree has a change to overlay
+    (root / "a.txt").write_text("DIRTY\n")     # but root is dirty -> must refuse
+    state = tmp_path / "state"
+    env = {**os.environ, "SE_QUEUE_WORKTREE": str(wt),
+           "SE_QUEUE_ROOT": str(root), "SE_QUEUE_STATE_DIR": str(state)}
+    r = subprocess.run([_BIN, "queue-overlay", "in"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode != 0                                   # refused
+    assert (root / "a.txt").read_text() == "DIRTY\n"          # NOT overlaid
+    assert not (state / overlay.MANIFEST_NAME).exists()        # no manifest written
+
+
+def test_queue_overlay_out_nonzero_when_restore_fails(tmp_path):
+    """A restore that can't put a path back exits nonzero (so the engine records
+    a release failure) and preserves the manifest."""
+    def g(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True,
+                       capture_output=True, text=True)
+    root = tmp_path / "main"; root.mkdir()
+    g(root, "init", "-q"); g(root, "config", "user.email", "t@t")
+    g(root, "config", "user.name", "t")
+    (root / "a.txt").write_text("ROOT\n"); g(root, "add", "a.txt")
+    g(root, "commit", "-qm", "init")
+    state = tmp_path / "state"; state.mkdir()
+    # 'ghost.txt' is untracked in root, so `git checkout -- ghost.txt` fails.
+    (state / overlay.MANIFEST_NAME).write_text(
+        json.dumps([{"path": "ghost.txt", "status": "modified"}]))
+    env = {**os.environ, "SE_QUEUE_ROOT": str(root),
+           "SE_QUEUE_STATE_DIR": str(state)}
+    r = subprocess.run([_BIN, "queue-overlay", "out"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode != 0
+    assert (state / overlay.MANIFEST_NAME).exists()            # preserved on failure
