@@ -494,9 +494,9 @@ def _render_queue_rows(rows: list) -> str:
             continue
         if r["holder"]:
             h = r["holder"]
-            lines.append(f"  {name:<26}● holder: {h['label']} ({h['elapsed']})")
+            lines.append(f"  {name:<26}● holder: ‹{h['name']}› ({h['elapsed']})")
             if r["waiting"]:
-                waits = " · ".join(f"{w['label']} ({w['pos']})" for w in r["waiting"])
+                waits = " · ".join(f"‹{w['name']}› ({w['pos']})" for w in r["waiting"])
                 lines.append(f"  {'':<26}waiting: {waits}")
         else:
             lines.append(f"  {name:<26}○ free")
@@ -2292,7 +2292,7 @@ class SessionExplorerApp(App):
         from . import project_id as _pid, queue_view as _qv
         try:
             rows = _qv.snapshot(self._queue_config_path(), self._queues_root(),
-                                self._live_path())
+                                self._live_path(), index_path=self._index_path)
         except Exception:
             rows = []
         sel_proj, _ = self._project_and_prefix_for_cursor()

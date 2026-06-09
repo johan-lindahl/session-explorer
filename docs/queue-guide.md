@@ -30,7 +30,9 @@ reset), but it also means anything in the shared root that is not protected and
 not in your worktree is deleted.
 
 - **`protect`** lists root-only paths to keep untouched (secrets, certs,
-  fixtures). `/.git`, `/.env`, `/.env.*` are protected by default.
+  fixtures). `/.git`, `/.env`, `/.env.*`, `/.claude/worktrees` are protected by
+  default (`.claude/worktrees` holds the repo's sibling worktrees — deleting it
+  would wipe them, so it is never synced).
 - **`exclude`** lists worktree junk that must not be copied in (`/.git`,
   `node_modules`).
 - The first time a root enters sandbox mode, `queue-run` refuses until every

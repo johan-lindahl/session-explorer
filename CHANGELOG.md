@@ -3,6 +3,24 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.16.1
+
+### Fixed
+- **Queues pane shows the holding session's name, not a redundant label.** The
+  holder/waiter line previously repeated the project/resource string
+  (`holder: magento-os/royal-magento-docker`) — identical to the row's own
+  identity and useless for telling which session holds the lease. It now shows
+  the holding session's name (its cached `custom-title`, resolved from the index
+  by ticket sid, in the same `‹…›` style as a live-root holder), falling back to
+  a short sid when the session is unnamed or absent from the index.
+- **`sync` strategy auto-protects `/.claude/worktrees`.** A worktree acquire
+  rsyncs the holder's worktree over the shared root; because the gitignored
+  `.claude/worktrees/` exists only at root, `--delete` would have wiped every
+  sibling worktree (the sync source among them), and — being untracked — the
+  first-transition gate instead refused, inviting the user to `allow_delete` it
+  (the same disaster). It is now in `DEFAULT_PROTECT`, so it is never deleted and
+  never needs classifying.
+
 ## 1.16.0
 
 ### Added

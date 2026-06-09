@@ -94,6 +94,42 @@ def test_unclassified_excludes_auto_protect_and_already_classified(tmp_path):
     assert set(unresolved2) == {"build/out", "certs/key.pem"}
 
 
+def test_claude_worktrees_is_auto_protected_filter():
+    # The explorer's own .claude/worktrees/ is gitignored, explorer-owned, and
+    # holds SIBLING worktrees. A sync acquire must never delete it (that would
+    # wipe other worktrees) nor force the user to classify it. It is covered by
+    # DEFAULT_PROTECT and rendered as a real anchored exclude filter.
+    assert "/.claude/worktrees" in qsync.DEFAULT_PROTECT
+    f = qsync.build_filters(exclude=[], protect=list(qsync.DEFAULT_PROTECT))
+    assert "--filter=exclude /.claude/worktrees" in f
+
+
+def test_claude_worktrees_not_unresolved_and_never_deleted(tmp_path):
+    # End-to-end via the real rsync dry-run: a holder's worktree checkout (src,
+    # tracked files only) synced over the main root, whose gitignored
+    # .claude/worktrees/<name>/ holds a sibling worktree. The gate must NOT
+    # refuse, and the dry-run must NOT list the sibling worktree for deletion.
+    root = _repo(tmp_path, "root")
+    (root / "app.py").write_text("code\n")
+    (root / ".gitignore").write_text(".claude/worktrees/\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "c")
+    sibling = root / ".claude" / "worktrees" / "feat"
+    sibling.mkdir(parents=True)
+    (sibling / "app.py").write_text("sibling\n")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("code\n")
+    (src / ".gitignore").write_text(".claude/worktrees/\n")
+    protect = list(qsync.DEFAULT_PROTECT)
+    would = qsync.dry_run_deletions(str(src), str(root), exclude=["/.git"],
+                                    protect=protect)
+    assert not any(p.startswith(".claude/worktrees") for p in would)
+    assert qsync.unclassified(str(root), would, protect=protect,
+                              allow_delete=[]) == []
+    assert sibling.exists()   # untouched baseline
+
+
 def test_sandbox_marker_roundtrip(tmp_path):
     qdir = str(tmp_path / "q")
     assert qsync.in_sandbox(qdir) is False
