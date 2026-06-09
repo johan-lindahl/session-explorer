@@ -322,6 +322,48 @@ async def test_editing_clears_stale_command_and_health(index_path, tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_selecting_template_populates_release_and_health_fields(
+        index_path, tmp_path, monkeypatch):
+    # Bug: picking a template from the OptionList repopulated only #res-acq, so a
+    # template's command_release / release_required / health were silently dropped
+    # on save. For overlay-installed-root that left release='none' — overlay-in
+    # applied, overlay-out never wired, files leaked into root.
+    import subprocess
+    import types
+    from _pkg import project_id, queue_config
+    from _pkg.tui import ResourceEditorScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
+                                      config_path=qcfg, resource_id=None)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#res-id", Input).value = "root"
+        # Drive the real template-selection handler (as a click/keypress would).
+        evt = types.SimpleNamespace(
+            option_list=types.SimpleNamespace(id="res-template"),
+            option=types.SimpleNamespace(id="overlay-installed-root"))
+        screen.on_option_list_option_selected(evt)
+        await pilot.pause()
+        # The form now reflects the template's release wiring.
+        assert (screen.query_one("#res-rel", Input).value
+                == "session-explorer queue-overlay out")
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "root")
+    assert res["acquire"] == "command"
+    assert res["command_acquire"] == "session-explorer queue-overlay in"
+    assert res["release"] == "command"
+    assert res["command_release"] == "session-explorer queue-overlay out"
+
+
+@pytest.mark.asyncio
 async def test_malformed_wait_for_is_refused_not_dropped(index_path, tmp_path, monkeypatch):
     # Finding (polish): a non-empty but invalid readiness field must block the
     # save with an error, not silently behave like "no readiness check".

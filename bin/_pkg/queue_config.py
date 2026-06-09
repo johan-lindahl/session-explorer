@@ -122,6 +122,16 @@ def _validate(resource_id: str, resource: dict) -> None:
         raise ValueError("acquire 'command' requires a 'command_acquire' shell string")
     if release == "command" and not resource.get("command_release"):
         raise ValueError("release 'command' requires a 'command_release' shell string")
+    # An apply-only overlay (queue-overlay in with no matching out) copies the
+    # worktree's changed files into root and never restores them, leaking them
+    # into the shared install. Require the restoring half whenever the in-half
+    # is wired.
+    if "queue-overlay in" in (resource.get("command_acquire") or "") \
+            and "queue-overlay out" not in (resource.get("command_release") or ""):
+        raise ValueError(
+            "'queue-overlay in' acquire requires a matching 'queue-overlay out' "
+            "release (release='command', command_release='session-explorer "
+            "queue-overlay out') — otherwise the overlay is never restored")
     if kind == "root-dir" and not resource.get("path"):
         raise ValueError("kind 'root-dir' requires a 'path'")
 
