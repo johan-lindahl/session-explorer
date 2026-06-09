@@ -433,7 +433,13 @@ def _cmd_queue_overlay(args) -> int:
         if guard:
             print(f"queue-overlay: refusing overlay — {guard}", file=sys.stderr)
             return 1
-        _ov.apply_overlay(worktree, root, state_dir)
+        manifest = _ov.apply_overlay(worktree, root, state_dir)
+        if not manifest:
+            # A legitimate success only when the branch genuinely has no delta;
+            # otherwise a visible breadcrumb (the overlay is a no-op, root is
+            # unchanged) instead of a silent "acquired".
+            print("queue-overlay: nothing to overlay — the worktree has no "
+                  "changes relative to its fork point with root", file=sys.stderr)
         return 0
     failed = _ov.restore_overlay(root, state_dir)
     if failed:

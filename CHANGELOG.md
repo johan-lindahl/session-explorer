@@ -3,6 +3,22 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.16.2
+
+### Fixed
+- **`overlay-installed-root` no longer silently drops a branch's added files.**
+  The overlay computed its file set by diffing the holder worktree against
+  root's *live* HEAD, so when root's baseline had drifted to already contain
+  some of the branch's work — e.g. a prior SIGKILL'd lease whose copied file got
+  committed into root — those files were no longer "changed" and were omitted:
+  a partial drift overlaid only modified files (added files vanished), a full
+  drift produced an empty manifest that `queue-overlay in` reported as a
+  successful (but no-op) acquire, so a new module's files never appeared in root.
+  `changed_files` now diffs the worktree branch against its **merge-base with
+  root** (its fork point), capturing the branch's own delta independent of root
+  drift; the happy path (root on the fork point) is unchanged. A genuinely empty
+  overlay now logs a stderr breadcrumb instead of passing as a silent success.
+
 ## 1.16.1
 
 ### Fixed

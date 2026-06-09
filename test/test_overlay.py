@@ -42,6 +42,42 @@ def test_apply_then_restore_modified_and_added(tmp_path):
     assert not (state / overlay.MANIFEST_NAME).exists()     # manifest cleaned
 
 
+def test_added_file_survives_root_baseline_drift(tmp_path):
+    """Regression (the empty-manifest no-op): changed_files must capture the
+    worktree BRANCH's own delta (vs the merge-base with root), not vs root's
+    live HEAD. If root's baseline has drifted to already contain a branch-added
+    file — e.g. a prior SIGKILL'd lease whose copied file got committed into
+    root — the overlay must STILL apply that file, not silently drop it and
+    report an empty/partial manifest as success."""
+    root, wt = _repo_with_worktree(tmp_path)
+    state = tmp_path / "state"
+    # The branch COMMITS a new module file (added) and modifies the existing one.
+    (wt / "new.txt").write_text("NEW\n")
+    (wt / "src.txt").write_text("WORKTREE\n")
+    _git(wt, "add", "-A")
+    _git(wt, "commit", "-qm", "feature: add module + modify")
+    # Root baseline drifts: the added file leaks into root's HEAD (committed),
+    # leaving root's working tree CLEAN — so transition_guard would let the
+    # overlay proceed, yet diffing against root HEAD would no longer see it.
+    (root / "new.txt").write_text("NEW\n")
+    _git(root, "add", "new.txt")
+    _git(root, "commit", "-qm", "added file leaked into baseline")
+
+    manifest = overlay.apply_overlay(str(wt), str(root), str(state))
+    paths = {m["path"] for m in manifest}
+    assert "new.txt" in paths      # must NOT be dropped despite living in root HEAD
+    assert "src.txt" in paths
+
+
+def test_changed_files_unaffected_when_root_on_fork_point(tmp_path):
+    # Happy path: root sits on the branch's fork point, so merge-base == root
+    # HEAD and the captured delta is exactly the worktree's own changes.
+    root, wt = _repo_with_worktree(tmp_path)
+    (wt / "src.txt").write_text("WORKTREE\n")
+    (wt / "new.txt").write_text("NEW\n")
+    assert set(overlay.changed_files(str(wt), str(root))) == {"src.txt", "new.txt"}
+
+
 def test_restore_without_manifest_is_noop(tmp_path):
     root, _ = _repo_with_worktree(tmp_path)
     overlay.restore_overlay(str(root), str(tmp_path / "empty"))  # must not raise
