@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from . import exclusive as _exclusive
+from . import index as _index
 from . import queue_config as _qc
 from . import queue_run as _qr
 from . import queue_store as _qs
@@ -47,16 +48,41 @@ def _elapsed(created: Optional[str], now: datetime) -> str:
     return fmt_elapsed((now - dt).total_seconds())
 
 
+def _session_names(index_path: Optional[str]) -> dict:
+    """sid -> cached session name, for the holder/waiter display. Best-effort:
+    a missing/unreadable index just yields no names (callers fall back)."""
+    if not index_path:
+        return {}
+    try:
+        data = _index.load(index_path)
+    except Exception:
+        return {}
+    return {sid: (s.get("name_cached") or None)
+            for sid, s in data.get("sessions", {}).items()}
+
+
+def _holder_name(sid: str, names: dict) -> str:
+    """The human-readable session name for a ticket; a short sid when the
+    session is unnamed or absent from the index. NEVER the project/resource
+    label — that's already the row identity and identical for every ticket."""
+    return names.get(sid) or sid[:8]
+
+
 def snapshot(config_path: str, queues_root: str, live_path: str, *,
+             index_path: Optional[str] = None,
              now: Optional[datetime] = None) -> List[dict]:
     """One row per configured resource. Each row:
       {id, project_id, project, resource, kind,
-       holder: {sid,label,elapsed}|None,
-       waiting: [{sid,label,pos}],   # pos = "N of M" among waiters
+       holder: {sid,name,label,elapsed}|None,
+       waiting: [{sid,name,label,pos}],   # pos = "N of M" among waiters
        live_root_block: {sid,cwd,name}|None,   # root-dir only
        active: bool}                 # holder/waiters/block present
+
+    `name` is the holding session's title (resolved via `index_path`); `label`
+    is the legacy project/resource string kept for any other consumer.
     """
     now = now or datetime.now(timezone.utc)
+    names = _session_names(index_path)
     rows: List[dict] = []
     for pid, proj in _qc.all_projects(config_path).items():
         display = proj.get("display_path", pid)
@@ -67,12 +93,14 @@ def snapshot(config_path: str, queues_root: str, live_path: str, *,
             waiting = []
             if tickets:
                 h = tickets[0]
-                holder = {"sid": h["sid"], "label": h.get("label", h["sid"]),
+                holder = {"sid": h["sid"], "name": _holder_name(h["sid"], names),
+                          "label": h.get("label", h["sid"]),
                           "elapsed": _elapsed(h.get("created"), now)}
                 waiters = tickets[1:]
                 total = len(waiters)
                 for i, t in enumerate(waiters, start=1):
                     waiting.append({"sid": t["sid"],
+                                    "name": _holder_name(t["sid"], names),
                                     "label": t.get("label", t["sid"]),
                                     "pos": f"{i} of {total}"})
             block = None

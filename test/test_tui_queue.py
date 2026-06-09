@@ -111,13 +111,17 @@ async def test_poll_live_refreshes_the_pane(index_path, tmp_path, monkeypatch):
         # Now a holder appears AFTER the pane is shown; only _poll_live can
         # surface it (action_toggle_queues already ran).
         qdir = queue_run.queue_dir(queues, "abc123", "db")
-        ticket = queue_store.take_ticket(qdir, sid="feat-auth", cwd="/x",
+        # sid-1 is seeded in the index fixture as "planning/sprint14": the pane
+        # must show that session NAME, not the redundant project/resource label.
+        ticket = queue_store.take_ticket(qdir, sid="sid-1", cwd="/x",
                                          command=["t"], pid=1, label="Gym/db",
                                          now_iso="2026-06-06T11:00:00+00:00")
         try:
             app._poll_live()
             await pilot.pause()
-            assert "holder: Gym/db" in str(app.query_one("#queues").render())
+            rendered = str(app.query_one("#queues").render())
+            assert "holder: ‹planning/sprint14›" in rendered
+            assert "Gym/db" not in rendered      # never the redundant label
         finally:
             ticket.release()
 

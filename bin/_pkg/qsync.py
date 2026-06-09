@@ -22,7 +22,13 @@ import subprocess
 from typing import List
 
 # Conservative auto-protect default (spec §2): applied with no prompt.
-DEFAULT_PROTECT = ["/.git", "/.env", "/.env.*"]
+# `/.claude/worktrees` is explorer-owned and gitignored — it holds the repo's
+# SIBLING worktrees (the sync source is itself one). Without this, the holder's
+# worktree (which lacks the gitignored dir) would rsync `--delete` it out of
+# root, wiping every other worktree; and because it's untracked the gate would
+# instead refuse, inviting the user to `allow_delete` it — the same disaster.
+# Protect it unconditionally so it is never deleted and never needs classifying.
+DEFAULT_PROTECT = ["/.git", "/.env", "/.env.*", "/.claude/worktrees"]
 
 
 def _anchor(path: str) -> str:
