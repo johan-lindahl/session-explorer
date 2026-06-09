@@ -38,14 +38,38 @@ def _git_lines(cwd: str, *args: str) -> List[str]:
     return [ln for ln in out.stdout.splitlines() if ln.strip()]
 
 
-def changed_files(worktree: str, root: str) -> List[str]:
-    """Relpaths whose worktree version differs from root's checked-out commit,
-    plus the worktree's untracked (non-ignored) files. Deduped, sorted."""
-    paths = set()
+def _diff_base(worktree: str, root: str) -> str:
+    """The commit to diff the worktree against: the **merge-base** of root's HEAD
+    and the worktree's HEAD — i.e. the branch's fork point. Diffing against this
+    (not root's live HEAD) captures the worktree branch's OWN delta, so a drifted
+    root baseline can't silently drop branch-added/-modified files. Falls back to
+    root's HEAD when there is no common ancestor (unrelated histories) or git
+    can't answer. Returns '' if even root's HEAD is unavailable."""
     head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"],
                           capture_output=True, text=True)
-    if head.returncode == 0:
-        base = head.stdout.strip()
+    if head.returncode != 0:
+        return ""
+    root_head = head.stdout.strip()
+    wt_head = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                             capture_output=True, text=True)
+    if wt_head.returncode == 0 and wt_head.stdout.strip():
+        mb = subprocess.run(
+            ["git", "-C", worktree, "merge-base", root_head, wt_head.stdout.strip()],
+            capture_output=True, text=True)
+        if mb.returncode == 0 and mb.stdout.strip():
+            return mb.stdout.strip()
+    return root_head
+
+
+def changed_files(worktree: str, root: str) -> List[str]:
+    """Relpaths whose worktree version differs from the branch's fork point with
+    root (see `_diff_base`), plus the worktree's untracked (non-ignored) files.
+    Deduped, sorted. Capturing the branch's own delta — rather than the diff vs
+    root's *current* HEAD — keeps the overlay correct when root's baseline has
+    drifted to already contain some of the branch's files."""
+    paths = set()
+    base = _diff_base(worktree, root)
+    if base:
         paths.update(_git_lines(worktree, "diff", "--name-only", base))
     paths.update(_git_lines(worktree, "ls-files", "--others", "--exclude-standard"))
     return sorted(paths)
