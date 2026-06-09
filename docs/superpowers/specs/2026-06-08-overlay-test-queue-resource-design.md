@@ -57,8 +57,11 @@ queue system as a first-class, correctly-modeled resource, so that:
 
 - the **safe path** (a serialized overlay via `queue-run`) is **as light as** the
   hand-rolled bypass — copy only changed files, restore exactly those;
-- the restore is **crash-safe** (runs even on test failure / SIGKILL), unlike the
-  hand-rolled `git restore` that leaks on failure;
+- the restore is **failure/signal-safe** (runs on normal completion, child
+  failure, and handled SIGINT/SIGTERM via the engine's `finally`), unlike the
+  hand-rolled `git restore` that leaks on test failure. It is **not**
+  SIGKILL/hard-crash proof — those skip the `finally`; the next acquire then
+  refuses the now-dirty root (`exclusive.transition_guard`), surfacing it;
 - the guard becomes **meaningful** because the safe path is now the easy path;
 - the whole queue subsystem is clearly labeled **experimental** so users do not
   rely on it for safety.
@@ -137,7 +140,8 @@ Notes:
 A packaged subcommand pair, `session-explorer queue-overlay in` and
 `queue-overlay out`, wired as the template's `command_acquire`/`command_release`.
 It is a shipped, tested helper — **not** user-typed shell — because the restore
-must be exact and crash-safe.
+must be exact and run reliably on every handled exit path (completion, failure,
+signal).
 
 Lives in a new pure-logic module (e.g. `bin/_pkg/overlay.py`) with a thin CLI
 subcommand in `cli.py`, mirroring the other queue modules (Textual-free,
@@ -217,9 +221,11 @@ _run_shell(cmd, cwd=root, env=..., timeout=...)
 
 Make it unmistakable that the queue system is experimental and must not be relied
 on for correctness — it coordinates cooperatively but cannot *prevent* an
-uncoordinated write. A single shared phrasing is threaded through every surface so
-the wording cannot drift: one constant in code (reused by pane + dialogs + help),
-the same sentence echoed in the docs.
+uncoordinated write. The full caveat lives in one code constant
+(`QUEUE_EXPERIMENTAL`), reused verbatim where there's room (resource dialogs +
+help) and echoed in the docs. The space-limited pane header and activation hint
+carry a short `— experimental` tag instead (a full sentence won't fit one pane
+line). Tests pin the tag (header + activation hint) and the constant (help text).
 
 **TUI:**
 - **Queues pane header** → `Queues — experimental` (every time the pane is open).

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a first-class "shared installed app root, overlay-and-restore" queue resource so worktree sessions can run tests in the installed Magento root through a serialized, crash-safe overlay (`queue-run -- phpunit`) instead of an uncoordinated hand-rolled `cp`/`git restore`.
+**Goal:** Add a first-class "shared installed app root, overlay-and-restore" queue resource so worktree sessions can run tests in the installed Magento root through a serialized overlay that auto-restores on completion, failure, or signal (`queue-run -- phpunit`) instead of an uncoordinated hand-rolled `cp`/`git restore`.
 
-**Architecture:** A `root-dir` resource with `acquire=command`/`release=command` wired to a shipped overlay helper (`session-explorer queue-overlay in|out`). The helper copies the worktree's changed files into root on acquire and restores exactly those paths on release; the lease engine already runs release in a `finally`, so restore is crash-safe. One small engine change exposes the worktree/root/state-dir to the command hooks via env vars. A new template captures the pattern with a curated PHP guard list. The whole queue subsystem is labeled experimental across the TUI and docs.
+**Architecture:** A `root-dir` resource with `acquire=command`/`release=command` wired to a shipped overlay helper (`session-explorer queue-overlay in|out`). The helper copies the worktree's changed files into root on acquire and restores exactly those paths on release; the lease engine already runs release in a `finally`, so restore runs on normal completion, child failure, and handled SIGINT/SIGTERM. **It is NOT crash-proof:** a SIGKILL or hard process crash skips the `finally`, leaving the overlay in place — the next acquire then refuses the now-dirty root (`exclusive.transition_guard`), surfacing it instead of double-overlaying. One small engine change exposes the worktree/root/state-dir to the command hooks via env vars. A new template captures the pattern with a curated PHP guard list. The whole queue subsystem is labeled experimental across the TUI and docs.
 
 **Tech Stack:** Python 3.11+ (stdlib only — `subprocess`, `shutil`, `json`), vendored Textual for the TUI, pytest (+ pytest-asyncio), bats for shell. Spec: `docs/superpowers/specs/2026-06-08-overlay-test-queue-resource-design.md`.
 
@@ -37,34 +37,41 @@ The overlay helper needs to know its source worktree, target root, and where to 
 - [ ] **Step 1: Write the failing test** — append to `test/test_queue_run.py`:
 
 ```python
-def test_command_hooks_receive_se_queue_env(tmp_path, paths):
-    """acquire/release command hooks see SE_QUEUE_WORKTREE/ROOT/STATE_DIR."""
+def test_command_hooks_receive_all_se_queue_env(tmp_path, paths):
+    """Both acquire AND release hooks see all three SE_QUEUE_* vars. Run from a
+    real worktree so WORKTREE, ROOT and STATE_DIR are three distinct values — a
+    bug omitting any one fails here, not silently at runtime."""
+    import os as _os
     root = _repo(tmp_path)
     from _pkg import project_id as _pid
     pid = _pid.project_id(str(root))
-    acq_env = tmp_path / "acq_env"
-    rel_env = tmp_path / "rel_env"
+    wt = tmp_path / "wt"
+    _git(root, "worktree", "add", "-q", "-b", "feat", str(wt))
+    acq, rel = tmp_path / "acq.txt", tmp_path / "rel.txt"
+    dump = ("(printenv SE_QUEUE_WORKTREE; printenv SE_QUEUE_ROOT; "
+            "printenv SE_QUEUE_STATE_DIR)")
     qc.add_resource(paths["config"], project_id=pid, display_path=str(root),
                     resource_id="ov",
                     resource={"kind": "root-dir", "path": _pid.main_root(str(root)),
                               "run_in": "root", "acquire": "command",
                               "release": "command",
-                              "command_acquire": f"printenv SE_QUEUE_ROOT > {acq_env}",
-                              "command_release": f"printenv SE_QUEUE_STATE_DIR > {rel_env}"})
+                              "command_acquire": f"{dump} > {acq}",
+                              "command_release": f"{dump} > {rel}"})
     rc = queue_run.run_lease(
         config_path=paths["config"], queues_root=paths["queues_root"],
         live_path=paths["live"], project_id=pid, resource_id="ov",
-        command=["true"], cwd=str(root), sid="s1", pid=os.getpid())
+        command=["true"], cwd=str(wt), sid="s1", pid=os.getpid())
     assert rc == 0
-    assert acq_env.read_text().strip() == _pid.main_root(str(root))
     qdir = queue_run.queue_dir(paths["queues_root"], pid, "ov")
-    assert rel_env.read_text().strip() == qdir
+    expected = [_os.path.realpath(str(wt)), _pid.main_root(str(root)), qdir]
+    assert acq.read_text().splitlines() == expected   # acquire saw all three
+    assert rel.read_text().splitlines() == expected   # release saw all three
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `python3 -m pytest test/test_queue_run.py::test_command_hooks_receive_se_queue_env -q`
-Expected: FAIL (env var unset → file empty / mismatch, or `_do_release` TypeError once signature changes).
+Run: `python3 -m pytest test/test_queue_run.py::test_command_hooks_receive_all_se_queue_env -q`
+Expected: FAIL (env vars unset → files empty / mismatch).
 
 - [ ] **Step 3: Add `env` to `_run_shell`** — replace `bin/_pkg/queue_run.py:70-71`:
 
@@ -211,7 +218,9 @@ source), SE_QUEUE_ROOT (overlay target) and SE_QUEUE_STATE_DIR (manifest dir).
 `apply_overlay` copies the worktree's changed files into root and records a
 manifest. `restore_overlay` undoes exactly those paths (git checkout for files
 that existed in root, rm for ones the overlay created) and deletes the manifest.
-restore runs in the engine's release `finally`, so it is crash-safe.
+restore runs in the engine's release `finally`, so it survives normal
+completion, child failure, and handled SIGINT/SIGTERM — but NOT a SIGKILL/hard
+crash, which skips the finally (the next overlay then refuses the dirty root).
 
 Pure helpers take explicit paths so they unit-test without env. No Textual.
 """
@@ -347,6 +356,33 @@ def test_queue_overlay_in_out_roundtrip(tmp_path):
 
 (`_BIN = <repo>/bin/session-explorer` is already defined at the top of `test/test_cli.py`; no new import needed beyond `os`/`subprocess`, which the file already imports.)
 
+Also add the **dirty-root refusal** test — the core safety property (without it, Task 3 would pass even if the guard were dropped):
+
+```python
+def test_queue_overlay_in_refuses_dirty_root(tmp_path):
+    import os, subprocess
+    from _pkg import overlay
+    def g(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True,
+                       capture_output=True, text=True)
+    root = tmp_path / "main"; root.mkdir()
+    g(root, "init", "-q"); g(root, "config", "user.email", "t@t")
+    g(root, "config", "user.name", "t")
+    (root / "a.txt").write_text("ROOT\n"); g(root, "add", "a.txt")
+    g(root, "commit", "-qm", "init")
+    wt = tmp_path / "wt"; g(root, "worktree", "add", "-q", "-b", "feat", str(wt))
+    (wt / "a.txt").write_text("WT\n")          # worktree has a change to overlay
+    (root / "a.txt").write_text("DIRTY\n")     # but root is dirty -> must refuse
+    state = tmp_path / "state"
+    env = {**os.environ, "SE_QUEUE_WORKTREE": str(wt),
+           "SE_QUEUE_ROOT": str(root), "SE_QUEUE_STATE_DIR": str(state)}
+    r = subprocess.run([_BIN, "queue-overlay", "in"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode != 0                                   # refused
+    assert (root / "a.txt").read_text() == "DIRTY\n"          # NOT overlaid
+    assert not (state / overlay.MANIFEST_NAME).exists()        # no manifest written
+```
+
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `python3 -m pytest test/test_cli.py::test_queue_overlay_in_out_roundtrip -q`
@@ -399,10 +435,10 @@ def _cmd_queue_overlay(args) -> int:
         return _cmd_queue_overlay(args)
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [ ] **Step 6: Run both tests to verify they pass**
 
-Run: `python3 -m pytest test/test_cli.py::test_queue_overlay_in_out_roundtrip -q`
-Expected: PASS.
+Run: `python3 -m pytest test/test_cli.py -k queue_overlay -q`
+Expected: PASS (roundtrip + dirty-root refusal).
 
 - [ ] **Step 7: Commit**
 
@@ -529,7 +565,7 @@ And append these two bullets to the `lines += [...]` cooperative list (after the
         "the installed app (e.g. phpunit, phpstan) must run via the lease: "
         "`session-explorer queue-run --resource <name> -- <command>`. The lease "
         "overlays your worktree's changed files into the root and restores them "
-        "after — crash-safe.",
+        "after (on completion, failure, or interrupt).",
         "  - Do NOT hand-roll your own overlay (cp files into the root, run, "
         "`git restore`). It bypasses the queue and collides with other sessions.",
 ```
@@ -550,25 +586,25 @@ git commit -m "feat(queue): awareness text — overlay-via-queue-run + experimen
 
 ### Task 6: Experimental labeling across the TUI
 
-One shared phrase, reused on the Queues pane header, the activation hint, both resource screens, and the help text, so the wording cannot drift.
+The canonical full caveat is one constant, `QUEUE_EXPERIMENTAL`, used verbatim on the roomy surfaces — both resource screens and the help text. The space-limited Queues pane header and activation hint can't fit a full sentence, so they carry a short `— experimental` tag instead. Tests assert the tag on the header + activation hint (mounted) and the full constant in the help text.
 
 **Files:**
-- Modify: `bin/_pkg/tui.py` — add `QUEUE_EXPERIMENTAL` constant (near `QUEUE_TEMPLATES`, ~`:48`); `_render_queue_rows` (`:434`); activation hint (`:2204`); `ResourceListScreen.compose` (`:723-731`); `ResourceEditorScreen.compose`; `_queue_help_text` (`:1063`)
-- Test: `test/test_queue_templates.py` (pure header/string assertions — no Textual mount needed for `_render_queue_rows` and the constant)
+- Modify: `bin/_pkg/tui.py` — add `QUEUE_EXPERIMENTAL` constant (near `QUEUE_TEMPLATES`, ~`:48`); `_render_queue_rows` (`:434`); activation hint (`:2204`); `ResourceListScreen.compose` (`:723-731`); `ResourceEditorScreen.compose` (`:842`); `_queue_help_text` (`:1064`)
+- Test: `test/test_queue_templates.py` (pure assertions: header + constant + help text); `test/test_tui_queue.py` (mounted assertion: activation hint)
 
-- [ ] **Step 1: Write the failing test** — append to `test/test_queue_templates.py`:
+- [ ] **Step 1: Write the failing pure tests** — append to `test/test_queue_templates.py`:
 
 ```python
-def test_queues_header_is_labeled_experimental():
-    from _pkg.tui import _render_queue_rows, QUEUE_EXPERIMENTAL
-    out = _render_queue_rows([])
-    assert "experimental" in out.lower()
+def test_queues_header_and_help_are_labeled_experimental():
+    from _pkg.tui import _render_queue_rows, _queue_help_text, QUEUE_EXPERIMENTAL
     assert "cooperative" in QUEUE_EXPERIMENTAL.lower()
+    assert "experimental" in _render_queue_rows([]).lower()   # pane header tag
+    assert QUEUE_EXPERIMENTAL in _queue_help_text()           # full caveat in help
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `python3 -m pytest test/test_queue_templates.py::test_queues_header_is_labeled_experimental -q`
+Run: `python3 -m pytest test/test_queue_templates.py::test_queues_header_and_help_are_labeled_experimental -q`
 Expected: FAIL (`ImportError: cannot import name 'QUEUE_EXPERIMENTAL'`).
 
 - [ ] **Step 3: Add the constant** — insert above `QUEUE_TEMPLATES` (`bin/_pkg/tui.py:49`):
@@ -627,15 +663,32 @@ def _queue_help_text() -> str:
         # ... the rest of the existing list unchanged ...
 ```
 
-- [ ] **Step 9: Run the test + full TUI suite to verify nothing broke**
+- [ ] **Step 9: Add a mounted test for the activation hint** — append to `test/test_tui_queue.py` (mirrors its existing `index_path` fixture + `run_test` pattern; `str(pane.render())` is how that file reads pane content):
+
+```python
+@pytest.mark.asyncio
+async def test_activation_hint_is_labeled_experimental(index_path):
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")          # open the pane on a no-resource project
+        await pilot.pause()
+        pane = app.query_one("#queues")
+        assert pane.display is True
+        assert "experimental" in str(pane.render()).lower()
+```
+
+> The resource list/editor screens embed `Label(QUEUE_EXPERIMENTAL, …)` directly (Steps 6–7), so they cannot drift from the constant the help-text test pins; a separate mount test for them is omitted as low-value.
+
+- [ ] **Step 10: Run the pure + mounted tests + full TUI suite to verify nothing broke**
 
 Run: `python3 -m pytest test/test_queue_templates.py test/test_tui_queue.py test/test_tui.py -q`
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add bin/_pkg/tui.py test/test_queue_templates.py
+git add bin/_pkg/tui.py test/test_queue_templates.py test/test_tui_queue.py
 git commit -m "feat(queue): label the queue subsystem experimental across the TUI"
 ```
 
@@ -664,7 +717,9 @@ Documentation labeling and the overlay guide section, plus the version bump. Per
   in|out`. On acquire it copies the holder worktree's changed files into root
   (refusing a dirty root via `exclusive.transition_guard`); on release the engine
   `finally` restores exactly those paths (git-checkout for modified, rm for
-  added) — crash-safe. The engine exports `SE_QUEUE_WORKTREE`/`ROOT`/`STATE_DIR`
+  added) on normal completion, child failure, and handled SIGINT/SIGTERM (a
+  SIGKILL/hard crash skips the finally; the next acquire then refuses the dirty
+  root). The engine exports `SE_QUEUE_WORKTREE`/`ROOT`/`STATE_DIR`
   to the command hooks. Models the "tests must run in the installed root" pattern
   without rsync. v1 copies-in only (deletes/generated artifacts not propagated)
   and remains advisory (a raw `cp`-into-root is unguardable).
@@ -699,7 +754,8 @@ awareness injection).
 
 - **Shared installed app root (overlay tests) — experimental.** New queue
   template + `queue-overlay in|out` helper: serialize "run tests in the installed
-  root" overlays through a crash-safe lease instead of hand-rolled cp/git-restore.
+  root" overlays through a release/failure/signal-safe lease (not SIGKILL-proof)
+  instead of hand-rolled cp/git-restore.
   Curated PHP guard (phpunit/phpstan/magento; not phpcs).
 - The shared-resource queue subsystem is now clearly labeled **experimental**
   (TUI panes/dialogs/help + README/SPEC/guide).
@@ -726,5 +782,5 @@ git commit -m "docs(queue): overlay resource docs + experimental labeling; bump 
 - **transition_guard granularity:** the spec §5 says "dirty on overlaid paths"; the implementation reuses `exclusive.transition_guard(root)`, which refuses on **any** uncommitted change in root. This is stricter and simpler, and safe (a clean starting root guarantees restore correctness). Acceptable v1 behavior; noted here so it is not mistaken for a bug.
 - **Manifest keying:** a single `overlay.manifest` per resource queue-dir is safe because the resource is a mutex (one holder runs acquire/release at a time). A SIGKILL that skips `restore` leaks overlaid files; the next overlay's `transition_guard` then refuses on the now-dirty root, surfacing the problem rather than silently double-overlaying.
 - **Guard exe is `magento`** (basename of `bin/magento`), per `guard_match.matches` using `os.path.basename`. `php bin/magento …` is an accepted blind spot, consistent with the documented make/npm wrappers.
-- **Test entrypoint (Task 3):** the `python3 -m _pkg … cwd="bin"` invocation is a guess — mirror whatever pattern `test/test_cli.py` already uses; adjust before running.
-- **Spec coverage:** §1 resource model → Task 4; §2 helper → Tasks 2–3; §3 engine env → Task 1; §4 guard+awareness → Tasks 4–5; §5 safety/limits → Tasks 2–3 (dirty-root refusal, copies-in-only) + self-review; §6 experimental → Tasks 5–7; §7 testing/docs → every task's tests + Task 7.
+- **Dirty-root refusal is tested** in Task 3 (`test_queue_overlay_in_refuses_dirty_root`): the safety property has a test that fails if the guard is dropped, not just the implementation.
+- **Spec coverage:** §1 resource model → Task 4; §2 helper → Tasks 2–3; §3 engine env → Task 1; §4 guard+awareness → Tasks 4–5; §5 safety/limits → Tasks 2–3 (dirty-root refusal w/ test, copies-in-only) + self-review; §6 experimental → Tasks 5–7; §7 testing/docs → every task's tests + Task 7.
