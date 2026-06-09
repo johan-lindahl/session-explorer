@@ -3,6 +3,24 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.16.0
+
+### Added
+- **Shared installed app root (overlay tests) — experimental.** New queue
+  template `overlay-installed-root` plus a `queue-overlay in|out` helper:
+  serialize "run tests in the installed root" overlays through a
+  failure/signal-safe lease instead of a hand-rolled cp/git-restore. On acquire
+  the lease copies the worktree's changed files into the root (refusing a dirty
+  root); on release the engine restores exactly those paths. Curated PHP guard
+  (phpunit/phpstan/`bin/magento setup:*`; deliberately not phpcs/php-cs-fixer,
+  which are worktree-safe).
+
+### Changed
+- The shared-resource queue subsystem is now clearly labeled **experimental**
+  (Queues pane header, resource setup/editor dialogs, offline help, and the
+  SessionStart awareness text) — it is cooperative/advisory and cannot prevent
+  an uncoordinated process from touching a resource.
+
 ## 1.15.0
 
 ### Changed
