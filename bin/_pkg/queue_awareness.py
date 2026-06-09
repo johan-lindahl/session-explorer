@@ -35,8 +35,9 @@ def _guard_label(resource: dict) -> str:
 def _render_context(resources: dict) -> str:
     lines = [
         "This project shares one or more singleton resources across its git "
-        "worktrees, coordinated by session-explorer. Other Claude sessions may "
-        "be using them right now.",
+        "worktrees, coordinated by session-explorer. NOTE: this coordination is "
+        "EXPERIMENTAL and advisory — it cannot stop an uncoordinated process, so "
+        "cooperate actively. Other Claude sessions may be using them right now.",
         "",
         "Declared shared resources:",
     ]
@@ -59,6 +60,13 @@ def _render_context(resources: dict) -> str:
         "  - A `sync` lease overwrites the shared root with your worktree's files "
         "on acquire. Expect that; keep secrets / local-only files out of tracked "
         "paths.",
+        "  - If a resource is a shared *installed app root*, tests/QA that need "
+        "the installed app (e.g. phpunit, phpstan) must run via the lease: "
+        "`session-explorer queue-run --resource <name> -- <command>`. The lease "
+        "overlays your worktree's changed files into the root and restores them "
+        "after (on completion, failure, or interrupt).",
+        "  - Do NOT hand-roll your own overlay (cp files into the root, run, "
+        "`git restore`). It bypasses the queue and collides with other sessions.",
         "  - Inspect state anytime with `session-explorer queue-status`.",
     ]
     return "\n".join(lines)
