@@ -80,6 +80,11 @@ def worktree_slug(name: str) -> str:
 
 # Spec §7 template catalog. `defaults` is merged into a resource dict; the editor
 # overlays user edits. Kept as pure data so it is unit-tested without Textual.
+QUEUE_EXPERIMENTAL = ("Experimental — cooperative only; it cannot stop an "
+                      "uncoordinated process from touching the resource. "
+                      "Don't rely on it for safety.")
+
+
 QUEUE_TEMPLATES = [
     {"key": "bind-mounted-stack", "title": "Bind-mounted stack, well-known ports",
      "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
@@ -480,7 +485,7 @@ def _help_text() -> str:
 
 def _render_queue_rows(rows: list) -> str:
     """Render queue_view.snapshot() rows as pane markup (spec §9 mockup)."""
-    lines = ["[b]Queues[/]"]
+    lines = ["[b]Queues[/] [dim]— experimental[/]"]
     for r in rows:
         name = f"{_basename(r['project'])} / {r['resource']}"
         if r["live_root_block"]:
@@ -773,6 +778,7 @@ class ResourceListScreen(_PanelScreen):
         yield Vertical(
             Label(f"Shared resources — {_basename(self._project_root)}",
                   classes="dialog-title"),
+            Label(QUEUE_EXPERIMENTAL, classes="dialog-hint"),
             OptionList(id="reslist"),
             Label("a add · e edit · Del remove · ? help · esc close",
                   classes="dialog-hint"),
@@ -923,6 +929,7 @@ class ResourceEditorScreen(_PanelScreen):
             Label("Dry-run is safe only for sync and needs a worktree source "
                   "distinct from root; custom shells can't be simulated.",
                   classes="dialog-hint"),
+            Label(QUEUE_EXPERIMENTAL, classes="dialog-hint"),
             Label("ctrl-s save · ctrl-t guard · ctrl-r dry-run · ctrl-h health · esc cancel",
                   classes="dialog-hint"),
             id="panel",
@@ -1111,7 +1118,7 @@ QUEUE_GUIDE_URL = ("https://github.com/johan-lindahl/session-explorer"
 
 def _queue_help_text() -> str:
     return "\n".join([
-        "[b]Shared resources — quick help[/]",
+        f"[b]Shared resources — quick help[/]  [dim]— {QUEUE_EXPERIMENTAL}[/]",
         "",
         "[b]Isolate first.[/] If you can give each worktree its own port, DB, or",
         "derived-data dir, do that instead — this engine is for singletons that",
@@ -2316,7 +2323,8 @@ class SessionExplorerApp(App):
             return
         if not gating:
             self._queues.update(
-                "[b]Queues[/]  ·  this project is not using shared resources\n"
+                "[b]Queues[/] [dim]— experimental[/]  ·  this project is not "
+                "using shared resources\n"
                 "[dim]Select a project and press [b]s[/] to set up · "
                 "guide: docs/queue-guide.md[/]")
             return

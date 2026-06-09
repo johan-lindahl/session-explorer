@@ -80,3 +80,10 @@ def test_overlay_template_is_command_mutex_with_curated_guard():
     assert ("magento", ("setup:upgrade",)) in exes
     # phpcs is worktree-safe and must NOT be guarded through the root mutex.
     assert not any(r["exe"] in ("phpcs", "php-cs-fixer") for r in res["guard"])
+
+
+def test_queues_header_and_help_are_labeled_experimental():
+    from _pkg.tui import _render_queue_rows, _queue_help_text, QUEUE_EXPERIMENTAL
+    assert "cooperative" in QUEUE_EXPERIMENTAL.lower()
+    assert "experimental" in _render_queue_rows([]).lower()   # pane header tag
+    assert QUEUE_EXPERIMENTAL in _queue_help_text()           # full caveat in help

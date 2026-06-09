@@ -579,6 +579,20 @@ async def test_out_of_lease_rearms_after_stable_poll(index_path, tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_activation_hint_is_labeled_experimental(index_path):
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("q")          # open the pane on a no-resource project
+        await pilot.pause()
+        pane = app.query_one("#queues")
+        assert pane.display is True
+        rendered = str(pane.render()).lower()
+        assert "experimental" in rendered
+        assert "shared resources" in rendered   # pins the no-resource hint branch
+
+
+@pytest.mark.asyncio
 async def test_no_toast_during_live_root_session(index_path, tmp_path, monkeypatch):
     # Finding 2: a live session working IN root is a valid exclusive-or holder
     # (spec §5), so its edits must NOT toast "out-of-lease".
