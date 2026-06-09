@@ -76,6 +76,30 @@ def test_add_command_release_requires_command(tmp_path):
                                   "acquire": "none", "release": "command"})
 
 
+def test_overlay_in_acquire_requires_overlay_out_release(tmp_path):
+    # An apply-only overlay (queue-overlay in with no matching out) leaks the
+    # worktree's files into root forever — reject the half-wired config.
+    p = str(tmp_path / "c.json")
+    with pytest.raises(ValueError):
+        qc.add_resource(p, project_id="pid1", display_path="/r", resource_id="root",
+                        resource={"kind": "root-dir", "run_in": "root",
+                                  "path": "/r", "acquire": "command",
+                                  "command_acquire": "session-explorer queue-overlay in",
+                                  "release": "none"})
+
+
+def test_overlay_in_with_overlay_out_is_accepted(tmp_path):
+    # The complete pair (the template's own shape) must still validate.
+    p = str(tmp_path / "c.json")
+    qc.add_resource(p, project_id="pid1", display_path="/r", resource_id="root",
+                    resource={"kind": "root-dir", "run_in": "root", "path": "/r",
+                              "acquire": "command",
+                              "command_acquire": "session-explorer queue-overlay in",
+                              "release": "command",
+                              "command_release": "session-explorer queue-overlay out"})
+    assert qc.get_resource(p, "pid1", "root")["release"] == "command"
+
+
 def test_add_root_dir_requires_path(tmp_path):
     p = str(tmp_path / "c.json")
     with pytest.raises(ValueError):

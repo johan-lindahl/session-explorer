@@ -950,6 +950,14 @@ class ResourceEditorScreen(_PanelScreen):
         self.query_one("#res-protect", TextArea).text = "\n".join(
             res.get("sync", {}).get("protect", []))
         self.query_one("#res-acq", Input).value = res.get("command_acquire", "")
+        # Mirror every command/health field the template defines — otherwise a
+        # template's command_release / release_required / health are left at the
+        # prior (often empty) values and the "form is authoritative" save rule
+        # silently drops them (e.g. overlay-installed-root losing queue-overlay
+        # out, which leaks the overlay into root with no restore).
+        self.query_one("#res-rel", Input).value = res.get("command_release", "")
+        self.query_one("#res-req", Checkbox).value = bool(res.get("release_required"))
+        self.query_one("#res-health", Input).value = res.get("health", "")
         wline, wt = format_wait_for(res.get("wait_for"))
         self.query_one("#res-wait", Input).value = wline
         self.query_one("#res-wait-timeout", Input).value = wt

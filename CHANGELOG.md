@@ -3,6 +3,25 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.16.3
+
+### Fixed
+- **The resource editor no longer half-wires the `overlay-installed-root`
+  template.** Picking a template from the editor's list repopulated only the
+  *acquire* command field, leaving `command_release`, `release_required`, and
+  `health` at their prior (usually empty) values. Because saving treats the form
+  as authoritative, the template's `command_release` (`session-explorer
+  queue-overlay out`) was silently discarded and the resource saved with
+  `release: none`. The overlay was then applied on acquire (`queue-overlay in`
+  copies the holder worktree's changed files into the shared root) but **never
+  restored** on release — leaking those files onto the shared install's `main`,
+  which in turn read as a "dirty root" blocking later acquires. The template
+  selector now mirrors every command/health field it defines.
+- **Config validation rejects an apply-only overlay.** A resource whose
+  `command_acquire` runs `queue-overlay in` without a matching `queue-overlay
+  out` in `command_release` is now refused by `queue_config` validation — the
+  half-wired shape that leaks the overlay into root can no longer be saved.
+
 ## 1.16.2
 
 ### Fixed
