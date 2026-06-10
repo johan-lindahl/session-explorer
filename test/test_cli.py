@@ -335,7 +335,7 @@ def test_queue_context_emits_additional_context_when_opted_in(tmp_path):
     payload = json.loads(result.stdout)
     out = payload["hookSpecificOutput"]
     assert out["hookEventName"] == "SessionStart"
-    assert "docker compose up" in out["additionalContext"]
+    assert "write-blocked" in out["additionalContext"].lower()
     assert "queue-run" in out["additionalContext"]
 
 
