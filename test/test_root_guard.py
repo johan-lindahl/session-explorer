@@ -483,6 +483,24 @@ def test_worktree_carveout_not_climbable(tmp_path):
     assert root_guard.decide(bash_payload(ok, ext), cfg, lp) is None
 
 
+def test_worktree_carveout_quote_and_escape_evasion_denied(tmp_path):
+    # '..' hidden behind quotes/backslash still climbs in bash; the carve-out
+    # must see through them.
+    repo, wt = repo_with_worktree(tmp_path)
+    ext = tmp_path / "ext-wt3"
+    _run(["git", "worktree", "add", "-q", str(ext), "-b", "ext3"], repo)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", ext)
+    for evasion in (f"cat {repo}/.claude/worktrees/'..'/f.txt",
+                    f'cat {repo}/.claude/worktrees/".."/f.txt',
+                    f"cat {repo}/.claude/worktrees/.\\./f.txt"):
+        assert root_guard.decide(bash_payload(evasion, ext), cfg, lp) \
+            is not None, evasion
+    # Quoted but honest worktree path stays allowed.
+    ok = f"cat '{repo}/.claude/worktrees/wt1/f.txt'"
+    assert root_guard.decide(bash_payload(ok, ext), cfg, lp) is None
+
+
 # --- hot-path: no git fork when no config ---
 
 def test_no_config_means_no_git_fork(tmp_path, monkeypatch):

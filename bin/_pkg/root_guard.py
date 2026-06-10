@@ -160,7 +160,6 @@ _UNQUOTABLE = ("$(", "`", "\n")
 _PUNCT = set("&|;<>()")
 
 _NAME_CHARS = "-_."   # filename-continuation chars besides alphanumerics
-_TOKEN_END = " \t'\";)&|<>\n"
 
 
 def _is_queue_invocation(command: str) -> bool:
@@ -236,8 +235,13 @@ def _mentions_root(command: str, aliases: "list[str]") -> bool:
                 continue  # longer pathname -> a different file, not the root
             if rest.startswith("/.claude/worktrees/"):
                 token = rest
-                for ch in _TOKEN_END:
+                for ch in " \t\n;)&|<>":      # genuine token separators
                     token = token.split(ch, 1)[0]
+                # Quotes/backslashes can hide a `..` from a naive scan while
+                # bash still resolves it ('..' / ".." / .\.) — strip them
+                # before the climb test. Worktree names are [a-z0-9-] slugs,
+                # so stripping never hides a legitimate name.
+                token = token.replace("'", "").replace('"', "").replace("\\", "")
                 if ".." not in token:
                     continue  # genuinely inside a managed worktree
             return True
