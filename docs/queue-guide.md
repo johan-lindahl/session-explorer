@@ -40,9 +40,6 @@ not in your worktree is deleted.
   untracked/gitignored path the dry-run would delete is classified as *protect*
   or *allow-delete*.
 
-Always preview with the editor's **dry-run** (ctrl-r) before relying on a sync
-resource.
-
 ## root is exclusive-or
 
 A `root-dir` root is **either** a live working session **or** the lease sandbox,
@@ -87,8 +84,9 @@ The engine: ticket → FIFO wait → exclusive-or check → overlay-in → run i
 changed files into root, runs your command, and restores them — even on failure
 or signal.
 
-Root **reads** (`cat`, `head`, file inspection) do not go through `queue-run` —
-use the **Read tool** directly. Only writes are blocked.
+Bash reads of root files are denied like any other root mention — path
+presence in the command is the trigger, not intent. Inspect root files with the
+**Read tool**, which is never blocked by the hook.
 
 ### Shared installed app root (overlay tests)
 
@@ -101,9 +99,10 @@ the shared installed root once (`q` → `s` in the explorer), then run as:
 ### Setting up
 
 In the explorer, press **q** to open the Queues pane, then **s** to open the
-**"Shared installed root"** dialog for the selected project. Set the root path
-(auto-derived, editable), an optional protect list, and save. The Queues pane
-shows live holders and waiters across every opted-in project.
+**"Shared installed root"** dialog for the selected project. The root path is
+auto-derived from the repo's main working tree and shown read-only; only the
+protect list is editable. Save with ctrl-s. The Queues pane shows live holders
+and waiters across every opted-in project.
 
 ### Limits
 
@@ -141,8 +140,9 @@ SessionStart hook has already given you a short usage hint. The key points:
 ## Shared resources
 
 This repo's shared root is leased ground. For a Claude session in a worktree:
-- ALL writes to the root through tools (Bash/Edit/Write) are blocked and will
-  be denied with a rewrite.
+- ALL tool calls that mention the root path (Bash/Edit/Write/NotebookEdit) are
+  denied with a rewrite — Bash root mentions are blocked regardless of intent
+  (reads included), not just writes.
 - The only door: `session-explorer queue-run --resource <name> -- <cmd>`.
 - To read root files without a lease, use the Read tool.
 - Do NOT start your own stack/server/db — it is already warm and will collide.

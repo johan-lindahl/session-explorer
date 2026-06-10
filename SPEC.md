@@ -628,8 +628,9 @@ the testable logic: `queue_view.snapshot()` (display-ready rows), `ui_state.py`
 - **Keymap change (global, one for everyone):** `q` toggles the **Queues pane**
   (this reassigns quit), `x` is **Exit**, and `s` opens the selected project's
   **"Shared installed root" dialog** (hidden binding, gated by `check_action` to
-  a project selection). The only added footer key is `q`; `s`/`Del` are
-  pane-local. **`x` is *only* Exit — never a remove action** (no double-bound
+  a project selection). The only added footer key is `q`. The `SharedRootScreen`
+  dialog's keys are ctrl-s (share/save), ctrl-d (stop sharing, confirmed), `?`
+  (help), esc. **`x` is *only* Exit — never a remove action** (no double-bound
   destructive key). Don't reintroduce `q`→quit.
 - **Queues pane** (`Static`, `id="queues"`, under the tree) is **read-only** and
   **content-gated**: with the persisted flag on it takes space only when there
@@ -645,7 +646,7 @@ the testable logic: `queue_view.snapshot()` (display-ready rows), `ui_state.py`
   the project/resource label, which is already the row identity and is identical
   for every ticket.
 - **Per-project setup** (`q` → `s` → `SharedRootScreen`): a single dialog —
-  root path (auto-derived from `project_id.main_root()`, editable), protect list,
+  root path (auto-derived from `project_id.main_root()`, shown read-only), protect list,
   and on/off. Saving applies the `overlay-installed-root` shape (`kind=root-dir`,
   `acquire/release=command` → `queue-overlay in`/`out`) implicitly, and migrates
   an existing `root-dir` resource on save keeping its id. The `kind` machinery and
@@ -656,11 +657,12 @@ the testable logic: `queue_view.snapshot()` (display-ready rows), `ui_state.py`
   a *manual* edit (detected by **focus**, robust to retyping the same slug)
   stops the auto-sync. When the project has a `root-dir` resource the checkbox
   **defaults ON** and submitting a *plain root* session warns (§5.4).
-- **Offline help:** in-dialog `?` (`QueueHelpScreen`) leads with isolate-first
-  and the `--delete`/`protect` rule, and shows the guide link as a **plain,
-  copyable** `https://…` URL (never relying on OSC-8) wrapped in a best-effort
-  click action. Full guide: `docs/queue-guide.md` (added to the release
-  checklist so it can't silently diverge).
+- **Offline help:** in-dialog `?` (`QueueHelpScreen`) leads with three sections:
+  "The model" (leased ground / deny hook), "The one door" (`queue-run` flow),
+  "Limits" (non-Claude writers, dirty-root backstop). The guide link is shown as
+  a **plain, copyable** `https://…` URL (never relying on OSC-8). Full guide:
+  `docs/queue-guide.md` (added to the release checklist so it can't silently
+  diverge).
 
 ### Location-based root guard (Phase 3)
 

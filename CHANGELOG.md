@@ -3,25 +3,29 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
-## 1.17.0 — Leased ground: location-enforced shared root
+## 1.17.0
 
-The shared-resource guard is inverted from advisory command-matching to a
-fail-closed location rule: for a Claude session in a worktree, the shared
-installed root is unreachable through tools (Bash/Edit/Write/NotebookEdit)
-except via `session-explorer queue-*`. Denies carry the exact `queue-run`
-rewrite. Plumbing still fails open (a broken hook never blocks tool calls);
-non-Claude writers remain out of scope (dirty-root refusal is the backstop).
+### Added
+- **Location-enforced shared root (leased ground).** The shared-resource guard
+  is inverted from advisory command-matching to a fail-closed location rule: for
+  a Claude session in a worktree, the shared installed root is unreachable
+  through tools (Bash/Edit/Write/NotebookEdit) except via
+  `session-explorer queue-*`. Denies carry the exact `queue-run` rewrite.
+  Plumbing still fails open (a broken hook never blocks tool calls); non-Claude
+  writers remain out of scope (dirty-root refusal is the backstop).
 
+### Changed
 - New `root_guard.py` decision module behind the existing PreToolUse hook;
   matcher widened to `Bash|Edit|Write|NotebookEdit` on both install paths.
-- Removed: `{exe, sub}` guard lists (`guard_match.py`), the out-of-lease
-  mtime detector (`queue_detect.py`), the template library and generic
-  resource editor. Per-project setup is now one "Shared installed root"
-  dialog (overlay shape, protect list); existing root-dir resources migrate
-  on save.
+- Per-project setup is now one "Shared installed root" dialog (overlay shape,
+  protect list); existing root-dir resources migrate on save.
 - SessionStart awareness text shrinks to a short usage hint.
-- Experimental claim updated: enforced for Claude tool calls, advisory
-  beyond them.
+- Experimental claim updated: enforced for Claude tool calls, advisory beyond
+  them.
+
+### Removed
+- `{exe, sub}` guard lists (`guard_match.py`), out-of-lease mtime detector
+  (`queue_detect.py`), template library, and generic resource editor.
 
 ## 1.16.4
 
