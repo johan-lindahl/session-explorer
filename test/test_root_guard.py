@@ -289,3 +289,74 @@ def test_registered_worktree_session_escaping_repo_still_guarded(tmp_path):
     outside.mkdir()
     cmd = f"cp x {repo}/x"
     assert root_guard.decide(bash_payload(cmd, outside), cfg, lp) is not None
+
+
+# --- the queue-* allowlist ---
+
+def test_queue_run_mentioning_root_is_allowed(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"session-explorer queue-run --resource root -- cp x {repo}/app/x"
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is None
+
+
+def test_queue_run_with_quoted_bash_c_body_is_allowed(tmp_path):
+    # The exact shape our own deny message suggests: operators live INSIDE the
+    # quoted body, which shlex keeps as one token.
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = ("session-explorer queue-run --resource root -- "
+           f"bash -c 'cp a {repo}/a && cp b {repo}/b'")
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is None
+
+
+def test_queue_status_is_allowed(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(
+        bash_payload("session-explorer queue-status", wt), cfg, lp) is None
+
+
+def test_env_prefix_on_queue_run_is_allowed(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"FOO=1 session-explorer queue-run --resource root -- ls {repo}"
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is None
+
+
+def test_compound_smuggle_after_queue_run_denied(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = (f"session-explorer queue-status && cp x {repo}/x")
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None
+
+
+def test_semicolon_without_spaces_smuggle_denied(tmp_path):
+    # shlex.split would keep 'queue-status;cp' as one token; the
+    # punctuation_chars lexer must split it and catch the compound.
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"session-explorer queue-status;cp x {repo}/x"
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None
+
+
+def test_command_substitution_in_queue_invocation_denied(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"session-explorer queue-run --resource $(echo root) -- ls {repo}"
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None
+
+
+def test_echo_queue_run_decoy_denied(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"echo session-explorer queue-run && rm {repo}/f.txt"
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None
