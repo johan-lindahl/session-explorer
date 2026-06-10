@@ -360,3 +360,102 @@ def test_echo_queue_run_decoy_denied(tmp_path):
     lp = register(tmp_path, "S1", wt)
     cmd = f"echo session-explorer queue-run && rm {repo}/f.txt"
     assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None
+
+
+# --- adversarial / corrupt-input robustness (decide must never raise) ---
+
+def test_non_dict_tool_input_does_not_raise(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    for bad in ("rm -rf /", ["x"], 7, None):
+        p = {"tool_name": "Bash", "tool_input": bad,
+             "cwd": str(wt), "session_id": "S1"}
+        assert root_guard.decide(p, cfg, lp) is None
+        p = {"tool_name": "Edit", "tool_input": bad,
+             "cwd": str(wt), "session_id": "S1"}
+        assert root_guard.decide(p, cfg, lp) is None
+
+
+def test_corrupt_live_registry_does_not_raise(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = tmp_path / "live.json"
+    for corrupt in ('[1, 2]', '{"sessions": "oops"}', '{"sessions": {"S1": 3}}'):
+        lp.write_text(corrupt)
+        p = edit_payload(repo / "f.txt", wt)   # worktree cwd -> still denies
+        assert root_guard.decide(p, str(cfg), str(lp)) is not None
+
+
+def test_non_string_resource_path_does_not_raise(tmp_path):
+    import json
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    data = json.loads(open(cfg).read())
+    pid = next(iter(data["projects"]))
+    data["projects"][pid]["resources"]["root"]["path"] = 1
+    open(cfg, "w").write(json.dumps(data))
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(edit_payload(repo / "f.txt", wt), str(cfg), lp) is None
+
+
+# --- deny-loop protection: rewrite must itself pass the allowlist ---
+
+def test_rewrite_for_simple_and_compound_commands_is_itself_allowlisted(tmp_path):
+    # The recovery instruction must never dead-loop: whatever we suggest for
+    # quotable commands must pass _is_queue_invocation.
+    for cmd in ("cp x /repo/y", "cp a /repo/a && cp b /repo/b",
+                "make build > /repo/log"):
+        suggestion = root_guard._rewrite("root", cmd)
+        assert root_guard._is_queue_invocation(suggestion), suggestion
+
+
+def test_rewrite_for_unquotable_commands_suggests_script_route(tmp_path):
+    for cmd in ("echo `id`", "cp $(ls) /repo/", "line1\nline2"):
+        suggestion = root_guard._rewrite("root", cmd)
+        assert "run.sh" in suggestion
+        assert "bash -c" not in suggestion
+
+
+# --- own-worktree and sibling-dir path carve-outs ---
+
+def test_absolute_path_into_own_worktree_is_not_a_root_mention(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(
+        bash_payload(f"pytest {wt}/test -q", wt), cfg, lp) is None
+
+
+def test_sibling_directory_is_not_a_root_mention(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    backup = tmp_path / "repo-backup"
+    backup.mkdir()
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(
+        bash_payload(f"ls {backup}/x", wt), cfg, lp) is None
+
+
+def test_root_mention_followed_by_subpath_still_denied(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(
+        bash_payload(f"touch {repo}/app/etc/x", wt), cfg, lp) is not None
+    assert root_guard.decide(
+        bash_payload(f"rm -rf {repo}", wt), cfg, lp) is not None
+
+
+# --- hot-path: no git fork when no config ---
+
+def test_no_config_means_no_git_fork(tmp_path, monkeypatch):
+    # With an empty config the guard must not even resolve the project.
+    calls = []
+    monkeypatch.setattr(root_guard._pid, "project_id",
+                        lambda cwd: calls.append(cwd) or None)
+    p = {"tool_name": "Bash", "tool_input": {"command": "ls"},
+         "cwd": str(tmp_path), "session_id": "S1"}
+    assert root_guard.decide(p, str(tmp_path / "qc.json"),
+                             str(tmp_path / "live.json")) is None
+    assert calls == []

@@ -145,6 +145,8 @@ parsing ambiguity.
   already reaches shared ground at `R/.claude`). External worktrees get only
   the alias rule — climbing from them does not lexically reach `R`.
 
+An alias occurrence immediately followed by `/.claude/worktrees/` is worktree ground, not a root mention (absolute paths into the session's own worktree stay usable), and an occurrence followed by a path character (`<root>-backup`) is a different path.
+
 There is **no "confident parse" requirement** — the old guard denied only
 what it could confidently match and allowed everything else; this guard
 denies on mention and accepts false positives, because a worktree session has

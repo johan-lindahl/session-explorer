@@ -25,7 +25,7 @@ from . import queue_config as _qc
 GUARDED_TOOLS = ("Bash", "Edit", "Write", "NotebookEdit")
 
 
-def _aliases(root: str) -> list:
+def _aliases(root: str) -> "list[str]":
     """Path spellings an agent might use for the root: the configured path,
     its realpath, and (macOS) the /private-stripped twin. Order-preserving."""
     out = []
@@ -63,13 +63,16 @@ def _is_root_location(location: str, root: str) -> bool:
 
 def _root_resource(config_path: str, cwd: str):
     """(resource_id, resource) of the project's root-dir resource, or None."""
+    if not _qc.load(config_path).get("projects"):
+        return None
     pid = _pid.project_id(cwd)
     if not pid:
         return None
     resources = _qc.list_resources(config_path, pid)
     for rid in sorted(resources):
         res = resources[rid]
-        if res.get("kind") == "root-dir" and res.get("path"):
+        if res.get("kind") == "root-dir" and isinstance(res.get("path"), str) \
+                and res.get("path"):
             return rid, res
     return None
 
@@ -80,8 +83,14 @@ def _session_location(payload: dict, live_path: str) -> "str | None":
     the payload cwd (weaker fallback, accepted by the spec)."""
     sid = payload.get("session_id")
     if isinstance(sid, str) and sid:
-        entry = _live.load(live_path).get("sessions", {}).get(sid) or {}
-        cwd = entry.get("cwd")
+        data = _live.load(live_path)
+        sessions = data.get("sessions") if isinstance(data, dict) else None
+        entry = sessions.get(sid) if isinstance(sessions, dict) else None
+        # NB: deliberately no liveness (_alive) filter here — sids are UUIDs
+        # and SessionStart re-records on resume, so a stale entry's cwd is
+        # still the best available signal; a wrong guess only flips WHICH
+        # deny rule applies, never allows a root write.
+        cwd = entry.get("cwd") if isinstance(entry, dict) else None
         if isinstance(cwd, str) and cwd:
             return cwd
     cwd = payload.get("cwd")
@@ -118,7 +127,9 @@ def decide(payload: dict, config_path: str, live_path: str) -> "str | None":
 
 def _decide_file_tool(payload: dict, rid: str, root: str,
                       call_cwd: str) -> "str | None":
-    tool_input = payload.get("tool_input") or {}
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
     fp = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not isinstance(fp, str) or not fp:
         return None
@@ -139,6 +150,12 @@ def _decide_file_tool(payload: dict, rid: str, root: str,
 # rewrite, running part of it outside the lease. Same table the old awareness
 # module used; presence of any of these wraps the rewrite in `bash -c <quoted>`.
 _SHELL_OPS = ("&&", "||", ";", "|", "&", ">", "<", "$(", "`", "\n")
+
+# Characters the allowlist raw-rejects even inside quotes (it cannot tell
+# quoted from unquoted once shlex strips quotes). A bash -c rewrite of a
+# command containing them would itself be denied — a dead loop — so for
+# those we suggest the script-file route instead.
+_UNQUOTABLE = ("$(", "`", "\n")
 
 _PUNCT = set("&|;<>()")
 
@@ -175,7 +192,12 @@ def _is_queue_invocation(command: str) -> bool:
 
 
 def _rewrite(rid: str, command: str) -> str:
-    """The exact queue-run invocation to suggest for `command`."""
+    """The exact queue-run invocation to suggest for `command` — guaranteed
+    to survive _is_queue_invocation, or a script-file fallback when it can't."""
+    if any(ch in command for ch in _UNQUOTABLE):
+        return (f"(your command contains a newline/backtick/$( — put it in a "
+                f"script inside your worktree, e.g. run.sh, then:) "
+                f"session-explorer queue-run --resource {rid} -- bash run.sh")
     if any(op in command for op in _SHELL_OPS):
         return (f"session-explorer queue-run --resource {rid} -- "
                 f"bash -c {shlex.quote(command)}")
@@ -191,6 +213,25 @@ def _deny_bash_text(rid: str, root: str, command: str) -> str:
         f"blocked). `session-explorer queue-status` shows who holds the lease.")
 
 
+def _mentions_root(command: str, aliases: "list[str]") -> bool:
+    """True iff the command references the root OUTSIDE the managed-worktrees
+    subtree. An alias occurrence followed by `/.claude/worktrees/` is worktree
+    ground, not a root mention; an occurrence followed by a path character
+    (e.g. `<root>-backup`) is a different path entirely."""
+    for alias in aliases:
+        start = 0
+        while True:
+            i = command.find(alias, start)
+            if i == -1:
+                break
+            rest = command[i + len(alias):]
+            if not rest.startswith("/.claude/worktrees/") and \
+                    (rest == "" or rest[0] in "/ \t'\";)&|<>\n"):
+                return True
+            start = i + 1
+    return False
+
+
 def _decide_bash(payload: dict, rid: str, root: str, call_cwd: str,
                  location: str) -> "str | None":
     # cd-drift first: a worktree session whose call cwd has wandered into the
@@ -202,7 +243,10 @@ def _decide_bash(payload: dict, rid: str, root: str, call_cwd: str,
             f"installed root — leased ground for worktree sessions. cd back "
             f"to your own worktree; anything that must run in the root goes "
             f"through: session-explorer queue-run --resource {rid} -- <cmd>.")
-    command = (payload.get("tool_input") or {}).get("command")
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
     if not isinstance(command, str) or not command:
         return None
     if _is_queue_invocation(command):
@@ -210,7 +254,7 @@ def _decide_bash(payload: dict, rid: str, root: str, call_cwd: str,
     # Mention = deny. No "confident parse" requirement: a worktree session has
     # no legitimate raw root-touching Bash, ever (a lease only exists inside a
     # queue-run process), so false positives are cheap and recoverable.
-    if any(alias in command for alias in _aliases(root)):
+    if _mentions_root(command, _aliases(root)):
         return _deny_bash_text(rid, root, command)
     # Parent-climb: a managed worktree sits at <root>/.claude/worktrees/<n>,
     # so `../..` already reaches shared ground. External worktrees are
