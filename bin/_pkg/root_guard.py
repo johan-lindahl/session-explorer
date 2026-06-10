@@ -159,6 +159,9 @@ _UNQUOTABLE = ("$(", "`", "\n")
 
 _PUNCT = set("&|;<>()")
 
+_NAME_CHARS = "-_."   # filename-continuation chars besides alphanumerics
+_TOKEN_END = " \t'\";)&|<>\n"
+
 
 def _is_queue_invocation(command: str) -> bool:
     """True iff `command` is ONE simple `session-explorer queue-*` invocation.
@@ -215,20 +218,29 @@ def _deny_bash_text(rid: str, root: str, command: str) -> str:
 
 def _mentions_root(command: str, aliases: "list[str]") -> bool:
     """True iff the command references the root OUTSIDE the managed-worktrees
-    subtree. An alias occurrence followed by `/.claude/worktrees/` is worktree
-    ground, not a root mention; an occurrence followed by a path character
-    (e.g. `<root>-backup`) is a different path entirely."""
+    subtree. Inverted-boundary rule: an alias occurrence IS a mention unless
+    the next char continues a longer filename (`<root>-backup`, `<root>.bak`)
+    — so globs/braces (`<root>*`, `<root>{,/x}`) stay mentions. An occurrence
+    followed by `/.claude/worktrees/` is worktree ground, not a mention,
+    unless the path token climbs back out with `..` (worktree names are
+    [a-z0-9-] slugs, so a `..` segment there is never legitimate)."""
     for alias in aliases:
         start = 0
         while True:
             i = command.find(alias, start)
             if i == -1:
                 break
-            rest = command[i + len(alias):]
-            if not rest.startswith("/.claude/worktrees/") and \
-                    (rest == "" or rest[0] in "/ \t'\";)&|<>\n"):
-                return True
             start = i + 1
+            rest = command[i + len(alias):]
+            if rest and (rest[0].isalnum() or rest[0] in _NAME_CHARS):
+                continue  # longer pathname -> a different file, not the root
+            if rest.startswith("/.claude/worktrees/"):
+                token = rest
+                for ch in _TOKEN_END:
+                    token = token.split(ch, 1)[0]
+                if ".." not in token:
+                    continue  # genuinely inside a managed worktree
+            return True
     return False
 
 

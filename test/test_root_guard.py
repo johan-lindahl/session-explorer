@@ -447,6 +447,42 @@ def test_root_mention_followed_by_subpath_still_denied(tmp_path):
         bash_payload(f"rm -rf {repo}", wt), cfg, lp) is not None
 
 
+# --- regression: glob-safe boundary and un-climbable worktree carve-out ---
+
+def test_glob_and_brace_after_root_are_mentions(tmp_path):
+    # Regression: `rm -rf <root>*` must deny — glob chars don't extend the
+    # filename, they expand to the root and its siblings.
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    for suffix in ("*", "?", "{,/x}"):
+        cmd = f"rm -rf {repo}{suffix}"
+        assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None, cmd
+
+
+def test_filename_continuation_is_still_not_a_mention(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    for cmd in (f"ls {repo}-backup/x", f"cat {repo}.bak", f"ls {repo}_old"):
+        assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is None, cmd
+
+
+def test_worktree_carveout_not_climbable(tmp_path):
+    # Regression: an EXTERNAL worktree session must not climb back into root
+    # through the worktrees carve-out.
+    repo, wt = repo_with_worktree(tmp_path)
+    ext = tmp_path / "ext-wt"
+    _run(["git", "worktree", "add", "-q", str(ext), "-b", "ext2"], repo)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", ext)
+    cmd = f"echo hi > {repo}/.claude/worktrees/../../app/etc/x"
+    assert root_guard.decide(bash_payload(cmd, (wt := ext)), cfg, lp) is not None
+    # The legit carve-out still works: absolute path INTO a worktree, no `..`.
+    ok = f"pytest {repo}/.claude/worktrees/wt1/test -q"
+    assert root_guard.decide(bash_payload(ok, ext), cfg, lp) is None
+
+
 # --- hot-path: no git fork when no config ---
 
 def test_no_config_means_no_git_fork(tmp_path, monkeypatch):
