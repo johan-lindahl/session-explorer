@@ -115,15 +115,15 @@ print(count('SessionStart'), count('UserPromptSubmit'), count('Stop'), count('No
   [ "$output" = "1 1 1 1 1" ]
 }
 
-@test "install registers a PreToolUse hook (nested matcher-group, Bash)" {
+@test "install registers a PreToolUse hook (nested matcher-group, write-capable tools)" {
   run bash "$REPO/install.sh"
   [ "$status" -eq 0 ]
   run python3 -c "
 import json
 d = json.load(open('$HOME/.claude/settings.json'))
 pt = d['hooks']['PreToolUse']
-# Documented nested shape: a matcher group scoped to Bash with nested command.
-grp = next(h for h in pt if h.get('matcher') == 'Bash')
+# Documented nested shape: a matcher group scoped to all write-capable tools.
+grp = next(h for h in pt if h.get('matcher') == 'Bash|Edit|Write|NotebookEdit')
 cmds = [s.get('command','') for s in grp.get('hooks', [])]
 assert any('pre-tool-use.sh' in c for c in cmds), pt
 print('ok')

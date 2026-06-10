@@ -95,10 +95,11 @@ hooks["Notification"] = _strip_ours("Notification") + [
 hooks["SessionEnd"] = _strip_ours("SessionEnd") + [
     {"matchers": [], "command": live_cmd}]
 
-# PreToolUse command-guard (Phase 3). Use the documented nested matcher-group
-# form (matching plugin.json) so the guard actually fires on plain installs.
+# PreToolUse root guard (leased-ground spec). Use the documented nested
+# matcher-group form (matching plugin.json) so the guard actually fires on
+# plain installs. Matcher covers every write-capable tool the guard decides on.
 hooks["PreToolUse"] = _strip_ours("PreToolUse") + [
-    {"matcher": "Bash",
+    {"matcher": "Bash|Edit|Write|NotebookEdit",
      "hooks": [{"type": "command", "command": pretool_cmd}]}]
 
 with open(settings_path, "w") as f:

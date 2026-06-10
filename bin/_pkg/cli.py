@@ -448,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     # Hook subcommands are on the critical path (SessionStart, and every
-    # PreToolUse Bash call). Keep them cheap: dispatch before the global index /
+    # PreToolUse tool call). Keep them cheap: dispatch before the global index /
     # folder migrations below, which they don't need, so a Bash tool call never
     # pays migration overhead just to evaluate the guard.
     if args.cmd == "queue-context":

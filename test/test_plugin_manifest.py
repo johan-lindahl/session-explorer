@@ -18,6 +18,6 @@ def test_manifest_is_valid_json_and_keeps_sessionstart():
 
 def test_manifest_registers_pretooluse_bash_guard():
     pt = _manifest()["hooks"]["PreToolUse"]
-    grp = next(h for h in pt if h.get("matcher") == "Bash")
+    grp = next(h for h in pt if h.get("matcher") == "Bash|Edit|Write|NotebookEdit")
     cmds = [s.get("command", "") for s in grp["hooks"]]
     assert any("pre-tool-use.sh" in c for c in cmds), pt
