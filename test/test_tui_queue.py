@@ -8,7 +8,7 @@ import pytest
 # `from textual.widgets import ...` at module top would fail on a clean env with
 # no site-packages Textual. Order matters here.
 from _pkg.tui import SessionExplorerApp
-from textual.widgets import Checkbox, Input, Label, TextArea
+from textual.widgets import Checkbox, Input, TextArea
 
 
 def _binding_keys(action):
@@ -136,368 +136,11 @@ async def test_s_disabled_without_project_selection(index_path):
 
 
 @pytest.mark.asyncio
-async def test_resource_list_lists_configured_resources(index_path, tmp_path, monkeypatch):
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceListScreen
-    # A real git repo so project_id resolves.
-    import subprocess
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    queue_config.add_resource(
-        qcfg, project_id=pid, display_path=str(repo), resource_id="db",
-        resource={"kind": "port", "run_in": "worktree",
-                  "acquire": "none", "release": "none"})
-    screen = ResourceListScreen(project_root=str(repo), project_id=pid,
-                                config_path=qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.push_screen(screen)
-        await pilot.pause()
-        # The OptionList contains the resource id.
-        assert any("db" in str(o.prompt) for o in screen.query_one("#reslist").options)
-
-
-@pytest.mark.asyncio
-async def test_editor_saves_a_resource(index_path, tmp_path, monkeypatch):
-    import subprocess
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-id", Input).value = "ios-sim"
-        screen._template_key = "ios-sim"
-        screen.action_save()
-        await pilot.pause()
-    res = queue_config.get_resource(qcfg, pid, "ios-sim")
-    assert res is not None and res["kind"] == "device" and res["run_in"] == "worktree"
-
-
-@pytest.mark.asyncio
-async def test_editor_saves_guard_and_protect_for_root_dir(index_path, tmp_path, monkeypatch):
-    import subprocess
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-id", Input).value = "root"
-        screen._template_key = "root-env"                # root-dir · sync
-        screen.query_one("#res-guard", TextArea).text = "docker compose up"
-        screen.query_one("#res-protect", TextArea).text = "/.git\n/.env\n/certs"
-        screen.action_save()
-        await pilot.pause()
-    res = queue_config.get_resource(qcfg, pid, "root")
-    assert res["kind"] == "root-dir"
-    # A custom guard and a custom protect entry both round-trip into the save.
-    assert {"exe": "docker", "sub": ["compose", "up"]} in res["guard"]
-    assert "/certs" in res["sync"]["protect"]
-
-
-@pytest.mark.asyncio
-async def test_root_dir_path_is_main_worktree_not_the_selected_worktree(
-        index_path, tmp_path, monkeypatch):
-    # Finding-1 regression: standing on an arbitrary `git worktree add` node, the
-    # saved root-dir path must be the repo's MAIN working tree (spec §1), not the
-    # worktree we happened to select.
-    import subprocess
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-m", "x", "-q"],
-                   check=True, env=env)
-    wt = tmp_path / "repo-feat"
-    subprocess.run(["git", "-C", str(repo), "worktree", "add", str(wt), "-b", "feat"],
-                   check=True, env=env)
-    pid = project_id.project_id(str(wt))   # same id as repo (git-common-dir)
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(wt), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-id", Input).value = "root"
-        screen._template_key = "root-env"
-        screen.action_save()
-        await pilot.pause()
-    res = queue_config.get_resource(qcfg, pid, "root")
-    assert res["path"] == project_id.main_root(str(repo))
-    assert res["path"] != str(wt)
-
-
-@pytest.mark.asyncio
-async def test_root_dir_ignores_path_edits_and_saves_wait_for(
-        index_path, tmp_path, monkeypatch):
-    # Finding 1: a typed path is ignored for root-dir (always canonical).
-    # Finding 2: wait_for is editable and round-trips into the save.
-    import subprocess
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-id", Input).value = "root"
-        screen._template_key = "root-env"
-        screen.query_one("#res-path", Input).value = "/totally/wrong"   # tampered
-        screen.query_one("#res-wait", Input).value = "url http://localhost:8080"
-        screen.query_one("#res-wait-timeout", Input).value = "90"
-        screen.action_save()
-        await pilot.pause()
-    res = queue_config.get_resource(qcfg, pid, "root")
-    assert res["path"] == project_id.main_root(str(repo))     # tamper ignored
-    assert res["wait_for"] == {"type": "url",
-                               "target": "http://localhost:8080", "timeout": 90.0}
-
-
-@pytest.mark.asyncio
-async def test_editing_clears_stale_command_and_health(index_path, tmp_path, monkeypatch):
-    # Finding 3: clearing a field in the editor removes the stale value (and
-    # reverts a now-empty command strategy to 'none'), not leaves the old one.
-    import subprocess
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    queue_config.add_resource(
-        qcfg, project_id=pid, display_path=str(repo), resource_id="db",
-        resource={"kind": "port", "run_in": "worktree", "acquire": "command",
-                  "release": "none", "command_acquire": "reset-db",
-                  "health": "pg_isready"})
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id="db")
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-acq", Input).value = ""
-        screen.query_one("#res-health", Input).value = ""
-        screen.action_save()
-        await pilot.pause()
-    res = queue_config.get_resource(qcfg, pid, "db")
-    assert "command_acquire" not in res
-    assert res["acquire"] == "none"         # reverted from 'command'
-    assert "health" not in res
-
-
-@pytest.mark.asyncio
-async def test_selecting_template_populates_release_and_health_fields(
-        index_path, tmp_path, monkeypatch):
-    # Bug: picking a template from the OptionList repopulated only #res-acq, so a
-    # template's command_release / release_required / health were silently dropped
-    # on save. For overlay-installed-root that left release='none' — overlay-in
-    # applied, overlay-out never wired, files leaked into root.
-    import subprocess
-    import types
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-id", Input).value = "root"
-        # Drive the real template-selection handler (as a click/keypress would).
-        evt = types.SimpleNamespace(
-            option_list=types.SimpleNamespace(id="res-template"),
-            option=types.SimpleNamespace(id="overlay-installed-root"))
-        screen.on_option_list_option_selected(evt)
-        await pilot.pause()
-        # The form now reflects the template's release wiring.
-        assert (screen.query_one("#res-rel", Input).value
-                == "session-explorer queue-overlay out")
-        screen.action_save()
-        await pilot.pause()
-    res = queue_config.get_resource(qcfg, pid, "root")
-    assert res["acquire"] == "command"
-    assert res["command_acquire"] == "session-explorer queue-overlay in"
-    assert res["release"] == "command"
-    assert res["command_release"] == "session-explorer queue-overlay out"
-
-
-@pytest.mark.asyncio
-async def test_malformed_wait_for_is_refused_not_dropped(index_path, tmp_path, monkeypatch):
-    # Finding (polish): a non-empty but invalid readiness field must block the
-    # save with an error, not silently behave like "no readiness check".
-    import subprocess
-    from _pkg import project_id, queue_config
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-id", Input).value = "root"
-        screen._template_key = "root-env"
-        screen.query_one("#res-wait", Input).value = "urls http://localhost:8080"  # typo
-        screen.action_save()
-        await pilot.pause()
-        assert "readiness" in str(screen.query_one("#res-error", Label).render()).lower()
-    # Save was refused → nothing persisted.
-    assert queue_config.get_resource(qcfg, pid, "root") is None
-
-
-@pytest.mark.asyncio
-async def test_editor_guard_tester_uses_edited_guard(index_path, tmp_path, monkeypatch):
-    # The tester must reflect the CURRENT form (Finding 4), so set the guard via
-    # the form, not just a template key, and confirm it's the matched rule set.
-    import subprocess
-    from _pkg import project_id
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen.query_one("#res-guard", TextArea).text = "docker compose up"
-        screen.query_one("#test-cmd", Input).value = "docker compose up -d"
-        screen.action_test_guard()
-        await pilot.pause()
-        assert "QUEUED" in str(screen.query_one("#test-out", Label).render()).upper()
-        screen.query_one("#test-cmd", Input).value = "docker ps"
-        screen.action_test_guard()
-        await pilot.pause()
-        assert "FREE" in str(screen.query_one("#test-out", Label).render()).upper()
-
-
-@pytest.mark.asyncio
-async def test_dry_run_refuses_when_source_equals_root(index_path, tmp_path, monkeypatch):
-    # Finding 3: standing on the main root, source == dest, so a naive dry-run
-    # would report "no deletions" (false safety). The panel must refuse instead.
-    import subprocess
-    from _pkg import project_id
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        # project_root is the main root; the editor derives path = main_root too,
-        # so source == dest.
-        screen = ResourceEditorScreen(project_root=str(repo), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen._template_key = "root-env"     # root-dir · sync
-        screen.action_dry_run()
-        await pilot.pause()
-        out = str(screen.query_one("#test-out", Label).render()).lower()
-        assert "worktree source" in out
-        assert "no deletions" not in out
-
-
-@pytest.mark.asyncio
-async def test_dry_run_surfaces_transition_guard_for_dirty_root(
-        index_path, tmp_path, monkeypatch):
-    # Finding 1: the dry-run must show the exclusive-or check, not just deletes.
-    # From a worktree source over a DIRTY main root, it surfaces the uncommitted-
-    # changes refusal that the real acquire would hit.
-    import subprocess
-    from _pkg import project_id
-    from _pkg.tui import ResourceEditorScreen
-    repo = tmp_path / "repo"; repo.mkdir()
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    (repo / "tracked.txt").write_text("v1")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
-    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init", "-q"],
-                   check=True, env=env)
-    wt = tmp_path / "repo-feat"
-    subprocess.run(["git", "-C", str(repo), "worktree", "add", str(wt), "-b", "feat"],
-                   check=True, env=env)
-    (repo / "tracked.txt").write_text("dirty")     # uncommitted change in root
-    pid = project_id.project_id(str(wt))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    app = SessionExplorerApp(index_path=index_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        # Source = the worktree (distinct from the main-root dest).
-        screen = ResourceEditorScreen(project_root=str(wt), project_id=pid,
-                                      config_path=qcfg, resource_id=None)
-        app.push_screen(screen)
-        await pilot.pause()
-        screen._template_key = "root-env"
-        screen.action_dry_run()
-        await pilot.pause()
-        out = str(screen.query_one("#test-out", Label).render()).lower()
-        assert "uncommitted changes" in out
-
-
-@pytest.mark.asyncio
-async def test_queue_help_mentions_protect_and_guide(index_path):
-    from _pkg.tui import QueueHelpScreen, _queue_help_text, QUEUE_GUIDE_URL
+async def test_queue_help_mentions_leased_ground_and_guide(index_path):
+    from _pkg.tui import _queue_help_text, QUEUE_GUIDE_URL
     text = _queue_help_text()
-    assert "protect" in text.lower()
-    assert "isolate" in text.lower()
-    # The full, copyable GitHub URL must be present as plain text (not only a
-    # repo-relative path and not hidden behind an OSC-8-only hyperlink).
+    assert "leased ground" in text.lower()
+    # The full, copyable GitHub URL must be present as plain text.
     assert QUEUE_GUIDE_URL in text
     assert QUEUE_GUIDE_URL.startswith("https://github.com/")
     assert QUEUE_GUIDE_URL.endswith("/docs/queue-guide.md")
@@ -564,67 +207,6 @@ async def test_manual_worktree_edit_persists_even_when_value_equals_slug(index_p
 
 
 @pytest.mark.asyncio
-async def test_out_of_lease_toast(index_path, tmp_path, monkeypatch):
-    import subprocess
-    from _pkg import project_id, queue_config
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", str(tmp_path / "queues"))
-    queue_config.add_resource(
-        qcfg, project_id=pid, display_path=str(repo), resource_id="root",
-        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
-                  "acquire": "sync", "release": "none",
-                  "sync": {"delete": True, "exclude": ["/.git"],
-                           "protect": ["/.git", "/.env", "/.env.*"]}})
-    app = SessionExplorerApp(index_path=index_path)
-    notices = []
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.notify = lambda msg, **k: notices.append(msg)  # capture toasts
-        app._detect_out_of_lease()                     # seed baseline
-        (repo / "newfile.txt").write_text("x")          # out-of-lease change
-        app._detect_out_of_lease()
-        await pilot.pause()
-    assert any("out-of-lease" in m for m in notices)
-
-
-@pytest.mark.asyncio
-async def test_out_of_lease_rearms_after_stable_poll(index_path, tmp_path, monkeypatch):
-    # Finding 5: two distinct idle changes, with a stable poll between, must
-    # produce TWO warnings — the debounce re-arms, it doesn't latch forever.
-    import subprocess
-    from _pkg import project_id, queue_config
-    repo = tmp_path / "repo"; repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    pid = project_id.project_id(str(repo))
-    qcfg = str(tmp_path / "qc.json")
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", str(tmp_path / "queues"))
-    queue_config.add_resource(
-        qcfg, project_id=pid, display_path=str(repo), resource_id="root",
-        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
-                  "acquire": "sync", "release": "none",
-                  "sync": {"delete": True, "exclude": ["/.git"],
-                           "protect": ["/.git", "/.env", "/.env.*"]}})
-    app = SessionExplorerApp(index_path=index_path)
-    notices = []
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.notify = lambda msg, **k: notices.append(msg)
-        app._detect_out_of_lease()              # seed baseline
-        (repo / "f1.txt").write_text("x")        # change 1
-        app._detect_out_of_lease()              # warn #1
-        app._detect_out_of_lease()              # stable poll → re-arm
-        (repo / "f2.txt").write_text("y")        # change 2
-        app._detect_out_of_lease()              # warn #2
-        await pilot.pause()
-    assert len([m for m in notices if "out-of-lease" in m]) == 2
-
-
-@pytest.mark.asyncio
 async def test_activation_hint_is_labeled_experimental(index_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
@@ -639,35 +221,65 @@ async def test_activation_hint_is_labeled_experimental(index_path):
 
 
 @pytest.mark.asyncio
-async def test_no_toast_during_live_root_session(index_path, tmp_path, monkeypatch):
-    # Finding 2: a live session working IN root is a valid exclusive-or holder
-    # (spec §5), so its edits must NOT toast "out-of-lease".
+async def test_shared_root_screen_saves_overlay_shape(index_path, tmp_path,
+                                                      monkeypatch):
     import subprocess
-    from _pkg import project_id, queue_config, live
+    from _pkg import project_id, queue_config
+    from _pkg.tui import SharedRootScreen
     repo = tmp_path / "repo"; repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     pid = project_id.project_id(str(repo))
     qcfg = str(tmp_path / "qc.json")
-    live_path = str(tmp_path / "live.json")
     monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
-    monkeypatch.setenv("SESSION_EXPLORER_QUEUES_ROOT", str(tmp_path / "queues"))
-    monkeypatch.setenv("SESSION_EXPLORER_LIVE", live_path)
-    queue_config.add_resource(
-        qcfg, project_id=pid, display_path=str(repo), resource_id="root",
-        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
-                  "acquire": "sync", "release": "none",
-                  "sync": {"delete": True, "exclude": ["/.git"],
-                           "protect": ["/.git", "/.env", "/.env.*"]}})
-    # A live session whose cwd is the main root (an exclusive-or holder).
-    live.record_event(live_path, event="SessionStart", session_id="rootsess",
-                      cwd=str(repo), pid=os.getpid())
     app = SessionExplorerApp(index_path=index_path)
-    notices = []
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.notify = lambda msg, **k: notices.append(msg)
-        app._detect_out_of_lease()              # seed
-        (repo / "newfile.txt").write_text("x")   # change made under the live session
-        app._detect_out_of_lease()
+        screen = SharedRootScreen(project_root=str(repo), project_id=pid,
+                                  config_path=qcfg)
+        app.push_screen(screen)
         await pilot.pause()
-    assert not any("out-of-lease" in m for m in notices)
+        screen.query_one("#sr-protect", TextArea).text = "/.env\n/certs"
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "root")
+    assert res["acquire"] == "command"
+    assert res["command_acquire"] == "session-explorer queue-overlay in"
+    assert res["command_release"] == "session-explorer queue-overlay out"
+    assert res["sync"]["protect"] == ["/.env", "/certs"]
+    assert "guard" not in res
+
+
+@pytest.mark.asyncio
+async def test_shared_root_screen_migrates_existing_root_resource(
+        index_path, tmp_path, monkeypatch):
+    # An old sync-shaped root resource (e.g. the misapplied bind-mounted-stack
+    # template) is migrated onto the overlay shape on save, keeping its id.
+    import subprocess
+    from _pkg import project_id, queue_config
+    from _pkg.tui import SharedRootScreen
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    queue_config.add_resource(
+        qcfg, project_id=pid, display_path=str(repo),
+        resource_id="royal-magento-docker",
+        resource={"kind": "root-dir", "path": str(repo), "run_in": "root",
+                  "acquire": "sync", "release": "none",
+                  "guard": [{"exe": "docker", "sub": ["compose", "up"]}],
+                  "sync": {"delete": True, "exclude": ["/.git"],
+                           "protect": ["/.git", "/.env"]}})
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = SharedRootScreen(project_root=str(repo), project_id=pid,
+                                  config_path=qcfg)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.action_save()
+        await pilot.pause()
+    res = queue_config.get_resource(qcfg, pid, "royal-magento-docker")
+    assert res["acquire"] == "command"          # migrated off sync
+    assert res["sync"]["protect"] == ["/.git", "/.env"]  # protect carried over
+    assert queue_config.get_resource(qcfg, pid, "root") is None  # id kept
