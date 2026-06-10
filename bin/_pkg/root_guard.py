@@ -222,7 +222,10 @@ def _mentions_root(command: str, aliases: "list[str]") -> bool:
     — so globs/braces (`<root>*`, `<root>{,/x}`) stay mentions. An occurrence
     followed by `/.claude/worktrees/` is worktree ground, not a mention,
     unless the path token climbs back out with `..` (worktree names are
-    [a-z0-9-] slugs, so a `..` segment there is never legitimate)."""
+    [a-z0-9-] slugs, so a `..` segment there is never legitimate). Any token
+    containing a Bash expansion/substitution metachar (`$` or backtick) is
+    treated as a root mention regardless — we cannot know where it resolves,
+    so we fail closed."""
     for alias in aliases:
         start = 0
         while True:
@@ -237,6 +240,12 @@ def _mentions_root(command: str, aliases: "list[str]") -> bool:
                 token = rest
                 for ch in " \t\n;)&|<>":      # genuine token separators
                     token = token.split(ch, 1)[0]
+                # Bash has more quoting/expansion forms than we can strip
+                # ($'\x2e\x2e' decodes to `..`, $VAR can expand to anything,
+                # backticks substitute). Any such metachar in the token means
+                # we cannot know where the path really points — fail closed.
+                if "$" in token or "`" in token:
+                    return True
                 # Quotes/backslashes can hide a `..` from a naive scan while
                 # bash still resolves it ('..' / ".." / .\.) — strip them
                 # before the climb test. Worktree names are [a-z0-9-] slugs,

@@ -501,6 +501,28 @@ def test_worktree_carveout_quote_and_escape_evasion_denied(tmp_path):
     assert root_guard.decide(bash_payload(ok, ext), cfg, lp) is None
 
 
+def test_worktree_carveout_expansion_metachars_fail_closed(tmp_path):
+    # $'\x2e\x2e' decodes to `..` in bash; $VAR and backticks can expand to
+    # anything. Any expansion metachar in the carve-out token -> deny.
+    repo, wt = repo_with_worktree(tmp_path)
+    ext = tmp_path / "ext-wt4"
+    _run(["git", "worktree", "add", "-q", str(ext), "-b", "ext4"], repo)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", ext)
+    evasions = (
+        f"cat {repo}/.claude/worktrees/$'\\x2e\\x2e'/$'\\x2e\\x2e'/f.txt",
+        f"cat {repo}/.claude/worktrees/$'\\056\\056'/f.txt",
+        f"cat {repo}/.claude/worktrees/$DIR/f.txt",
+        f"cat {repo}/.claude/worktrees/`echo wt1`/f.txt",
+    )
+    for cmd in evasions:
+        assert root_guard.decide(bash_payload(cmd, ext), cfg, lp) \
+            is not None, cmd
+    # Honest paths (no metachars) still carved out.
+    ok = f"cat {repo}/.claude/worktrees/wt1/f.txt"
+    assert root_guard.decide(bash_payload(ok, ext), cfg, lp) is None
+
+
 # --- hot-path: no git fork when no config ---
 
 def test_no_config_means_no_git_fork(tmp_path, monkeypatch):
