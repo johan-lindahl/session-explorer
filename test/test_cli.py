@@ -335,7 +335,7 @@ def test_queue_context_emits_additional_context_when_opted_in(tmp_path):
     payload = json.loads(result.stdout)
     out = payload["hookSpecificOutput"]
     assert out["hookEventName"] == "SessionStart"
-    assert "docker compose up" in out["additionalContext"]
+    assert "write-blocked" in out["additionalContext"].lower()
     assert "queue-run" in out["additionalContext"]
 
 
@@ -352,21 +352,50 @@ def test_queue_context_silent_when_not_opted_in(tmp_path):
     assert result.stdout.strip() == ""
 
 
-def _run_guard(cmd_obj, cfg, repo):
+def _wt_repo(tmp_path):
+    """Committed repo + managed worktree (root_guard needs the real layout)."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+    (repo / "f.txt").write_text("x")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, env=env)
+    subprocess.run(["git", "commit", "-qm", "i"], cwd=repo, check=True, env=env)
+    wt = repo / ".claude" / "worktrees" / "wt1"
+    subprocess.run(["git", "worktree", "add", "-q", str(wt), "-b", "wt1"],
+                   cwd=repo, check=True, env=env)
+    cfg = tmp_path / "qc.json"
+    from _pkg import project_id, queue_config
+    queue_config.add_resource(
+        str(cfg), project_id=project_id.project_id(str(repo)),
+        display_path=str(repo), resource_id="root",
+        resource={"kind": "root-dir", "path": str(repo),
+                  "run_in": "root", "acquire": "command", "release": "command",
+                  "command_acquire": "session-explorer queue-overlay in",
+                  "command_release": "session-explorer queue-overlay out"})
+    from _pkg import live
+    lp = tmp_path / "live.json"
+    live.record_event(str(lp), event="SessionStart", session_id="S1",
+                      cwd=str(wt), pid=os.getpid())
+    return repo, wt, cfg, lp
+
+
+def _run_guard_payload(payload_obj, cfg, lp):
     import json as _json
-    payload = _json.dumps({
-        "tool_name": "Bash",
-        "tool_input": {"command": cmd_obj},
-        "cwd": str(repo),
-    })
     return subprocess.run(
-        [_BIN, "queue-guard"], input=payload, capture_output=True, text=True,
-        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+        [_BIN, "queue-guard"], input=_json.dumps(payload_obj),
+        capture_output=True, text=True,
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg),
+             "SESSION_EXPLORER_LIVE": str(lp)})
 
 
-def test_queue_guard_denies_guarded_command(tmp_path):
-    repo, cfg = _git_repo_with_root(tmp_path)
-    result = _run_guard("docker compose up -d", cfg, repo)
+def test_queue_guard_denies_bash_mentioning_root(tmp_path):
+    repo, wt, cfg, lp = _wt_repo(tmp_path)
+    result = _run_guard_payload(
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"cp x {repo}/x"},
+         "cwd": str(wt), "session_id": "S1"}, cfg, lp)
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)["hookSpecificOutput"]
     assert out["hookEventName"] == "PreToolUse"
@@ -374,46 +403,57 @@ def test_queue_guard_denies_guarded_command(tmp_path):
     assert "queue-run --resource root --" in out["permissionDecisionReason"]
 
 
-def test_queue_guard_allows_unguarded_command(tmp_path):
-    repo, cfg = _git_repo_with_root(tmp_path)
-    result = _run_guard("docker ps", cfg, repo)
+def test_queue_guard_allows_innocent_bash(tmp_path):
+    repo, wt, cfg, lp = _wt_repo(tmp_path)
+    result = _run_guard_payload(
+        {"tool_name": "Bash", "tool_input": {"command": "phpunit -c app"},
+         "cwd": str(wt), "session_id": "S1"}, cfg, lp)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == ""
 
 
-def test_queue_guard_ignores_non_bash_tool(tmp_path):
-    repo, cfg = _git_repo_with_root(tmp_path)
-    import json as _json
-    payload = _json.dumps({"tool_name": "Read",
-                           "tool_input": {"file_path": "/x"}, "cwd": str(repo)})
-    result = subprocess.run(
-        [_BIN, "queue-guard"], input=payload, capture_output=True, text=True,
-        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+def test_queue_guard_denies_edit_into_root(tmp_path):
+    repo, wt, cfg, lp = _wt_repo(tmp_path)
+    result = _run_guard_payload(
+        {"tool_name": "Edit",
+         "tool_input": {"file_path": str(repo / "f.txt")},
+         "cwd": str(wt), "session_id": "S1"}, cfg, lp)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+
+
+def test_queue_guard_ignores_read_tool(tmp_path):
+    repo, wt, cfg, lp = _wt_repo(tmp_path)
+    result = _run_guard_payload(
+        {"tool_name": "Read",
+         "tool_input": {"file_path": str(repo / "f.txt")},
+         "cwd": str(wt), "session_id": "S1"}, cfg, lp)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 
 
 def test_queue_guard_fails_open_on_garbage_stdin(tmp_path):
-    _, cfg = _git_repo_with_root(tmp_path)
+    repo, wt, cfg, lp = _wt_repo(tmp_path)
     result = subprocess.run(
         [_BIN, "queue-guard"], input="not json at all",
         capture_output=True, text=True,
-        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg),
+             "SESSION_EXPLORER_LIVE": str(lp)})
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 
 
 def test_queue_guard_fails_open_when_cwd_missing(tmp_path):
-    # Payload-schema drift: no cwd. Must NOT guess via os.getcwd() (which could be
-    # another opted-in project) -> allow silently.
-    repo, cfg = _git_repo_with_root(tmp_path)
-    import json as _json
-    payload = _json.dumps({"tool_name": "Bash",
-                           "tool_input": {"command": "docker compose up -d"}})
+    # Payload-schema drift: no cwd. Must NOT guess via os.getcwd() -> allow.
+    repo, wt, cfg, lp = _wt_repo(tmp_path)
     result = subprocess.run(
-        [_BIN, "queue-guard"], input=payload, capture_output=True, text=True,
-        cwd=str(repo),  # hook cwd happens to be an opted-in repo; must be ignored
-        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg)})
+        [_BIN, "queue-guard"],
+        input=json.dumps({"tool_name": "Bash",
+                          "tool_input": {"command": f"cp x {repo}/x"}}),
+        capture_output=True, text=True, cwd=str(wt),
+        env={**os.environ, "SESSION_EXPLORER_QUEUE_CONFIG": str(cfg),
+             "SESSION_EXPLORER_LIVE": str(lp)})
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 

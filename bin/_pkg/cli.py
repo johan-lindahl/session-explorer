@@ -118,8 +118,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser(
         "queue-guard",
-        help="Read a PreToolUse payload on stdin; emit a deny+redirect for "
-             "guarded Bash commands (used by the PreToolUse hook). Fails open.")
+        help="Read a PreToolUse payload on stdin; deny tool calls that touch "
+             "the shared installed root outside a lease (root_guard). "
+             "Plumbing fails open.")
 
     qov = sub.add_parser(
         "queue-overlay",
@@ -381,26 +382,19 @@ def _cmd_queue_context(args) -> int:
 
 
 def _cmd_queue_guard(args) -> int:
-    """Read a PreToolUse payload on stdin; deny+redirect a guarded Bash command.
-    Fails open: any error (bad JSON, no config, parse ambiguity) -> no output,
-    exit 0, tool proceeds. A false deny is worse than a missed guard (spec
-    section 8)."""
+    """Read a PreToolUse payload on stdin; deny tool calls that touch the
+    shared installed root from a worktree session (root_guard, leased-ground
+    spec). PLUMBING fails open: bad JSON / no config / unexpected error -> no
+    output, exit 0, tool proceeds. Within working plumbing a root mention is
+    denied by default — the inverse of the old advisory guard."""
     import json as _json
     try:
         raw = sys.stdin.read()
         payload = _json.loads(raw) if raw.strip() else {}
-        if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+        if not isinstance(payload, dict):
             return 0
-        command = (payload.get("tool_input") or {}).get("command") or ""
-        # Resolve strictly from the payload's cwd. Do NOT fall back to
-        # os.getcwd(): the hook process's cwd is set by Claude Code (plugin /
-        # install context), so guessing it could deny against the WRONG opted-in
-        # project. No trustworthy cwd -> fail open (allow).
-        cwd = payload.get("cwd")
-        if not isinstance(cwd, str) or not cwd:
-            return 0
-        from . import queue_awareness as _qa
-        reason = _qa.guard_reason(_queue_config_path(), command, cwd)
+        from . import root_guard as _rg
+        reason = _rg.decide(payload, _queue_config_path(), _live_path())
         if reason:
             print(_json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -454,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     # Hook subcommands are on the critical path (SessionStart, and every
-    # PreToolUse Bash call). Keep them cheap: dispatch before the global index /
+    # PreToolUse tool call). Keep them cheap: dispatch before the global index /
     # folder migrations below, which they don't need, so a Bash tool call never
     # pays migration overhead just to evaluate the guard.
     if args.cmd == "queue-context":

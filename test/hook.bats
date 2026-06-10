@@ -156,10 +156,12 @@ EOF
 
 # --- Phase 3: SessionStart additionalContext ---
 
-# Opt a git repo into the queue with a guarded 'root' resource.
+# Opt a git repo into the queue with a managed worktree + overlay-shaped root resource.
 optin_repo() {
   local repo="$1"
   git init -q "$repo"
+  git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i
+  git -C "$repo" worktree add -q "$repo/.claude/worktrees/wt1" -b wt1
   python3 - "$REPO" "$repo" "$HOME/.claude/session-explorer-queue-config.json" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1] + "/bin")
@@ -169,9 +171,9 @@ pid = project_id.project_id(repo)
 queue_config.add_resource(
     cfg, project_id=pid, display_path=repo, resource_id="root",
     resource={"kind": "root-dir", "path": repo,
-              "guard": [{"exe": "docker", "sub": ["compose", "up"]}],
-              "run_in": "root", "acquire": "sync", "release": "none",
-              "sync": {"delete": True, "exclude": ["/.git"], "protect": ["/.git"]}})
+              "run_in": "root", "acquire": "command", "release": "command",
+              "command_acquire": "session-explorer queue-overlay in",
+              "command_release": "session-explorer queue-overlay out"})
 PY
 }
 
@@ -203,21 +205,34 @@ PY
   [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
 }
 
-@test "pre-tool-use denies a guarded Bash command in an opted-in project" {
+@test "pre-tool-use denies a Bash command that mentions the shared root" {
   mkdir -p "$HOME/.claude"
   REPO_DIR="$HOME/proj"
   optin_repo "$REPO_DIR"
-  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"docker compose up -d\"},\"cwd\":\"$REPO_DIR\"}"
+  WT="$REPO_DIR/.claude/worktrees/wt1"
+  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp x $REPO_DIR/x\"},\"cwd\":\"$WT\",\"session_id\":\"S1\"}"
   run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
   [ "$status" -eq 0 ]
   echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); h=d['hookSpecificOutput']; assert h['permissionDecision']=='deny'; assert 'queue-run --resource root --' in h['permissionDecisionReason']"
 }
 
-@test "pre-tool-use is silent for an unguarded command" {
+@test "pre-tool-use denies an Edit into the shared root" {
   mkdir -p "$HOME/.claude"
   REPO_DIR="$HOME/proj"
   optin_repo "$REPO_DIR"
-  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"docker ps\"},\"cwd\":\"$REPO_DIR\"}"
+  WT="$REPO_DIR/.claude/worktrees/wt1"
+  PAYLOAD="{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO_DIR/app.php\"},\"cwd\":\"$WT\",\"session_id\":\"S1\"}"
+  run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['hookSpecificOutput']['permissionDecision']=='deny'"
+}
+
+@test "pre-tool-use is silent for an innocent worktree command" {
+  mkdir -p "$HOME/.claude"
+  REPO_DIR="$HOME/proj"
+  optin_repo "$REPO_DIR"
+  WT="$REPO_DIR/.claude/worktrees/wt1"
+  PAYLOAD="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"phpunit -c app\"},\"cwd\":\"$WT\",\"session_id\":\"S1\"}"
   run bash -c "printf '%s' '$PAYLOAD' | bash '$REPO/hooks/pre-tool-use.sh'"
   [ "$status" -eq 0 ]
   [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]

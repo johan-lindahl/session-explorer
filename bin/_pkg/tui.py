@@ -78,130 +78,26 @@ def worktree_slug(name: str) -> str:
     return display
 
 
-# Spec §7 template catalog. `defaults` is merged into a resource dict; the editor
-# overlays user edits. Kept as pure data so it is unit-tested without Textual.
-QUEUE_EXPERIMENTAL = ("Experimental — cooperative only; it cannot stop an "
-                      "uncoordinated process from touching the resource. "
-                      "Don't rely on it for safety.")
+QUEUE_EXPERIMENTAL = ("Experimental — enforced for Claude tool calls only; it "
+                      "cannot stop a non-Claude process from touching the "
+                      "resource. Don't rely on it for safety.")
 
-
-QUEUE_TEMPLATES = [
-    {"key": "bind-mounted-stack", "title": "Bind-mounted stack, well-known ports",
-     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
-                  "run_in": "root",
-                  "guard": [{"exe": "docker", "sub": ["compose", "up"]},
-                            {"exe": "docker", "sub": ["compose", "run"]}],
-                  "sync": {"delete": True, "exclude": ["/.git"],
-                           "protect": ["/.git", "/.env", "/.env.*"]},
-                  "wait_for": {"type": "url", "target": "http://localhost:8080",
-                               "timeout": 120}}},
-    {"key": "browser-e2e", "title": "Browser e2e vs fixed-URL app",
-     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
-                  "run_in": "root",
-                  "guard": [{"exe": "playwright", "sub": ["test"]},
-                            {"exe": "cypress", "sub": ["run"]}],
-                  "sync": {"delete": True, "exclude": ["/.git"],
-                           "protect": ["/.git", "/.env", "/.env.*"]},
-                  "wait_for": {"type": "url", "target": "http://localhost:3000",
-                               "timeout": 120}}},
-    {"key": "ios-sim", "title": "iOS simulator / xcodebuild",
-     "defaults": {"kind": "device", "acquire": "none", "release": "none",
-                  "run_in": "worktree",
-                  "guard": [{"exe": "xcodebuild", "sub": ["test"]}]}},
-    # acquire defaults to "none" (valid as-saved); filling the editor's acquire
-    # field promotes it to "command" with the user's DB-reset shell. Shipping
-    # acquire="command" with an empty command_acquire would fail queue_config
-    # validation on save (queue_config.py:121-122).
-    {"key": "shared-db", "title": "Single shared database",
-     "defaults": {"kind": "port", "acquire": "none", "release": "none",
-                  "run_in": "worktree",
-                  "guard": [{"exe": "npm", "sub": ["run", "migrate"]}]}},
-    {"key": "root-env", "title": "Root-only credentials / .env",
-     "defaults": {"kind": "root-dir", "acquire": "sync", "release": "none",
-                  "run_in": "root", "guard": [],
-                  "sync": {"delete": True, "exclude": ["/.git"],
-                           "protect": ["/.git", "/.env", "/.env.*"]}}},
-    {"key": "device-seat", "title": "Single device / HIL / license seat",
-     "defaults": {"kind": "name", "acquire": "none", "release": "none",
-                  "run_in": "worktree", "guard": []}},
-    {"key": "overlay-installed-root",
-     "title": "Shared installed app root (overlay tests)",
-     "defaults": {"kind": "root-dir", "acquire": "command", "release": "command",
-                  "run_in": "root",
-                  "command_acquire": "session-explorer queue-overlay in",
-                  "command_release": "session-explorer queue-overlay out",
-                  "release_required": False,
-                  "guard": [{"exe": "phpunit", "sub": []},
-                            {"exe": "phpstan", "sub": []},
-                            {"exe": "magento", "sub": ["setup:di:compile"]},
-                            {"exe": "magento", "sub": ["setup:upgrade"]}]}},
-    {"key": "custom", "title": "Custom / blank",
-     "defaults": {"kind": "name", "acquire": "none", "release": "none",
-                  "run_in": "worktree", "guard": []}},
-]
-
-
-def template_resource(key: str, *, path: str) -> dict:
-    """Build a fresh resource dict from a template key. Pure."""
-    import copy
-    tpl = next((t for t in QUEUE_TEMPLATES if t["key"] == key), None)
-    if tpl is None:
-        tpl = next(t for t in QUEUE_TEMPLATES if t["key"] == "custom")
-    res = copy.deepcopy(tpl["defaults"])
-    if res.get("kind") in ("root-dir", "path") and path:
-        res["path"] = path
-    return res
-
-
-# --- Editor form <-> resource-dict conversions (pure, unit-tested) ---
-
-def parse_guard_lines(text: str) -> list:
-    """Each non-empty line 'exe sub1 sub2' -> {'exe': exe, 'sub': [sub1, ...]}.
-    Blank/whitespace-only lines are dropped. So 'docker compose up' becomes
-    {'exe': 'docker', 'sub': ['compose', 'up']}. Pure."""
-    rules = []
-    for line in text.splitlines():
-        parts = line.split()
-        if not parts:
-            continue
-        rules.append({"exe": parts[0], "sub": parts[1:]})
-    return rules
-
-
-def format_guard_lines(rules: list) -> str:
-    """Inverse of parse_guard_lines, to pre-fill the guard editor."""
-    return "\n".join(" ".join([r.get("exe", "")] + list(r.get("sub", [])))
-                     for r in (rules or []))
+# The one resource shape the setup dialog writes (leased-ground spec): the
+# overlay-and-restore mutex on the shared installed root. The engine still
+# understands the other kinds/strategies for back-compat configs; they are
+# just no longer a UI surface.
+SHARED_ROOT_DEFAULTS = {
+    "kind": "root-dir", "acquire": "command", "release": "command",
+    "run_in": "root",
+    "command_acquire": "session-explorer queue-overlay in",
+    "command_release": "session-explorer queue-overlay out",
+    "release_required": False,
+}
 
 
 def parse_path_lines(text: str) -> list:
     """One path per line; blanks dropped, whitespace trimmed (for protect)."""
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
-
-
-def parse_wait_for(text: str, timeout_text: str) -> "dict | None":
-    """'<url|port|command> <target>' + a timeout string -> a wait_for spec, or
-    None when empty/invalid (so a cleared field removes the spec). Pure."""
-    parts = text.split(None, 1)
-    if len(parts) < 2:
-        return None
-    wtype, target = parts[0], parts[1].strip()
-    if wtype not in ("url", "port", "command") or not target:
-        return None
-    try:
-        timeout = float(timeout_text.strip()) if timeout_text.strip() else 60.0
-    except ValueError:
-        timeout = 60.0
-    return {"type": wtype, "target": target, "timeout": timeout}
-
-
-def format_wait_for(spec: dict) -> tuple:
-    """Inverse of parse_wait_for: ('type target', 'timeout') for pre-filling."""
-    if not spec:
-        return ("", "")
-    line = f"{spec.get('type', '')} {spec.get('target', '')}".strip()
-    t = spec.get("timeout")
-    return (line, "" if t is None else str(t))
 
 
 def _index_path() -> str:
@@ -755,369 +651,106 @@ class NotesScreen(_PanelScreen):
         self.dismiss(self._ta.text)
 
 
-class ResourceListScreen(_PanelScreen):
-    """Per-project shared-resource list (spec §6). a add · e edit · Del remove ·
-    ? help · esc close. The destructive editor + test panel live in
-    ResourceEditorScreen."""
+class SharedRootScreen(_PanelScreen):
+    """Single per-project setup dialog (leased-ground spec): share / stop
+    sharing the installed root, with an optional protect list. Saving applies
+    the overlay shape (SHARED_ROOT_DEFAULTS) — including migrating an existing
+    root-dir resource of any older shape onto it, keeping its resource id.
+    Returns True when the config changed."""
+
+    RESOURCE_ID = "root"
 
     BINDINGS = [
-        Binding("escape", "dismiss(None)", "Close"),
-        Binding("a", "add", "Add", show=False),
-        Binding("e", "edit", "Edit", show=False),
-        Binding("delete", "remove", "Remove", show=False),
+        Binding("escape", "dismiss(False)", "Close"),
+        Binding("ctrl+s", "save", "Share / save"),
+        Binding("ctrl+d", "stop_sharing", "Stop sharing"),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
-    def __init__(self, *, project_root: str, project_id: str, config_path: str) -> None:
+    def __init__(self, *, project_root: str, project_id: str,
+                 config_path: str) -> None:
         super().__init__()
         self._project_root = project_root
         self._project_id = project_id
         self._config_path = config_path
+        from . import project_id as _pid
+        # The shared root is the repo's MAIN working tree, never the selected
+        # node (which can be a worktree shown as its own project).
+        self._root_path = _pid.main_root(project_root) or project_root
+        self._existing_rid: "str | None" = None
 
     def compose(self) -> ComposeResult:
+        from . import queue_config as _qc
+        resources = _qc.list_resources(self._config_path, self._project_id)
+        rid = next((r for r in sorted(resources)
+                    if resources[r].get("kind") == "root-dir"), None)
+        self._existing_rid = rid
+        existing = resources.get(rid, {}) if rid else {}
+        protect = "\n".join(existing.get("sync", {}).get("protect", []))
+        if rid:
+            status = (f"shared as '{rid}' (acquire: "
+                      f"{existing.get('acquire', '?')})")
+        else:
+            status = "not shared"
         yield Vertical(
-            Label(f"Shared resources — {_basename(self._project_root)}",
+            Label(f"Shared installed root — {_basename(self._project_root)}",
                   classes="dialog-title"),
             Label(QUEUE_EXPERIMENTAL, classes="dialog-hint"),
-            OptionList(id="reslist"),
-            Label("a add · e edit · Del remove · ? help · esc close",
+            Label(f"Root:   {self._root_path}\nStatus: {status}",
+                  id="sr-status"),
+            Label("Tool calls that touch the root from a worktree session "
+                  "are denied; work runs through "
+                  "`queue-run -- <cmd>` (overlay in → run → restore).",
+                  classes="dialog-hint"),
+            Label("Protect — root-only paths to keep, one per line (optional)",
+                  classes="dialog-hint"),
+            TextArea(protect, id="sr-protect"),
+            Label("", id="sr-error", classes="dialog-hint"),
+            Label("ctrl-s share/save · ctrl-d stop sharing · esc close",
                   classes="dialog-hint"),
             id="panel",
         )
-
-    def on_mount(self) -> None:
-        self._reload()
-
-    def _reload(self) -> None:
-        from . import queue_config as _qc
-        ol = self.query_one("#reslist", OptionList)
-        ol.clear_options()
-        resources = _qc.list_resources(self._config_path, self._project_id)
-        if not resources:
-            ol.add_option(Option("(no resources yet — press a to add)", id=None))
-            return
-        for rid, res in sorted(resources.items()):
-            label = (f"{rid:<14} {res.get('kind',''):<9} "
-                     f"acquire:{res.get('acquire','')}  run_in:{res.get('run_in','')}")
-            ol.add_option(Option(label, id=rid))
-
-    def action_add(self) -> None:
-        def after(saved):
-            if saved:
-                self._reload()
-        self.app.push_screen(
-            ResourceEditorScreen(project_root=self._project_root,
-                                 project_id=self._project_id,
-                                 config_path=self._config_path,
-                                 resource_id=None),
-            after)
-
-    def action_edit(self) -> None:
-        rid = self._selected_rid()
-        if not rid:
-            return
-        def after(saved):
-            if saved:
-                self._reload()
-        self.app.push_screen(
-            ResourceEditorScreen(project_root=self._project_root,
-                                 project_id=self._project_id,
-                                 config_path=self._config_path,
-                                 resource_id=rid),
-            after)
-
-    def action_remove(self) -> None:
-        from . import queue_config as _qc
-        rid = self._selected_rid()
-        if not rid:
-            return
-        def after(ok: bool) -> None:
-            if ok:
-                _qc.remove_resource(self._config_path, self._project_id, rid)
-                self._reload()
-        self.app.push_screen(
-            ConfirmScreen(f"Remove shared resource '{rid}'? (queue config only; "
-                          "no files are touched)"), after)
-
-    def action_help(self) -> None:
-        self.app.push_screen(QueueHelpScreen())
-
-    def _selected_rid(self) -> "str | None":
-        ol = self.query_one("#reslist", OptionList)
-        idx = ol.highlighted
-        if idx is None:
-            return None
-        opt = ol.get_option_at_index(idx)
-        return opt.id
-
-
-class ResourceEditorScreen(_PanelScreen):
-    """Template-first resource editor that reflows per kind (spec §6). Saves via
-    queue_config.add_resource (which enforces the §2 invariants). Returns True on
-    a successful save, False on cancel. The destructive test panel is mounted by
-    the test-panel task."""
-
-    BINDINGS = [
-        Binding("escape", "dismiss(False)", "Cancel"),
-        Binding("ctrl+s", "save", "Save"),
-        Binding("ctrl+t", "test_guard", "Test guard"),
-        Binding("ctrl+r", "dry_run", "Dry-run"),
-        Binding("ctrl+h", "health", "Health"),
-    ]
-
-    def __init__(self, *, project_root, project_id, config_path, resource_id) -> None:
-        super().__init__()
-        self._project_root = project_root
-        self._project_id = project_id
-        self._config_path = config_path
-        self._resource_id = resource_id          # None == add
-        self._template_key = "custom"
-        from . import project_id as _pid
-        # A root-dir resource's path is the repo's MAIN working tree, never the
-        # selected tree node — which can be an arbitrary `git worktree add`
-        # shown as its own project (spec §1). Derive it via the git-common-dir
-        # helper; fall back to the node path if git can't resolve it.
-        self._root_path = _pid.main_root(project_root) or project_root
-        self._existing = None
-        self._kind = "name"
-
-    def compose(self) -> ComposeResult:
-        from . import queue_config as _qc
-        existing = (_qc.get_resource(self._config_path, self._project_id,
-                                     self._resource_id) if self._resource_id else None)
-        self._existing = existing
-        if existing:
-            self._template_key = "custom"   # edit: seed fields from the stored shape
-        base = existing or template_resource("custom", path=self._root_path)
-        self._kind = base.get("kind", "name")
-        title = ("Edit resource" if existing else "Add resource") + \
-                f" — {_basename(self._project_root)}"
-        opts = [Option(t["title"], id=t["key"]) for t in QUEUE_TEMPLATES]
-        yield Vertical(
-            Label(title, classes="dialog-title"),
-            Label("Template", classes="dialog-hint"),
-            OptionList(*opts, id="res-template"),
-            Input(value=self._resource_id or "", placeholder="resource id (e.g. ios-sim)",
-                  id="res-id", disabled=bool(self._resource_id)),
-            Label(f"kind: {self._kind}", id="res-kind", classes="dialog-hint"),
-            Input(value=base.get("path", self._root_path),
-                  placeholder="path (path-kind editable; root-dir is auto-derived)",
-                  id="res-path"),
-            Label("Guard — one 'exe sub…' rule per line (empty = unguarded)",
-                  classes="dialog-hint"),
-            TextArea(format_guard_lines(base.get("guard", [])), id="res-guard"),
-            Label("Protect — root-only paths to keep, one per line (root-dir/path)",
-                  id="res-protect-label", classes="dialog-hint"),
-            TextArea("\n".join(base.get("sync", {}).get("protect", [])), id="res-protect"),
-            Input(value=base.get("command_acquire", ""),
-                  placeholder="acquire command (when acquire=command)", id="res-acq"),
-            Input(value=base.get("command_release", ""),
-                  placeholder="release command (optional)", id="res-rel"),
-            Checkbox("release required (fail the run if release fails)",
-                     value=bool(base.get("release_required")), id="res-req"),
-            Input(value=base.get("health", ""),
-                  placeholder="health check command (optional)", id="res-health"),
-            Input(value=format_wait_for(base.get("wait_for"))[0],
-                  placeholder="readiness: '<url|port|command> <target>' (optional)",
-                  id="res-wait"),
-            Input(value=format_wait_for(base.get("wait_for"))[1],
-                  placeholder="readiness timeout seconds (default 60)", id="res-wait-timeout"),
-            Label("", id="res-error", classes="dialog-hint"),
-            Label("Test panel", classes="dialog-title"),
-            Input(placeholder="command to test against the guard", id="test-cmd"),
-            Label("", id="test-out", classes="dialog-hint"),
-            Label("Dry-run is safe only for sync and needs a worktree source "
-                  "distinct from root; custom shells can't be simulated.",
-                  classes="dialog-hint"),
-            Label(QUEUE_EXPERIMENTAL, classes="dialog-hint"),
-            Label("ctrl-s save · ctrl-t guard · ctrl-r dry-run · ctrl-h health · esc cancel",
-                  classes="dialog-hint"),
-            id="panel",
-        )
-
-    def on_mount(self) -> None:
-        self._reflow(self._kind)
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_list.id != "res-template":
-            return
-        self._template_key = event.option.id or "custom"
-        res = template_resource(self._template_key, path=self._root_path)
-        self._kind = res["kind"]
-        self.query_one("#res-kind", Label).update(f"kind: {res['kind']}")
-        # Repopulate the form from the chosen template's defaults.
-        self.query_one("#res-guard", TextArea).text = format_guard_lines(res.get("guard", []))
-        self.query_one("#res-protect", TextArea).text = "\n".join(
-            res.get("sync", {}).get("protect", []))
-        self.query_one("#res-acq", Input).value = res.get("command_acquire", "")
-        # Mirror every command/health field the template defines — otherwise a
-        # template's command_release / release_required / health are left at the
-        # prior (often empty) values and the "form is authoritative" save rule
-        # silently drops them (e.g. overlay-installed-root losing queue-overlay
-        # out, which leaks the overlay into root with no restore).
-        self.query_one("#res-rel", Input).value = res.get("command_release", "")
-        self.query_one("#res-req", Checkbox).value = bool(res.get("release_required"))
-        self.query_one("#res-health", Input).value = res.get("health", "")
-        wline, wt = format_wait_for(res.get("wait_for"))
-        self.query_one("#res-wait", Input).value = wline
-        self.query_one("#res-wait-timeout", Input).value = wt
-        self._reflow(res["kind"])
-
-    def _reflow(self, kind: str) -> None:
-        """Hide the path + protect inputs for non-file kinds (spec §6 reflow). A
-        root-dir path is auto-derived (spec §1), so its input is shown read-only
-        as the canonical main-worktree path; only a `path`-kind path is editable."""
-        is_file = kind in ("root-dir", "path")
-        path_input = self.query_one("#res-path", Input)
-        path_input.display = is_file
-        path_input.disabled = (kind == "root-dir")
-        if kind == "root-dir":
-            path_input.value = self._root_path     # canonical, not user-editable
-        self.query_one("#res-protect", TextArea).display = is_file
-        self.query_one("#res-protect-label", Label).display = is_file
-
-    def _build_resource(self) -> dict:
-        if self._existing is not None and self._template_key == "custom":
-            res = dict(self._existing)
-        else:
-            res = template_resource(self._template_key, path=self._root_path)
-        kind = res.get("kind")
-        # root-dir path is ALWAYS the canonical main worktree (spec §1) — never
-        # the editable input. Only a `path`-kind path is taken from the form.
-        if kind == "root-dir":
-            res["path"] = self._root_path
-        elif kind == "path":
-            p = self.query_one("#res-path", Input).value.strip()
-            if p:
-                res["path"] = p
-        # The guard form is authoritative — an empty form means unguarded.
-        res["guard"] = parse_guard_lines(self.query_one("#res-guard", TextArea).text)
-        # Protect only has meaning when syncing; fold the form into the sync dict.
-        if res.get("acquire") == "sync":
-            sync = res.setdefault("sync", {"delete": True, "exclude": ["/.git"]})
-            sync["protect"] = parse_path_lines(self.query_one("#res-protect", TextArea).text)
-        # Command/health/wait_for: the form is authoritative, so a CLEARED field
-        # removes the stale value (and reverts a now-empty command strategy to
-        # 'none') rather than silently keeping the old one (Finding 3).
-        acq = self.query_one("#res-acq", Input).value.strip()
-        if acq:
-            res["command_acquire"] = acq
-            res["acquire"] = "command"
-        else:
-            res.pop("command_acquire", None)
-            if res.get("acquire") == "command":
-                res["acquire"] = "none"
-        rel = self.query_one("#res-rel", Input).value.strip()
-        if rel:
-            res["command_release"] = rel
-            res["release"] = "command"
-        else:
-            res.pop("command_release", None)
-            if res.get("release") == "command":
-                res["release"] = "none"
-        res["release_required"] = self.query_one("#res-req", Checkbox).value
-        health = self.query_one("#res-health", Input).value.strip()
-        if health:
-            res["health"] = health
-        else:
-            res.pop("health", None)
-        wf = parse_wait_for(self.query_one("#res-wait", Input).value,
-                            self.query_one("#res-wait-timeout", Input).value)
-        if wf:
-            res["wait_for"] = wf
-        else:
-            res.pop("wait_for", None)
-        return res
 
     def action_save(self) -> None:
         from . import queue_config as _qc
-        rid = self.query_one("#res-id", Input).value.strip()
-        # A non-empty but unparseable readiness field is a typo, not "no
-        # readiness" — refuse rather than silently drop it. (Empty still clears,
-        # handled in _build_resource.) Kept here, not in _build_resource, so the
-        # test-panel actions that also build the resource never raise on a typo.
-        wait_text = self.query_one("#res-wait", Input).value.strip()
-        if wait_text and parse_wait_for(
-                self.query_one("#res-wait", Input).value,
-                self.query_one("#res-wait-timeout", Input).value) is None:
-            self.query_one("#res-error", Label).update(
-                "[red]readiness must be '<url|port|command> <target>'[/]")
-            return
+        res = dict(SHARED_ROOT_DEFAULTS)
+        res["path"] = self._root_path
+        protect = parse_path_lines(self.query_one("#sr-protect", TextArea).text)
+        if protect:
+            # Stored under sync.protect for schema continuity; the overlay
+            # acquire never rsyncs, so this is data for future use + display.
+            res["sync"] = {"delete": False, "exclude": [], "protect": protect}
         try:
-            res = self._build_resource()
-            _qc.add_resource(self._config_path, project_id=self._project_id,
-                             display_path=self._project_root, resource_id=rid,
-                             resource=res)
+            _qc.add_resource(
+                self._config_path, project_id=self._project_id,
+                display_path=self._project_root,
+                resource_id=self._existing_rid or self.RESOURCE_ID,
+                resource=res)
         except ValueError as e:
-            self.query_one("#res-error", Label).update(f"[red]{e}[/]")
+            self.query_one("#sr-error", Label).update(f"[red]{e}[/]")
             return
         self.dismiss(True)
 
-    def action_test_guard(self) -> None:
-        from . import guard_match as _gm
-        # Build from the CURRENT form (edits + existing saved guard), not the
-        # bare template — otherwise an edited or existing guard isn't tested.
-        rules = self._build_resource().get("guard") or []
-        cmd = self.query_one("#test-cmd", Input).value.strip()
-        if not cmd:
+    def action_stop_sharing(self) -> None:
+        from . import queue_config as _qc
+        rid = self._existing_rid
+        if not rid:
+            self.dismiss(False)
             return
-        if _gm.matches(cmd, rules):
-            self.query_one("#test-out", Label).update("[yellow]→ QUEUED (guarded)[/]")
-        else:
-            self.query_one("#test-out", Label).update("[green]→ RUNS FREE (unguarded)[/]")
 
-    def action_dry_run(self) -> None:
-        """rsync --dry-run preview for sync resources: deletions PLUS the
-        exclusive-or check (spec §6) — a live root session and/or a dirty root
-        that would block/refuse the real acquire, surfaced before the user trusts
-        the preview."""
-        from . import qsync as _qs, exclusive as _ex
-        res = self._build_resource()
-        if res.get("acquire") != "sync":
-            self.query_one("#test-out", Label).update(
-                "[dim]dry-run only applies to acquire=sync[/]")
-            return
-        # A real lease syncs from a WORKTREE over root. If the panel's source
-        # (the selected node) is the root itself, rsync would diff root against
-        # root and report "no deletions" — false safety. Refuse rather than lie.
-        src = self._project_root
-        if os.path.realpath(src) == os.path.realpath(res["path"]):
-            self.query_one("#test-out", Label).update(
-                "[yellow]dry-run needs a worktree source distinct from root — "
-                "open this panel from a worktree session to preview deletions[/]")
-            return
-        lines = []
-        # Exclusive-or check (spec §6): these would block/refuse the real acquire.
-        # NB: _live_path() lives on the App, not this modal screen — use self.app.
-        block = _ex.live_root_session(self.app._live_path(), res["path"])
-        if block:
-            lines.append(f"[red]⛔ root held by live session ‹{block.get('name')}› "
-                         f"— acquire would block[/]")
-        tg = _ex.transition_guard(res["path"])
-        if tg:
-            lines.append(f"[yellow]{tg}[/]")
-        sync = res.get("sync", {})
-        try:
-            dels = _qs.dry_run_deletions(src, res["path"],
-                                         exclude=sync.get("exclude", []),
-                                         protect=sync.get("protect", []))
-        except _qs.SyncDryRunError as e:
-            lines.append(f"[red]dry-run failed: {e}[/]")
-            self.query_one("#test-out", Label).update("\n".join(lines))
-            return
-        if dels:
-            shown = ", ".join(dels[:6]) + (" …" if len(dels) > 6 else "")
-            lines.append(f"[red]would DELETE {len(dels)}: {shown}[/]")
-        else:
-            lines.append("[green]no deletions[/]")
-        self.query_one("#test-out", Label).update("\n".join(lines))
+        def after(ok: bool) -> None:
+            if ok:
+                _qc.remove_resource(self._config_path, self._project_id, rid)
+                self.dismiss(True)
 
-    def action_health(self) -> None:
-        from . import probes as _p
-        cmd = self.query_one("#res-health", Input).value.strip() or None
-        ok, detail = _p.health_check(cmd)
-        sev = "[green]" if ok else "[red]"
-        self.query_one("#test-out", Label).update(f"{sev}health: {detail}[/]")
+        self.app.push_screen(
+            ConfirmScreen(f"Stop sharing the installed root ('{rid}')? "
+                          "(queue config only; no files are touched)"), after)
+
+    def action_help(self) -> None:
+        # QueueHelpScreen's only remaining entry point now that the resource
+        # list is gone — keep `?` reachable from the setup dialog.
+        self.app.push_screen(QueueHelpScreen())
 
 
 QUEUE_GUIDE_URL = ("https://github.com/johan-lindahl/session-explorer"
@@ -1126,25 +759,23 @@ QUEUE_GUIDE_URL = ("https://github.com/johan-lindahl/session-explorer"
 
 def _queue_help_text() -> str:
     return "\n".join([
-        f"[b]Shared resources — quick help[/]  [dim]— {QUEUE_EXPERIMENTAL}[/]",
+        f"[b]Shared installed root — quick help[/]  [dim]— {QUEUE_EXPERIMENTAL}[/]",
         "",
-        "[b]Isolate first.[/] If you can give each worktree its own port, DB, or",
-        "derived-data dir, do that instead — this engine is for singletons that",
-        "genuinely can't be isolated (one bind-mounted root, one simulator, one DB).",
+        "[b]The model.[/] One project root holds the installed app; worktrees",
+        "hold code changes. The root is [b]leased ground[/]: tool calls that",
+        "touch it from a worktree session are denied by a PreToolUse hook.",
         "",
-        "[b]sync is destructive.[/] A root-dir 'sync' acquire runs",
-        "[b]rsync --delete[/] from your worktree over the shared root — it blows",
-        "away whatever the previous holder left. [b]protect[/] lists root-only",
-        "paths to keep untouched (secrets, certs); [b].git/.env[/] are protected",
-        "by default. Use the [b]dry-run[/] test (ctrl-r) to see deletions first.",
+        "[b]The one door.[/] `session-explorer queue-run --resource <id> -- <cmd>`",
+        "takes the FIFO lease, overlays your changed files into the root, runs",
+        "your command there, restores the overlay, and releases — on success,",
+        "failure, or interrupt. `queue-status` shows the holder and queue.",
         "",
-        "[b]Guards[/] are matched on the parsed command (exe + subcommand), never",
-        "as substrings. Test a command with ctrl-t before relying on it.",
+        "[b]Limits.[/] Non-Claude processes and commands that compute the root",
+        "path at runtime aren't blocked — the dirty-root refusal at the next",
+        "lease is the backstop. A live Claude session working IN the root",
+        "blocks worktree leases until it ends (and vice versa is fine).",
         "",
-        # Plain, copyable URL (always visible) wrapped in a best-effort click
-        # link — terminals without OSC-8 still show the bare URL to copy.
-        "Full guide (opens / copyable):",
-        f"  [link={QUEUE_GUIDE_URL}]{QUEUE_GUIDE_URL}[/link]",
+        f"Full guide: {QUEUE_GUIDE_URL}",
     ])
 
 
@@ -1307,11 +938,6 @@ class SessionExplorerApp(App):
         # `q` press even when nothing is configured (cleared on next toggle-off).
         self._queue_visible: bool = False
         self._queue_hint_forced: bool = False
-        # Best-effort out-of-lease detector: per-resource last top-level snapshot
-        # and a debounce set. A change-burst toasts once; the set re-arms after a
-        # stable (unchanged) poll, so a *later* distinct change toasts again.
-        self._detect_snaps: dict[str, dict] = {}
-        self._detect_warned: set[str] = set()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -2025,8 +1651,8 @@ class SessionExplorerApp(App):
             self.notify("This project is not a git repository — shared resources "
                         "need a repo.", severity="warning")
             return
-        self.push_screen(ResourceListScreen(project_root=project, project_id=pid,
-                                             config_path=self._queue_config_path()))
+        self.push_screen(SharedRootScreen(project_root=project, project_id=pid,
+                                          config_path=self._queue_config_path()))
 
     def _project_root_is_shared(self, cwd: str) -> bool:
         """True if the project containing `cwd` has a `root-dir` shared resource
@@ -2494,53 +2120,6 @@ class SessionExplorerApp(App):
         # Keep the Queues pane current on the same cadence (cheap when hidden).
         if self._queue_visible:
             self._render_queues()
-        self._detect_out_of_lease()
-
-    def _detect_out_of_lease(self) -> None:
-        """Compare root-dir snapshots between polls; toast on a change while the
-        resource is in NEITHER valid exclusive-or state — i.e. no lease holder
-        AND no live root session (which legitimately owns root, spec §5). Weak
-        signal (spec §6); excludes the protect baseline + globs."""
-        from . import queue_detect as _qd, queue_view as _qv
-        try:
-            rows = _qv.snapshot(self._queue_config_path(), self._queues_root(),
-                                self._live_path())
-        except Exception:
-            return
-        from . import queue_config as _qc
-        for r in rows:
-            if r["kind"] != "root-dir":
-                continue
-            res = _qc.get_resource(self._queue_config_path(), r["project_id"],
-                                   r["resource"]) or {}
-            path = res.get("path")
-            if not path:
-                continue
-            exclude = set(p.lstrip("/") for p in res.get("sync", {}).get("protect", []))
-            exclude |= {".git"}
-            # Optional generated/served-path exclusions (spec §6). Schema-reserved:
-            # read if present, not yet editable in the v1 form.
-            exclude |= set(p.lstrip("/") for p in res.get("detect_exclude", []))
-            snap = _qd.top_level_snapshot(path, exclude=exclude)
-            prev = self._detect_snaps.get(r["id"])
-            self._detect_snaps[r["id"]] = snap
-            if prev is None:
-                continue
-            # A live root session is a legitimate exclusive-or holder, so its
-            # edits are NOT out-of-lease (spec §5) — treat it as "held" too.
-            held = r["holder"] is not None or r["live_root_block"] is not None
-            if _qd.changed(prev, snap):
-                if not held and r["id"] not in self._detect_warned:
-                    self._detect_warned.add(r["id"])
-                    self.notify(f"⚠ possible out-of-lease access on "
-                                f"{_basename(r['project'])}/{r['resource']}",
-                                severity="warning")
-            else:
-                # Stable poll → re-arm so the NEXT distinct change warns again
-                # (instead of one warning sticking forever while idle).
-                self._detect_warned.discard(r["id"])
-            if held:
-                self._detect_warned.discard(r["id"])  # re-arm once a lease runs too
 
     def _ours_flag(self, sid: str) -> "bool | None":
         """For _glyph: None when not tmux-hosted (no accessibility distinction),
