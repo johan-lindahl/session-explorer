@@ -171,3 +171,121 @@ def test_symlinked_root_path_still_matches(tmp_path):
     lp = register(tmp_path, "S1", wt)
     p = edit_payload(repo / "f.txt", wt)
     assert root_guard.decide(p, cfg, lp) is not None
+
+
+def bash_payload(cmd, cwd, sid="S1"):
+    return {"tool_name": "Bash", "tool_input": {"command": cmd},
+            "cwd": str(cwd), "session_id": sid}
+
+
+# --- Bash: mention = deny ---
+
+def test_bash_mentioning_root_denied_with_rewrite(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"cp build.xml {repo}/build.xml"
+    reason = root_guard.decide(bash_payload(cmd, wt), cfg, lp)
+    assert reason is not None
+    assert f"session-explorer queue-run --resource root -- {cmd}" in reason
+    assert "Read tool" in reason
+
+
+def test_bash_innocent_command_allowed(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(
+        bash_payload("phpunit --testsuite unit", wt), cfg, lp) is None
+
+
+def test_bash_compound_mention_suggests_bash_c_wrap(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"cp a {repo}/a && cp b {repo}/b"
+    reason = root_guard.decide(bash_payload(cmd, wt), cfg, lp)
+    assert reason is not None
+    # Shell-operator commands must be wrapped whole so every part runs leased.
+    assert "queue-run --resource root -- bash -c " in reason
+
+
+def test_bash_realpath_spelling_of_symlinked_config_denied(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    link = tmp_path / "link"
+    os.symlink(repo, link)
+    cfg = str(tmp_path / "qc.json")
+    pid = project_id.project_id(str(repo))
+    queue_config.add_resource(
+        cfg, project_id=pid, display_path=str(link), resource_id="root",
+        resource={"kind": "root-dir", "path": str(link),
+                  "run_in": "root", "acquire": "command", "release": "command",
+                  "command_acquire": "session-explorer queue-overlay in",
+                  "command_release": "session-explorer queue-overlay out"})
+    lp = register(tmp_path, "S1", wt)
+    cmd = f"touch {os.path.realpath(str(repo))}/x"
+    assert root_guard.decide(bash_payload(cmd, wt), cfg, lp) is not None
+
+
+# --- Bash: parent-climb from a managed worktree ---
+
+def test_bash_climb_from_managed_worktree_denied(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    reason = root_guard.decide(
+        bash_payload("cp x ../../../somefile", wt), cfg, lp)
+    assert reason is not None
+
+
+def test_bash_single_parent_step_allowed(tmp_path):
+    # One `..` from a managed worktree only reaches .claude/worktrees — shared
+    # but harmless; the rule keys on `../..` (two-plus steps).
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    assert root_guard.decide(
+        bash_payload("ls ../other-worktree", wt), cfg, lp) is None
+
+
+def test_bash_climb_rule_not_applied_to_external_worktree(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    ext = tmp_path / "ext-wt"
+    _run(["git", "worktree", "add", "-q", str(ext), "-b", "ext"], repo)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", ext)
+    # Climbing from an external worktree does not lexically reach the root.
+    assert root_guard.decide(
+        bash_payload("cat ../../notes.txt", ext), cfg, lp) is None
+
+
+# --- Bash: cd-drift ---
+
+def test_cd_drift_into_root_denied_even_for_innocent_command(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)     # session HOME is the worktree
+    reason = root_guard.decide(
+        bash_payload("npm install", repo), cfg, lp)  # call cwd = root
+    assert reason is not None
+    assert "drifted" in reason.lower() or "working directory" in reason.lower()
+
+
+def test_root_session_running_in_root_is_not_drift(tmp_path):
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", repo)   # session HOME is the root
+    assert root_guard.decide(
+        bash_payload("npm install", repo), cfg, lp) is None
+
+
+def test_registered_worktree_session_escaping_repo_still_guarded(tmp_path):
+    # Session registered in the worktree, but the call cwd wandered to an
+    # unrelated dir: project resolution falls back to the registered home.
+    repo, wt = repo_with_worktree(tmp_path)
+    cfg = shared_root_config(tmp_path, repo)
+    lp = register(tmp_path, "S1", wt)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    cmd = f"cp x {repo}/x"
+    assert root_guard.decide(bash_payload(cmd, outside), cfg, lp) is not None
