@@ -271,17 +271,15 @@ opt-in subscription-usage bar in the tmux status line (`g` toggle, 5-min
 refresh, `SESSION_EXPLORER_PROBE` hook bail-out); reversible worktree cleanup
 (`w` to reclaim a stopped worktree's directory, an offer when a docked worktree
 session exits clean, and `--gc` pruning of idle worktrees — branch + transcript
-always kept, resume rebuilds); and a shared-resource lease engine (see note
-below) with a read-only **Queues pane** (`q`), per-project setup/editor dialogs
-(`s`) with a destructive-`sync` dry-run test panel, new-session worktree
-auto-slug, and a best-effort out-of-lease detection toast; plus agent awareness
-+ a command-guard — opted-in projects inject SessionStart `additionalContext`
-and a fail-open `PreToolUse` Bash hook redirects guarded commands to
-`queue-run`.
+always kept, resume rebuilds); and a shared-resource lease engine (see note below) with a read-only **Queues
+pane** (`q`), a per-project **"Shared installed root"** setup dialog (`q` → `s`),
+new-session worktree auto-slug, plus a location-based `PreToolUse` deny hook
+(`root_guard.py`) that blocks worktree sessions from touching the shared root
+through tools, and a SessionStart usage hint.
 
-> ⚠️ **Experimental.** The shared-resource queue is cooperative/advisory only —
-> it cannot stop an uncoordinated process from touching a resource. Don't rely on
-> it for safety.
+> ⚠️ **Experimental.** The shared-resource queue is enforced for Claude tool
+> calls; non-Claude writers (scripts, the user's own terminal, runtime-computed
+> paths) remain advisory. The dirty-root refusal is the backstop for those.
 
 Tested by pytest + bats in CI on ubuntu + macOS across Python 3.11–3.13.
 

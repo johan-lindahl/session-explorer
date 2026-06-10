@@ -549,8 +549,10 @@ Probe details:
 
 ## Shared-resource lease engine (queue core — Phase 1) — experimental
 
-> **Advisory/fail-open — no safety guarantee.** The queue is cooperative: it
-> cannot prevent an uncoordinated process from touching a resource.
+> **Enforced for Claude tool calls, advisory beyond them.** The deny hook
+> blocks root-touching tool calls from worktree sessions; non-Claude writers
+> (scripts, the user's own terminal, runtime-computed paths) remain out of scope.
+> The dirty-root `transition_guard` is the backstop for those.
 
 `session-explorer queue-run --resource <r> -- <cmd>` serializes a command
 against a shared singleton resource declared per-project. See
@@ -619,16 +621,14 @@ full design; this records the shipped Phase-1 surface.
 
 The TUI surface for the lease engine. It reads the Phase-1 stores directly from
 `tui.py` (the way it already reads `live.poll()`/`index.load()`), never by
-shelling out to `queue-status`. Three new **pure, Textual-free** modules hold
+shelling out to `queue-status`. Two new **pure, Textual-free** modules hold
 the testable logic: `queue_view.snapshot()` (display-ready rows), `ui_state.py`
-(`session-explorer-ui.json` toggle store), `queue_detect.py` (root-dir change
-detector), plus `guard_match.py` (parsed-argv guard matching, shared with the
-Phase-3 hook).
+(`session-explorer-ui.json` toggle store).
 
 - **Keymap change (global, one for everyone):** `q` toggles the **Queues pane**
   (this reassigns quit), `x` is **Exit**, and `s` opens the selected project's
-  **resource list** (hidden binding, gated by `check_action` to a project
-  selection). The only added footer key is `q`; `s`/`a`/`e`/`Del` are
+  **"Shared installed root" dialog** (hidden binding, gated by `check_action` to
+  a project selection). The only added footer key is `q`; `s`/`Del` are
   pane-local. **`x` is *only* Exit — never a remove action** (no double-bound
   destructive key). Don't reintroduce `q`→quit.
 - **Queues pane** (`Static`, `id="queues"`, under the tree) is **read-only** and
@@ -644,65 +644,87 @@ Phase-3 hook).
   takes `index_path`), falling back to a short sid when unnamed/absent — never
   the project/resource label, which is already the row identity and is identical
   for every ticket.
-- **Per-project setup** (`s` → `ResourceListScreen` → `ResourceEditorScreen`):
-  the editor is **template-first** (spec §7 catalog in `QUEUE_TEMPLATES`) and
-  **reflows per `kind`** — a `device`/`port`/`name` hides the path + protect
-  inputs and forces `run_in: worktree`; a `root-dir` shows `protect` and a
-  **read-only** path. The root-dir **`path` is always `project_id.main_root()`**
-  (the repo's main working tree, spec §1), never the selected node (which may be
-  an arbitrary `git worktree add`) and never the editable input. The form is
-  **authoritative on save**: clearing a command/health/`wait_for` field removes
-  the stale value (and reverts a now-empty command strategy to `none`); a
-  non-empty but **unparseable** `wait_for` **refuses** the save rather than
-  silently dropping it. Save validates through `queue_config.add_resource`.
-- **Test panel** (de-risks the destructive `sync`): a **guard tester** (built
-  from the *current* form, no side effects), an **rsync dry-run**
-  (`qsync.dry_run_deletions` with the exact Phase-1 filters) that also surfaces
-  the **exclusive-or check** (live-root block + dirty-root transition guard) and
-  **refuses** when the source equals root (no false "no deletions"), and a
-  **health probe**. Honest: dry-run is fully safe only for `sync`; custom shells
-  can't be simulated.
+- **Per-project setup** (`q` → `s` → `SharedRootScreen`): a single dialog —
+  root path (auto-derived from `project_id.main_root()`, editable), protect list,
+  and on/off. Saving applies the `overlay-installed-root` shape (`kind=root-dir`,
+  `acquire/release=command` → `queue-overlay in`/`out`) implicitly, and migrates
+  an existing `root-dir` resource on save keeping its id. The `kind` machinery and
+  `sync` strategy remain in the schema and engine for back-compat and design room
+  but are no longer a UI surface.
 - **New-session dialog:** no opt-in checkbox (opt-in is `q`→`s`). Checking
   *Create git worktree* auto-fills the worktree name with `worktree_slug(name)`;
   a *manual* edit (detected by **focus**, robust to retyping the same slug)
   stops the auto-sync. When the project has a `root-dir` resource the checkbox
   **defaults ON** and submitting a *plain root* session warns (§5.4).
-- **Out-of-lease detection toast** (`queue_detect`): a **best-effort, debounced,
-  weak** signal — snapshots the root-dir top-level entry set + mtimes between
-  polls and toasts on a change while in **neither** valid exclusive-or state (no
-  holder AND no live root session, which legitimately owns root). Catches
-  creates/deletes/renames, **misses in-place content writes**; excludes the
-  `protect` baseline + `.git` + optional `detect_exclude` (glob-matched, so
-  `.env.*` excludes `.env.local`); re-arms after a stable poll. Never
-  enforcement.
 - **Offline help:** in-dialog `?` (`QueueHelpScreen`) leads with isolate-first
   and the `--delete`/`protect` rule, and shows the guide link as a **plain,
   copyable** `https://…` URL (never relying on OSC-8) wrapped in a best-effort
   click action. Full guide: `docs/queue-guide.md` (added to the release
   checklist so it can't silently diverge).
 
-### Agent awareness & command-guard (Phase 3)
+### Location-based root guard (Phase 3)
 
-**Phase 3 (shipped):** awareness + command-guard. The SessionStart hook injects
-`additionalContext` for opted-in projects (via `session-explorer queue-context`);
-a new `PreToolUse` Bash hook (`hooks/pre-tool-use.sh` → `queue-guard`) denies a
-guarded command and redirects it to `queue-run`. Both fail open. Decision text
-and guard matching are single-sourced in `bin/_pkg/queue_awareness.py` (reusing
-`guard_match`). Accepted v1 blind spot: wrappers (`make`/`npm`) that hide a
-guarded command are not caught — mitigated by the awareness injection, not the
-hook. The `PreToolUse` hook is new install wiring, mirrored across
-`.claude-plugin/plugin.json`, `install.sh`, and `uninstall.py`.
+**Phase 3 (shipped):** location-enforced deny hook + awareness hint. The
+enforcement model inverts the former advisory command-guard: for a Claude session
+in a worktree, the shared installed root is **unreachable through tools** except
+via a single `session-explorer queue-*` command.
 
-The awareness text is framed at **location altitude, not command altitude**: it
-states that the shared root is "leased ground" and that *any* command whose
-working directory or write target is the root — setup, scaffolding, `cp` into
-root, `npm`/`composer install`, builds, "host-side prep" — must run inside a
-lease, with **no host-side exception**, and that the *entire* sequence (not just
-the final build step) must be wrapped in one `queue-run`. This closes the
-observed loophole where a session reads the guidance, narrates it, then
-rationalizes a "host-side setup doesn't need the lease" carve-out. The guidance
-remains harm-reduction, not enforcement; the `overlay-installed-root` dirty-root
-precondition (`exclusive.transition_guard`) is the fail-closed backstop.
+**Decision logic (`root_guard.py`).** Pure module `bin/_pkg/root_guard.py`
+(Textual-free, no argparse) implements `root_guard.decide(payload, config_path,
+live_path) → str | None`. On every `Bash`/`Edit`/`Write`/`NotebookEdit` tool call
+it:
+
+1. Resolves the project from payload `cwd` via `project_id.project_id`; loads the
+   queue config; finds the project's `root-dir` resource → shared root `R`. No
+   `root-dir` resource → `None` (allow).
+2. **Classifies the session** using the live registry (`session-explorer-live.json`)
+   keyed on payload `session_id` (falls back to payload `cwd`):
+   - Registered cwd in `R` but NOT under `R/.claude/worktrees/` → **root session** → allow.
+   - Registered cwd in a worktree → **worktree session** → deny rules apply.
+     If the tool call's `cwd` has cd-drifted inside `R`, that is itself a deny.
+3. **Edit/Write/NotebookEdit:** denies if `file_path` resolves under `R` and
+   outside `R/.claude/worktrees/`.
+4. **Bash:** denies when the command text contains any path alias of `R` as a
+   substring, or climbs `../..` when the worktree is managed (three levels below
+   `R`). A path alias occurrence followed immediately by `/.claude/worktrees/` or
+   a path character (`<root>-backup`) is not a root mention.
+5. **Single allowlist:** a command is allowed despite mentioning `R` iff it
+   parses (shlex) as one simple command (no `&&`/`||`/`;`/`|`/newline/redirect/
+   substitution) whose executable basename is `session-explorer` and first
+   argument starts with `queue-`. Env-assignment prefixes are tolerated.
+6. **Deny reason** contains the exact `queue-run` rewrite — the agent's one-step
+   recovery — and the Read tool pointer for inspection.
+
+**Hook wiring.** `hooks/pre-tool-use.sh` is unchanged; the `queue-guard`
+subcommand internals switch to `root_guard.decide`. The **matcher widens** from
+`Bash` to `Bash|Edit|Write|NotebookEdit` in `.claude-plugin/plugin.json` **and**
+`install.sh`, torn down in `uninstall.py` (`_HOOK_MARKERS`/`_HOOK_EVENTS`) — all
+three kept in sync.
+
+**Plumbing fails open, semantics fail closed.** If the CLI is missing, the
+payload is unparseable, or `root_guard` raises, the hook emits nothing and exits 0
+— a broken hook must never brick every Bash call on the machine. But within
+working plumbing the default for a root mention from a worktree session is deny.
+
+**SessionStart awareness** (`queue_awareness._render_context`, wired via
+`session-start.sh` → `queue-context`) shrinks to a ≤6-line usage hint — a hint
+about a wall, not a plea for cooperation.
+
+**Honest limits:**
+- A Bash command that **computes** the root path at runtime (env var, command
+  substitution, a script that cd's internally) slips past lexical matching. The
+  dirty-root `transition_guard` at the next overlay acquire is the backstop.
+- Non-Claude writers are out of scope by definition.
+- Bash **reads** (`cat <R>/file`) are false-positive denied; the deny reason
+  points at the Read tool.
+- Wrappers (`make`/`npm`) that hide a root-touching command are an accepted blind
+  spot — mitigated by the awareness hint, not the hook.
+
+**Deleted:** `guard_match.py` (the `{exe, sub}` guard vocabulary and
+`guard_match.matches`), `queue_detect.py` (mtime-heuristic out-of-lease toast),
+the template library (`QUEUE_TEMPLATES`), and the generic `ResourceEditorScreen`
+two-level setup surface. Existing configs that carry a `guard` field are tolerated
+and ignored by the config loader.
 
 ## Disabling native auto-cleanup
 

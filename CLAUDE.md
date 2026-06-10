@@ -56,16 +56,7 @@ These are the constraints to preserve — violating any breaks the spec's contra
   first sandbox transition until untracked/ignored would-delete paths are
   classified into `protect`/`allow_delete`. Never reintroduce `--delete-excluded`
   or rsync `P`/`protect` rules. See `SPEC.md` → "Shared-resource lease engine".
-- **Phase-3 awareness/enforcement is advisory and fail-open.** The SessionStart
-  `additionalContext` branch (inside the already-registered `session-start.sh`,
-  via `queue-context`) and the new `PreToolUse` Bash hook (`hooks/pre-tool-use.sh`
-  → `queue-guard`) only *nudge* — both emit nothing and exit 0 on any error, a
-  false deny being worse than a missed guard. Decision text + guard matching live
-  in `bin/_pkg/queue_awareness.py`, reusing `guard_match.matches` (never a
-  substring regex). The `PreToolUse` hook is new wiring: registered in
-  `.claude-plugin/plugin.json` **and** `install.sh`, torn down in `uninstall.py`
-  (`_HOOK_MARKERS`/`_HOOK_EVENTS`) — keep all three in sync. Wrappers that hide a
-  guarded command (`make`/`npm`) are an accepted blind spot.
+- **Phase-3 enforcement is location-based (fail-closed semantics, fail-open plumbing).** For a Claude session in a worktree, the shared installed root is unreachable through tools (`Bash|Edit|Write|NotebookEdit`) except via a single `session-explorer queue-*` command. Decision logic lives in `bin/_pkg/root_guard.py` (pure, Textual-free, unit-tested); `hooks/pre-tool-use.sh` → `queue-guard` is the hook shell, unchanged. Plumbing fails open (a broken hook emits nothing and exits 0); within working plumbing a root mention from a worktree session is denied with the exact `queue-run` rewrite. The **matcher widens** from `Bash` to `Bash|Edit|Write|NotebookEdit` in `.claude-plugin/plugin.json` **and** `install.sh`, torn down in `uninstall.py` (`_HOOK_MARKERS`/`_HOOK_EVENTS`) — keep all three in sync. SessionStart awareness (`queue_awareness._render_context`) shrinks to a ≤6-line usage hint. Deleted: `guard_match.py` (`{exe, sub}` guard vocabulary), `queue_detect.py` (mtime out-of-lease toast). Per-project setup collapses to one `SharedRootScreen` dialog (`q` → `s`); existing `root-dir` resources migrate on save. Experimental claim: enforced for Claude tool calls, advisory beyond them.
 
 ## Commands
 

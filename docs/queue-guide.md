@@ -1,7 +1,8 @@
 # Shared-resource queue — user guide
 
-> ⚠️ **Experimental — cooperative only.** This system coordinates by convention.
-> It cannot prevent an uncoordinated process from touching a shared resource.
+> ⚠️ **Experimental.** Enforced for Claude tool calls; non-Claude writers
+> (scripts, the user's own terminal, runtime-computed paths) remain advisory.
+> The dirty-root refusal at the next overlay acquire is the backstop for those.
 
 > Reach for this only when isolation is genuinely impossible.
 
@@ -49,67 +50,101 @@ never both. While a live Claude session is working in root, worktree leases
 block (visible in the Queues pane). Create worktree sessions, not plain root
 sessions, in shared-root projects — the new-session dialog defaults to this.
 
-## Template catalog
+## Leased ground — the location rule
 
-| Template | Use when | kind · acquire · run_in |
-|---|---|---|
-| Bind-mounted stack, well-known ports | heavy Docker stack on fixed ports | root-dir · sync · root |
-| Browser e2e vs fixed-URL app | Playwright/Cypress at a fixed baseURL | root-dir · sync · root |
-| iOS simulator / xcodebuild | one simulator, global signing/build.db | device · none · worktree |
-| Single shared database | one DB on a fixed socket/port | port · none by default (command once you add a DB-reset shell) · worktree |
-| Root-only credentials / .env | secrets exist only at root | root-dir · sync (protect .env) · root |
-| Single device / HIL / license seat | physically singular resource | device/name · none · worktree |
+For a Claude session **in a worktree**, the shared installed root is
+**unreachable through tools** (`Bash`/`Edit`/`Write`/`NotebookEdit`) except via a
+single `session-explorer queue-*` command. This is enforced by the `PreToolUse`
+hook (`root_guard.py`), not by convention.
 
-## Shared installed app root (overlay tests)
+### What a deny looks like
+
+The hook emits a deny reason with the exact rewrite:
+
+```
+<path> is the shared installed root — it is leased ground, unreachable
+outside a lease. Re-run the ENTIRE command through the queue:
+
+    session-explorer queue-run --resource <rid> -- bash -c '<original command>'
+
+To merely inspect root files, use the Read tool (reads are not blocked).
+session-explorer queue-status shows who holds the lease.
+```
+
+For **compound commands** (`cmd1 && cmd2`, pipelines, `; cmd`), wrap in
+`bash -c '...'` as shown. For commands with newlines, backticks, or `$(…)` that
+cannot be safely quoted in a single argument, put them in a script file and run
+the script through `queue-run`.
+
+### The one door
+
+All legitimate root access goes through `queue-run`:
+
+    session-explorer queue-run --resource <rid> -- <cmd>
+
+The engine: ticket → FIFO wait → exclusive-or check → overlay-in → run in root
+→ overlay-out (engine `finally`) → release. The overlay copies your worktree's
+changed files into root, runs your command, and restores them — even on failure
+or signal.
+
+Root **reads** (`cat`, `head`, file inspection) do not go through `queue-run` —
+use the **Read tool** directly. Only writes are blocked.
+
+### Shared installed app root (overlay tests)
 
 When only your repo's main checkout is a fully installed app (vendor/, generated/,
-DB, env) and worktrees are bare checkouts, tests must run *in* the root. Use the
-"Shared installed app root (overlay tests)" template: it takes a FIFO mutex on the
-root, copies your worktree's changed files in, runs your command, and restores
-them after — even if the command fails. Run tests as:
+DB, env) and worktrees are bare checkouts, tests must run *in* the root. Set up
+the shared installed root once (`q` → `s` in the explorer), then run as:
 
     session-explorer queue-run --resource <name> -- phpunit path/to/Test.php
 
-Guard the tools that need the root (phpunit, phpstan, `bin/magento setup:*`). Do
-NOT guard phpcs / php-cs-fixer — they run fine in a bare worktree and must not be
-serialized. `php bin/magento …` is a known guard blind spot (mitigated by the
-awareness injection).
+### Setting up
 
-## Setting up
+In the explorer, press **q** to open the Queues pane, then **s** to open the
+**"Shared installed root"** dialog for the selected project. Set the root path
+(auto-derived, editable), an optional protect list, and save. The Queues pane
+shows live holders and waiters across every opted-in project.
 
-In the explorer, select a project and press **s**. Add a resource from a
-template, edit its fields, test the guard and dry-run, and save. The Queues pane
-(**q**) shows live holders and waiters across every opted-in project.
+### Limits
 
-## Cooperating as an agent
+- **Runtime-computed paths** (env vars, `$(git rev-parse …)`, scripts that `cd`
+  internally) slip past lexical matching. The next `queue-run` acquire refuses a
+  dirty root (`transition_guard`) with the multi-tenant message.
+- **Non-Claude writers** — other processes, scripts run outside Claude, the user
+  by hand — are out of scope. The dirty-root refusal is the backstop.
+- `Bash` reads of root files are false-positive denied; use the Read tool.
 
-If you are a Claude session working in a project that shares singleton resources,
-the SessionStart hook already told you which resources exist. To cooperate:
+## As a Claude agent in this project
 
-- **The shared root is leased ground.** ANY command whose working directory or
-  write target is the shared root — setup, scaffolding, `cp` into root,
-  `npm install` / `composer install`, builds, anything you'd call "host-side
-  prep" — must run inside a lease. There is no host-side exception, and the
-  *entire* sequence (not just the final build) goes in one `queue-run`.
-- **Never boot your own copy of a shared stack / server / database.** It is
-  already running and warm; a second copy collides on its fixed ports and paths.
-- **Run guarded commands through a lease:**
-  `session-explorer queue-run --resource <name> -- <command>`. queue-run takes
-  the lease (waiting in FIFO order if it's busy), runs the command, and releases.
-- **Don't busy-spin or force a busy resource.** Report your queue position
-  (`session-explorer queue-status`) and wait.
-- **Expect a `sync` lease to overwrite the shared root** with your worktree's
-  files on acquire. Keep secrets / local-only files out of tracked paths.
+If you are a Claude session working in a worktree of a shared-root project, the
+SessionStart hook has already given you a short usage hint. The key points:
+
+- **The shared root is write-blocked at the tool layer.** Any `Bash`/`Edit`/
+  `Write`/`NotebookEdit` call that touches the root is denied with the exact
+  rewrite. You don't need to remember; you can't forget.
+- **The one door:** `session-explorer queue-run --resource <name> -- <cmd>`.
+  queue-run takes the lease (FIFO order if busy), overlays your changed files
+  into root, runs the command, and restores.
+- **To inspect root files** without a lease, use the **Read tool** — reads are
+  not blocked.
+- **Never start your own copy of a shared stack / server / database.** It is
+  already running and warm; a second copy collides on fixed ports and paths.
+- **Don't busy-spin or force a busy resource.** Check your queue position with
+  `session-explorer queue-status` and wait.
+- **Expect an `overlay` lease** to copy your changed files into root on acquire
+  and restore them on release. Keep secrets / local-only files out of tracked
+  paths (add them to the resource's protect list).
 
 ### CLAUDE.md snippet (copy into an opted-in project)
 
 ```markdown
 ## Shared resources
 
-This repo shares singleton resources across worktrees via session-explorer.
-- The shared root is leased ground: ANYTHING touching the root (setup, `cp`,
-  `npm install`, builds — no host-side exception) runs inside one `queue-run`.
+This repo's shared root is leased ground. For a Claude session in a worktree:
+- ALL writes to the root through tools (Bash/Edit/Write) are blocked and will
+  be denied with a rewrite.
+- The only door: `session-explorer queue-run --resource <name> -- <cmd>`.
+- To read root files without a lease, use the Read tool.
 - Do NOT start your own stack/server/db — it is already warm and will collide.
-- Run guarded commands as: `session-explorer queue-run --resource <name> -- <cmd>`.
-- Check who holds a resource with `session-explorer queue-status`.
+- Check who holds a resource: `session-explorer queue-status`.
 ```
