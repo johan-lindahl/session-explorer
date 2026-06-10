@@ -4,8 +4,8 @@ One pure entry point: `session_context(config_path, cwd)` -> the SessionStart
 `additionalContext` text for an opted-in project, or None. Since the
 leased-ground change, this is a USAGE HINT about an enforced wall (the
 PreToolUse root guard denies root-touching tool calls), not a cooperation
-contract — the old `guard_reason` command matching lives on, location-based,
-in `root_guard.py`.
+contract — the old `guard_reason` command matching was replaced by the
+location-based deny logic in `root_guard.py`.
 
 No argparse, no Textual, no stdout. Callers (cli.py) wrap in try/except and
 fail open.

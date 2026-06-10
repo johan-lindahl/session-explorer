@@ -9,7 +9,7 @@ Schema (v1):
          "<resource-id>": {
            "kind": "root-dir"|"path"|"port"|"service"|"device"|"name",
            "path": "/abs/path",                    # data only; for root-dir/path
-           "guard": [{"exe": "docker", "sub": ["compose", "up"]}],
+           "guard": [{"exe": "docker", "sub": ["compose", "up"]}],  # legacy, ignored (root_guard replaced command matching)
            "run_in": "root"|"worktree",
            "acquire": "sync"|"none"|"command",
            "release": "none"|"command",

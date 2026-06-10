@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# PreToolUse hook for session-explorer (Phase 3, spec section 8).
+# PreToolUse hook for session-explorer (leased-ground root guard).
 #
-# Reads a PreToolUse payload on stdin: {tool_name, tool_input:{command}, cwd, ...}.
-# For a guarded Bash command in an opted-in project, delegates to the CLI, which
-# prints a `permissionDecision: deny` + redirect to queue-run. Fails OPEN: on any
-# error (no CLI, bad payload, parse ambiguity) it emits nothing and exits 0, so
-# the tool call proceeds. A false deny is worse than a missed guard.
+# Reads a PreToolUse payload on stdin: {tool_name, tool_input, cwd, session_id,
+# ...} for Bash/Edit/Write/NotebookEdit. Delegates to the CLI's queue-guard,
+# which (via root_guard) denies tool calls that touch the shared installed root
+# from a worktree session, with a queue-run redirect. The PLUMBING here fails
+# OPEN — no CLI, bad payload, or a crashed guard emits nothing and exits 0, so
+# a broken hook never bricks tool calls — while the guard's own matching is
+# deny-by-default on root mentions (semantics fail closed).
 
 set -u
 
