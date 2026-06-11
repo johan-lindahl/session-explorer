@@ -228,6 +228,23 @@ async def test_manual_worktree_edit_persists_even_when_value_equals_slug(index_p
 
 
 @pytest.mark.asyncio
+async def test_new_session_clamps_typed_worktree_name_to_64(index_path):
+    # A hand-typed worktree name longer than claude's 64-char limit must be
+    # clamped at submit, not passed through to a failing `claude -w`.
+    from _pkg.tui import NewSessionScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = NewSessionScreen("proj", name_prefix="", cwd="/x",
+                                  root_is_shared=True)
+        app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#ns-wtname", Input).value = "w" * 80
+        result = screen._result()
+        assert len(result["worktree_name"]) == 64
+
+
+@pytest.mark.asyncio
 async def test_activation_hint_is_labeled_experimental(index_path):
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:

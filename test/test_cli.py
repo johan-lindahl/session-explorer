@@ -274,6 +274,27 @@ def test_queue_run_executes_command_from_cwd(tmp_path):
     assert marker.exists()
 
 
+def test_queue_run_ticket_sid_comes_from_claude_env(tmp_path):
+    """The Bash tool exports CLAUDE_CODE_SESSION_ID; the ticket must carry it
+    (not a random cli-XXXX fallback) so the TUI can show the session's name."""
+    env = _qenv(tmp_path)
+    claude_sid = "b6d655f8-4d77-4a15-a9be-21f967a02417"
+    env["CLAUDE_CODE_SESSION_ID"] = claude_sid
+    env.pop("CLAUDE_SESSION_ID", None)
+    root, pid = _seed_resource(tmp_path, env)
+    from _pkg.queue_run import queue_dir
+    qdir = queue_dir(env["SESSION_EXPLORER_QUEUES_ROOT"], pid, "db")
+    snap = tmp_path / "tickets"
+    r = _sp.run([_BIN, "queue-run", "--resource", "db", "--",
+                 "sh", "-c", f"cp -R {qdir} {snap}"],
+                cwd=str(root), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    tickets = [p for p in snap.iterdir() if p.name.endswith(".json")]
+    assert tickets, "no ticket file captured while the lease was held"
+    assert any(_json.loads(p.read_text())["sid"] == claude_sid
+               for p in tickets), [p.name for p in tickets]
+
+
 def test_queue_run_unknown_resource_uses_refusal_code(tmp_path):
     env = _qenv(tmp_path)
     root = _repo(tmp_path)

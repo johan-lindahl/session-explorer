@@ -308,7 +308,12 @@ def _cmd_queue_run(args) -> int:
               file=sys.stderr)
         return _qr.REFUSAL_EXIT
     import uuid
-    sid = os.environ.get("CLAUDE_SESSION_ID") or f"cli-{uuid.uuid4().hex[:8]}"
+    # Claude Code's Bash tool exports CLAUDE_CODE_SESSION_ID (the older
+    # CLAUDE_SESSION_ID spelling is kept as a fallback); without either we're
+    # a bare shell and a throwaway cli- id is the best identity available.
+    sid = (os.environ.get("CLAUDE_CODE_SESSION_ID")
+           or os.environ.get("CLAUDE_SESSION_ID")
+           or f"cli-{uuid.uuid4().hex[:8]}")
     return _qr.run_lease(
         config_path=_queue_config_path(), queues_root=_queues_root(),
         live_path=_live_path(), project_id=project_id, resource_id=resource_id,

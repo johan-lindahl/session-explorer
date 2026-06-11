@@ -3,6 +3,24 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.3
+
+### Fixed
+- **The Queues pane showed a meaningless `cli-…` id for the lease holder instead
+  of the session's name.** `queue-run` read `CLAUDE_SESSION_ID`, but the env var
+  Claude Code's Bash tool actually exports is `CLAUDE_CODE_SESSION_ID` — so every
+  ticket taken from inside a Claude session carried the random bare-shell
+  fallback sid, which the v1.16.1 name resolution could never match against the
+  index. `queue-run` now reads `CLAUDE_CODE_SESSION_ID` (keeping the old
+  spelling as a legacy fallback); the `cli-…` sid only appears for commands run
+  from a bare shell outside any Claude session.
+- **A worktree name longer than 64 characters failed the new session at
+  launch.** `claude -w` rejects names over 64 chars ("Invalid worktree name:
+  must be 64 characters or fewer"), and neither the auto-slug derived from the
+  session name nor a hand-typed worktree name was capped. `worktree_slug` now
+  truncates to `WORKTREE_NAME_MAX` (64) without leaving a trailing dash, and the
+  new-session dialog clamps a typed name at submit.
+
 ## 1.17.2
 
 ### Fixed

@@ -62,20 +62,26 @@ def _log_line(msg: str) -> None:
         pass
 
 
+# `claude -w` rejects worktree names over 64 chars ("Invalid worktree name:
+# must be 64 characters or fewer"), failing the session at launch.
+WORKTREE_NAME_MAX = 64
+
+
 def worktree_slug(name: str) -> str:
     """Slug a session name into a git-worktree name (spec §9).
 
     Uses the display portion after the last '/'; lowercases; turns spaces,
     underscores and dots into '-'; drops anything outside [a-z0-9-]; collapses
-    and trims dashes. Blank in → blank out (so a temporary unnamed session
-    leaves the worktree name empty, i.e. a bare `-w`).
+    and trims dashes; caps at WORKTREE_NAME_MAX. Blank in → blank out (so a
+    temporary unnamed session leaves the worktree name empty, i.e. a bare
+    `-w`).
     """
     import re
     display = name.rsplit("/", 1)[-1].strip().lower()
     display = re.sub(r"[ _.]+", "-", display)
     display = re.sub(r"[^a-z0-9-]+", "", display)
     display = re.sub(r"-{2,}", "-", display).strip("-")
-    return display
+    return display[:WORKTREE_NAME_MAX].rstrip("-")
 
 
 def _transcript_on_disk(transcript_path: "str | None") -> bool:
@@ -595,7 +601,8 @@ class NewSessionScreen(_PanelScreen):
             "name": self.query_one("#ns-name", Input).value.strip(),
             "cwd": self.query_one("#ns-cwd", Input).value.strip(),
             "worktree": self.query_one("#ns-wt", Checkbox).value,
-            "worktree_name": self.query_one("#ns-wtname", Input).value.strip(),
+            "worktree_name": (self.query_one("#ns-wtname", Input)
+                              .value.strip()[:WORKTREE_NAME_MAX]),
         }
 
 
