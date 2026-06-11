@@ -3,6 +3,40 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.2
+
+### Fixed
+- **Renaming or moving a just-created session crashed the TUI and left the docked
+  claude fullscreen in the explorer window.** The SessionStart hook records
+  `transcript_path` as soon as claude starts, but claude only creates the file
+  (and its `~/.claude/projects/<dir>/`) on the first message — so a session that
+  hadn't received its first message carried a dangling path. `m`/`r` (and the
+  folder-cascade rename) called `append_custom_title` on it, `os.open(O_CREAT)`
+  raised `FileNotFoundError` on the missing project dir, the uncaught exception
+  tore down the Textual app, its pane closed, and the docked claude pane expanded
+  to fill the `explorer` window — every subsequent `/open` reattached (`-A`)
+  straight into that fullscreen claude. The JSONL append now runs only when the
+  transcript file exists on disk (`_transcript_on_disk`); until it materializes
+  the rename lives in the index alone.
+- **Index-only renames could silently revert.** With no transcript to read,
+  `index.set_name` shadowed nothing, so claude's first transcript write
+  (re-emitting its `-n` title) would have reverted the rename on the next
+  `record_session`. `set_name` now shadows the replaced `name_cached` directly —
+  harmless in the normal path (the old name is already among the transcript's
+  titles) and load-bearing for the dangling-path one.
+- **Enter on a stopped session with a dangling `transcript_path` ran
+  `claude --resume` against a nonexistent file.** The stub test now checks the
+  disk ("no messages AND no transcript file"), so such a row starts fresh via
+  `--session-id` like any other stub. A *running* transcript-less session
+  (claude open, first message pending) is never restarted — it docks as before.
+- **A new session that docked and then died within the launch-check window was
+  silenced.** `_check_launch` counted `sid == _docked_sid` as alive without
+  verifying the pane still existed, so a claude that died right after
+  `join-pane` produced no toast, no log line, no `last_launch_error` stamp — and
+  the captured stderr was deleted. The docked arm now requires the pane to
+  actually exist and clears the phantom `_docked_sid` on death, so the failure
+  surfaces with its real error.
+
 ## 1.17.1
 
 ### Changed

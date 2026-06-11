@@ -78,6 +78,17 @@ def worktree_slug(name: str) -> str:
     return display
 
 
+def _transcript_on_disk(transcript_path: "str | None") -> bool:
+    """True when the session's transcript file actually exists.
+
+    The SessionStart hook records `transcript_path` as soon as claude starts,
+    but claude only creates the file (and its project directory) on the first
+    message — so a just-created session carries a dangling path. Any code that
+    writes to or resumes from the transcript must check the disk, not the
+    index field."""
+    return bool(transcript_path) and os.path.exists(transcript_path)
+
+
 QUEUE_EXPERIMENTAL = ("Experimental — enforced for Claude tool calls only; it "
                       "cannot stop a non-Claude process from touching the "
                       "resource. Don't rely on it for safety.")
@@ -1266,13 +1277,21 @@ class SessionExplorerApp(App):
         data = node.data
         sid = data["sid"]
         # A transcript-less stub has no conversation to --resume (its first turn
-        # never happened, e.g. `claude -w` failed at startup). record_session
-        # always writes transcript_path AND message_count together, and a
-        # seed-only stub has neither — so "no transcript and no messages" is the
-        # stub signal. Start it fresh (reusing the seeded id + name) instead.
-        if not data.get("transcript_path") and not data.get("message_count"):
-            self._start_stub_fresh(sid, data)
-            return
+        # never happened, e.g. `claude -w` failed at startup). The stub signal
+        # is "no messages and no transcript file ON DISK": the hook records
+        # transcript_path at SessionStart, but claude only creates the file on
+        # the first message, so the index field alone can be a dangling path
+        # (--resume on it would fail). A running stub (claude open, first
+        # message not yet sent) is NOT restarted — it falls through to the
+        # dock/live handling below; only a stopped stub starts fresh (reusing
+        # the seeded id + name).
+        if (not data.get("message_count")
+                and not _transcript_on_disk(data.get("transcript_path"))):
+            running = _tmux.session_windows() if self._tmux_enabled else []
+            if not (sid == self._docked_sid or sid in running
+                    or sid in self._live_states):
+                self._start_stub_fresh(sid, data)
+                return
         project_path = data.get("project_path")
         # Human label for the tmux status bar (the window name stays the sid).
         _, _display = split_path(data.get("name_cached"))
@@ -1387,10 +1406,13 @@ class SessionExplorerApp(App):
         transcript = data.get("transcript_path")
 
         def after(new_name: str | None) -> None:
-            if not new_name or new_name == current or not transcript:
+            if not new_name or new_name == current:
                 return
-            from .rename import append_custom_title
-            append_custom_title(transcript, session_id=sid, new_name=new_name)
+            # Only append when the transcript file exists on disk — see the
+            # dangling-transcript_path note in action_move.after.
+            if _transcript_on_disk(transcript):
+                from .rename import append_custom_title
+                append_custom_title(transcript, session_id=sid, new_name=new_name)
             # Record the rename as authoritative: a live session re-emits its old
             # in-memory title every turn, so set_name shadows the prior title(s)
             # to stop the next re-emit reverting the name (see index.set_name).
@@ -1422,7 +1444,9 @@ class SessionExplorerApp(App):
 
         def do() -> None:
             for sid, transcript, new_name in affected:
-                if transcript:
+                # Skip transcripts not on disk (dangling hook-recorded paths);
+                # see the dangling-transcript_path note in action_move.after.
+                if _transcript_on_disk(transcript):
                     append_custom_title(transcript, session_id=sid, new_name=new_name)
             # set_name per session so each shadows its own prior title(s); this
             # keeps a live session's re-emit from reverting the cascade rename.
@@ -1472,7 +1496,7 @@ class SessionExplorerApp(App):
         paths = self._folder_paths(project)
 
         def after(target: "str | None") -> None:
-            if target is None or not transcript:
+            if target is None:
                 return
             # Normalise the typed path: drop empty/whitespace segments from
             # `foo//bar`, `/foo/bar`, `foo/bar/`, etc., before persisting or
@@ -1481,8 +1505,16 @@ class SessionExplorerApp(App):
                 target = "/".join(seg for seg in target.split("/") if seg.strip())
             leaf = display or sid[:8]
             new_name = leaf if not target else f"{target}/{leaf}"
-            from .rename import append_custom_title
-            append_custom_title(transcript, session_id=sid, new_name=new_name)
+            # Append the rename event only when the transcript file actually
+            # exists: the hook records transcript_path at SessionStart, but
+            # claude creates the file (and its project dir) on the first
+            # message — writing it ourselves would crash on the missing dir
+            # and pre-empt claude's own file. Until then the rename lives in
+            # the index alone (set_name shadows the replaced name, so claude's
+            # later re-emit of its `-n` title can't revert it).
+            if _transcript_on_disk(transcript):
+                from .rename import append_custom_title
+                append_custom_title(transcript, session_id=sid, new_name=new_name)
             if target:
                 _fs.add(fs_path, project, target)
             # Authoritative rename (shadows the prior title so a live re-emit
@@ -1696,8 +1728,16 @@ class SessionExplorerApp(App):
         window died at startup (claude exited — e.g. `claude -w` failed), read
         the captured stderr, surface it, log it, and stamp the stub so the row
         explains itself. Alive → just clean up the errfile."""
+        docked = sid == self._docked_sid
+        if docked and _tmux.docked_pane(self._self_pane) is None:
+            # Phantom dock: join-pane succeeded but claude died inside the
+            # delay window, closing the pane. Counting the stale _docked_sid
+            # as alive would silence the failure (no toast, no log, errfile
+            # deleted) — exactly the launch the user most needs explained.
+            self._docked_sid = None
+            docked = False
         alive = (sid in _tmux.session_windows()
-                 or sid == self._docked_sid
+                 or docked
                  or sid in self._live_states)
         if not alive:
             raw = ""
