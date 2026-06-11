@@ -8,7 +8,7 @@ import pytest
 # `from textual.widgets import ...` at module top would fail on a clean env with
 # no site-packages Textual. Order matters here.
 from _pkg.tui import SessionExplorerApp
-from textual.widgets import Checkbox, Input, TextArea
+from textual.widgets import Checkbox, Input
 
 
 def _binding_keys(action):
@@ -135,11 +135,32 @@ async def test_s_disabled_without_project_selection(index_path):
         assert app.check_action("resource_setup", ()) is False
 
 
-@pytest.mark.asyncio
-async def test_queue_help_mentions_leased_ground_and_guide(index_path):
-    from _pkg.tui import _queue_help_text, QUEUE_GUIDE_URL
-    text = _queue_help_text()
-    assert "leased ground" in text.lower()
+def test_populated_pane_shows_setup_hint():
+    from _pkg.tui import _render_queue_rows
+    rows = [{"project": "/repo/Gym", "resource": "ios-sim", "kind": "device",
+             "holder": None, "waiting": [], "live_root_block": None}]
+    out = _render_queue_rows(rows)
+    assert "press" in out and "s" in out and "set up sharing" in out
+
+
+def test_long_holder_name_is_truncated():
+    from _pkg.tui import _render_queue_rows, _QUEUE_NAME_MAX
+    long_name = "team/planning/a-very-long-session-title-indeed"
+    rows = [{"project": "/repo/Gym", "resource": "db", "kind": "port",
+             "holder": {"name": long_name, "elapsed": "1d"},
+             "waiting": [], "live_root_block": None}]
+    out = _render_queue_rows(rows)
+    assert long_name not in out                 # not shown in full
+    assert "…" in out
+    # The displayed name fits the cap (ellipsis included).
+    shown = out.split("‹", 1)[1].split("›", 1)[0]
+    assert len(shown) <= _QUEUE_NAME_MAX
+
+
+def test_enable_detail_mentions_overlay_and_guide():
+    from _pkg.tui import _share_enable_detail, QUEUE_GUIDE_URL
+    text = _share_enable_detail()
+    assert "queue-run" in text
     # The full, copyable GitHub URL must be present as plain text.
     assert QUEUE_GUIDE_URL in text
     assert QUEUE_GUIDE_URL.startswith("https://github.com/")
@@ -221,11 +242,12 @@ async def test_activation_hint_is_labeled_experimental(index_path):
 
 
 @pytest.mark.asyncio
-async def test_shared_root_screen_saves_overlay_shape(index_path, tmp_path,
-                                                      monkeypatch):
+async def test_enable_share_writes_overlay_shape(index_path, tmp_path,
+                                                 monkeypatch):
+    # `s` on an unshared project → confirm → writes the overlay shape under the
+    # default `root` id. No protect/sync field is written (command mode).
     import subprocess
     from _pkg import project_id, queue_config
-    from _pkg.tui import SharedRootScreen
     repo = tmp_path / "repo"; repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     pid = project_id.project_id(str(repo))
@@ -234,29 +256,27 @@ async def test_shared_root_screen_saves_overlay_shape(index_path, tmp_path,
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        screen = SharedRootScreen(project_root=str(repo), project_id=pid,
-                                  config_path=qcfg)
-        app.push_screen(screen)
+        app._confirm_share_root(qcfg, pid, str(repo), None)
         await pilot.pause()
-        screen.query_one("#sr-protect", TextArea).text = "/.env\n/certs"
-        screen.action_save()
+        await pilot.press("y")                  # confirm enable
         await pilot.pause()
     res = queue_config.get_resource(qcfg, pid, "root")
     assert res["acquire"] == "command"
     assert res["command_acquire"] == "session-explorer queue-overlay in"
     assert res["command_release"] == "session-explorer queue-overlay out"
-    assert res["sync"]["protect"] == ["/.env", "/certs"]
+    assert "sync" not in res                    # protect box is gone
     assert "guard" not in res
 
 
 @pytest.mark.asyncio
-async def test_shared_root_screen_migrates_existing_root_resource(
+async def test_enable_share_migrates_legacy_root_resource(
         index_path, tmp_path, monkeypatch):
-    # An old sync-shaped root resource (e.g. the misapplied bind-mounted-stack
-    # template) is migrated onto the overlay shape on save, keeping its id.
+    # An old sync-shaped root resource is rewritten onto the overlay shape on
+    # enable, keeping its id (the toggle routes a non-`command` resource to the
+    # share/migrate path, not the stop-sharing path).
     import subprocess
     from _pkg import project_id, queue_config
-    from _pkg.tui import SharedRootScreen
+    from _pkg.tui import _existing_root_resource
     repo = tmp_path / "repo"; repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     pid = project_id.project_id(str(repo))
@@ -270,16 +290,41 @@ async def test_shared_root_screen_migrates_existing_root_resource(
                   "guard": [{"exe": "docker", "sub": ["compose", "up"]}],
                   "sync": {"delete": True, "exclude": ["/.git"],
                            "protect": ["/.git", "/.env"]}})
+    rid, existing = _existing_root_resource(qcfg, pid)
+    assert (rid, existing.get("acquire")) == ("royal-magento-docker", "sync")
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        screen = SharedRootScreen(project_root=str(repo), project_id=pid,
-                                  config_path=qcfg)
-        app.push_screen(screen)
+        app._confirm_share_root(qcfg, pid, str(repo), rid)
         await pilot.pause()
-        screen.action_save()
+        await pilot.press("y")
         await pilot.pause()
     res = queue_config.get_resource(qcfg, pid, "royal-magento-docker")
     assert res["acquire"] == "command"          # migrated off sync
-    assert res["sync"]["protect"] == ["/.git", "/.env"]  # protect carried over
+    assert "sync" not in res and "guard" not in res  # destructive fields dropped
     assert queue_config.get_resource(qcfg, pid, "root") is None  # id kept
+
+
+@pytest.mark.asyncio
+async def test_stop_sharing_removes_resource(index_path, tmp_path, monkeypatch):
+    # `s` on a shared (overlay) project → confirm → removes the resource.
+    import subprocess
+    from _pkg import project_id, queue_config
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    pid = project_id.project_id(str(repo))
+    qcfg = str(tmp_path / "qc.json")
+    monkeypatch.setenv("SESSION_EXPLORER_QUEUE_CONFIG", qcfg)
+    res = dict(__import__("_pkg.tui", fromlist=["SHARED_ROOT_DEFAULTS"])
+               .SHARED_ROOT_DEFAULTS)
+    res["path"] = str(repo)
+    queue_config.add_resource(qcfg, project_id=pid, display_path=str(repo),
+                              resource_id="root", resource=res)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._confirm_unshare_root(qcfg, pid, "root")
+        await pilot.pause()
+        await pilot.press("y")                  # confirm stop sharing
+        await pilot.pause()
+    assert queue_config.get_resource(qcfg, pid, "root") is None

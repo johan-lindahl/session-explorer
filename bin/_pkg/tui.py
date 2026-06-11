@@ -95,11 +95,6 @@ SHARED_ROOT_DEFAULTS = {
 }
 
 
-def parse_path_lines(text: str) -> list:
-    """One path per line; blanks dropped, whitespace trimmed (for protect)."""
-    return [ln.strip() for ln in text.splitlines() if ln.strip()]
-
-
 def _index_path() -> str:
     return os.environ.get("SESSION_EXPLORER_INDEX") or os.path.expanduser(
         "~/.claude/session-explorer-index.json"
@@ -370,6 +365,7 @@ def _help_text() -> str:
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
         key("q", "Toggle the Queues pane (shared-resource leases)"),
+        key("s", "Toggle shared-root queueing for the selected project"),
         key("x", "Exit"),
         "",
         "[dim]Esc, q, h, or Space closes this help.[/]",
@@ -379,23 +375,36 @@ def _help_text() -> str:
     ])
 
 
+# Session names in the narrow Queues pane are truncated so a long title can't
+# line-wrap and break the column alignment.
+_QUEUE_NAME_MAX = 20
+
+
+def _trunc(name: str, limit: int = _QUEUE_NAME_MAX) -> str:
+    return name if len(name) <= limit else name[:limit - 1] + "…"
+
+
 def _render_queue_rows(rows: list) -> str:
     """Render queue_view.snapshot() rows as pane markup (spec §9 mockup)."""
     lines = ["[b]Queues[/] [dim]— experimental[/]"]
     for r in rows:
         name = f"{_basename(r['project'])} / {r['resource']}"
         if r["live_root_block"]:
-            who = r["live_root_block"].get("name", "?")
+            who = _trunc(r["live_root_block"].get("name", "?"))
             lines.append(f"  {name:<26}⛔ held by live session ‹{who}›")
             continue
         if r["holder"]:
             h = r["holder"]
-            lines.append(f"  {name:<26}● holder: ‹{h['name']}› ({h['elapsed']})")
+            lines.append(
+                f"  {name:<26}● holder: ‹{_trunc(h['name'])}› ({h['elapsed']})")
             if r["waiting"]:
-                waits = " · ".join(f"‹{w['name']}› ({w['pos']})" for w in r["waiting"])
+                waits = " · ".join(f"‹{_trunc(w['name'])}› ({w['pos']})"
+                                   for w in r["waiting"])
                 lines.append(f"  {'':<26}waiting: {waits}")
         else:
             lines.append(f"  {name:<26}○ free")
+    lines.append("[dim]press [b]s[/] to set up sharing · "
+                 "guide: docs/queue-guide.md[/]")
     return "\n".join(lines)
 
 
@@ -588,16 +597,17 @@ class ConfirmScreen(_PanelScreen):
         Binding("n", "dismiss(False)", "No", show=False),
     ]
 
-    def __init__(self, prompt: str) -> None:
+    def __init__(self, prompt: str, detail: str = "") -> None:
         super().__init__()
         self._prompt = prompt
+        self._detail = detail
 
     def compose(self) -> ComposeResult:
-        yield Vertical(
-            Label(self._prompt, classes="dialog-title"),
-            Label("y yes · n / esc cancel", classes="dialog-hint"),
-            id="panel",
-        )
+        children = [Label(self._prompt, classes="dialog-title")]
+        if self._detail:
+            children.append(Label(self._detail, classes="dialog-hint"))
+        children.append(Label("y yes · n / esc cancel", classes="dialog-hint"))
+        yield Vertical(*children, id="panel")
 
 
 class QuitScreen(_PanelScreen):
@@ -651,145 +661,33 @@ class NotesScreen(_PanelScreen):
         self.dismiss(self._ta.text)
 
 
-class SharedRootScreen(_PanelScreen):
-    """Single per-project setup dialog (leased-ground spec): share / stop
-    sharing the installed root, with an optional protect list. Saving applies
-    the overlay shape (SHARED_ROOT_DEFAULTS) — including migrating an existing
-    root-dir resource of any older shape onto it, keeping its resource id.
-    Returns True when the config changed."""
-
-    RESOURCE_ID = "root"
-
-    BINDINGS = [
-        Binding("escape", "dismiss(False)", "Close"),
-        Binding("ctrl+s", "save", "Share / save"),
-        Binding("ctrl+d", "stop_sharing", "Stop sharing"),
-        Binding("question_mark", "help", "Help", show=False),
-    ]
-
-    def __init__(self, *, project_root: str, project_id: str,
-                 config_path: str) -> None:
-        super().__init__()
-        self._project_root = project_root
-        self._project_id = project_id
-        self._config_path = config_path
-        from . import project_id as _pid
-        # The shared root is the repo's MAIN working tree, never the selected
-        # node (which can be a worktree shown as its own project).
-        self._root_path = _pid.main_root(project_root) or project_root
-        self._existing_rid: "str | None" = None
-
-    def compose(self) -> ComposeResult:
-        from . import queue_config as _qc
-        resources = _qc.list_resources(self._config_path, self._project_id)
-        rid = next((r for r in sorted(resources)
-                    if resources[r].get("kind") == "root-dir"), None)
-        self._existing_rid = rid
-        existing = resources.get(rid, {}) if rid else {}
-        protect = "\n".join(existing.get("sync", {}).get("protect", []))
-        if rid:
-            status = (f"shared as '{rid}' (acquire: "
-                      f"{existing.get('acquire', '?')})")
-        else:
-            status = "not shared"
-        yield Vertical(
-            Label(f"Shared installed root — {_basename(self._project_root)}",
-                  classes="dialog-title"),
-            Label(QUEUE_EXPERIMENTAL, classes="dialog-hint"),
-            Label(f"Root:   {self._root_path}\nStatus: {status}",
-                  id="sr-status"),
-            Label("Tool calls that touch the root from a worktree session "
-                  "are denied; work runs through "
-                  "`queue-run -- <cmd>` (overlay in → run → restore).",
-                  classes="dialog-hint"),
-            Label("Protect — root-only paths to keep, one per line (optional)",
-                  classes="dialog-hint"),
-            TextArea(protect, id="sr-protect"),
-            Label("", id="sr-error", classes="dialog-hint"),
-            Label("ctrl-s share/save · ctrl-d stop sharing · esc close",
-                  classes="dialog-hint"),
-            id="panel",
-        )
-
-    def action_save(self) -> None:
-        from . import queue_config as _qc
-        res = dict(SHARED_ROOT_DEFAULTS)
-        res["path"] = self._root_path
-        protect = parse_path_lines(self.query_one("#sr-protect", TextArea).text)
-        if protect:
-            # Stored under sync.protect for schema continuity; the overlay
-            # acquire never rsyncs, so this is data for future use + display.
-            res["sync"] = {"delete": False, "exclude": [], "protect": protect}
-        try:
-            _qc.add_resource(
-                self._config_path, project_id=self._project_id,
-                display_path=self._project_root,
-                resource_id=self._existing_rid or self.RESOURCE_ID,
-                resource=res)
-        except ValueError as e:
-            self.query_one("#sr-error", Label).update(f"[red]{e}[/]")
-            return
-        self.dismiss(True)
-
-    def action_stop_sharing(self) -> None:
-        from . import queue_config as _qc
-        rid = self._existing_rid
-        if not rid:
-            self.dismiss(False)
-            return
-
-        def after(ok: bool) -> None:
-            if ok:
-                _qc.remove_resource(self._config_path, self._project_id, rid)
-                self.dismiss(True)
-
-        self.app.push_screen(
-            ConfirmScreen(f"Stop sharing the installed root ('{rid}')? "
-                          "(queue config only; no files are touched)"), after)
-
-    def action_help(self) -> None:
-        # QueueHelpScreen's only remaining entry point now that the resource
-        # list is gone — keep `?` reachable from the setup dialog.
-        self.app.push_screen(QueueHelpScreen())
-
-
 QUEUE_GUIDE_URL = ("https://github.com/johan-lindahl/session-explorer"
                    "/blob/main/docs/queue-guide.md")
 
-
-def _queue_help_text() -> str:
-    return "\n".join([
-        f"[b]Shared installed root — quick help[/]  [dim]— {QUEUE_EXPERIMENTAL}[/]",
-        "",
-        "[b]The model.[/] One project root holds the installed app; worktrees",
-        "hold code changes. The root is [b]leased ground[/]: tool calls that",
-        "touch it from a worktree session are denied by a PreToolUse hook.",
-        "",
-        "[b]The one door.[/] `session-explorer queue-run --resource <id> -- <cmd>`",
-        "takes the FIFO lease, overlays your changed files into the root, runs",
-        "your command there, restores the overlay, and releases — on success,",
-        "failure, or interrupt. `queue-status` shows the holder and queue.",
-        "",
-        "[b]Limits.[/] Non-Claude processes and commands that compute the root",
-        "path at runtime aren't blocked — the dirty-root refusal at the next",
-        "lease is the backstop. A live Claude session working IN the root",
-        "blocks worktree leases until it ends (and vice versa is fine).",
-        "",
-        f"Full guide: {QUEUE_GUIDE_URL}",
-    ])
+# The resource id a fresh share is written under. An existing root-dir resource
+# keeps its own id on re-share (so a legacy resource migrates in place).
+SHARED_ROOT_RESOURCE_ID = "root"
 
 
-class QueueHelpScreen(_PanelScreen):
-    """Offline shared-resource help. esc closes."""
+def _existing_root_resource(config_path: str, project_id: str) -> tuple:
+    """The project's `root-dir` resource as `(rid, resource)`, or `(None, {})`.
 
-    BINDINGS = [Binding("escape", "dismiss(None)", "Close")]
+    There is at most one in practice; the lowest-sorted id wins if several."""
+    from . import queue_config as _qc
+    resources = _qc.list_resources(config_path, project_id)
+    rid = next((r for r in sorted(resources)
+                if resources[r].get("kind") == "root-dir"), None)
+    return rid, (resources.get(rid, {}) if rid else {})
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static(_queue_help_text()),
-            Label("esc close", classes="dialog-hint"),
-            id="panel",
-        )
+
+def _share_enable_detail() -> str:
+    """The explainer shown in the enable-sharing confirm dialog — what enabling
+    does, the experimental caveat, and the copyable guide URL."""
+    return ("Worktree sessions are then blocked from touching the installed "
+            "root directly; their work runs through `queue-run -- <cmd>` "
+            "(overlay in → run → restore).\n"
+            f"{QUEUE_EXPERIMENTAL}\n"
+            f"Guide: {QUEUE_GUIDE_URL}")
 
 
 class RescanScreen(_PanelScreen):
@@ -1642,6 +1540,11 @@ class SessionExplorerApp(App):
         self.push_screen(NewFolderScreen(project, prefix), after)
 
     def action_resource_setup(self) -> None:
+        """Toggle shared-root queueing for the selected project (leased-ground
+        spec). No parameters to set, so this is a confirm, not a dialog: a
+        current overlay resource → stop sharing; otherwise → enable (writing the
+        overlay shape, which also migrates a legacy non-overlay resource in
+        place, keeping its id)."""
         from . import project_id as _pid
         project, _ = self._project_and_prefix_for_cursor()
         if not project:
@@ -1651,8 +1554,55 @@ class SessionExplorerApp(App):
             self.notify("This project is not a git repository — shared resources "
                         "need a repo.", severity="warning")
             return
-        self.push_screen(SharedRootScreen(project_root=project, project_id=pid,
-                                          config_path=self._queue_config_path()))
+        cfg = self._queue_config_path()
+        rid, existing = _existing_root_resource(cfg, pid)
+        if rid and existing.get("acquire") == "command":
+            self._confirm_unshare_root(cfg, pid, rid)
+        else:
+            self._confirm_share_root(cfg, pid, project, rid)
+
+    def _confirm_share_root(self, cfg: str, pid: str, project: str,
+                            rid: "str | None") -> None:
+        from . import project_id as _pid
+        # The shared root is the repo's MAIN working tree, never the selected
+        # node (which can be a worktree shown as its own project).
+        root_path = _pid.main_root(project) or project
+        name = _basename(project)
+        prompt = (f"Re-save shared root '{rid}' as the safe overlay shape?"
+                  if rid else f"Enable shared-root queueing for {name}?")
+
+        def after(ok: bool) -> None:
+            if not ok:
+                return
+            from . import queue_config as _qc
+            res = dict(SHARED_ROOT_DEFAULTS)
+            res["path"] = root_path
+            try:
+                _qc.add_resource(cfg, project_id=pid, display_path=project,
+                                 resource_id=rid or SHARED_ROOT_RESOURCE_ID,
+                                 resource=res)
+            except ValueError as e:
+                self.notify(str(e), severity="error")
+                return
+            self.notify(f"Sharing the installed root of {name}.")
+            self._render_queues()
+
+        self.push_screen(ConfirmScreen(prompt, detail=_share_enable_detail()),
+                         after)
+
+    def _confirm_unshare_root(self, cfg: str, pid: str, rid: str) -> None:
+        def after(ok: bool) -> None:
+            if not ok:
+                return
+            from . import queue_config as _qc
+            _qc.remove_resource(cfg, pid, rid)
+            self.notify(f"Stopped sharing the installed root ('{rid}').")
+            self._render_queues()
+
+        self.push_screen(
+            ConfirmScreen(f"Stop sharing the installed root ('{rid}')?",
+                          detail="Queue config only — no files are touched."),
+            after)
 
     def _project_root_is_shared(self, cwd: str) -> bool:
         """True if the project containing `cwd` has a `root-dir` shared resource
