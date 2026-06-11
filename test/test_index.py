@@ -756,3 +756,28 @@ def test_record_session_sets_model_and_window_pct(tmp_path):
     assert s["tokens_estimate"] == 620000
     # 620000 / 1_000_000 = 62%, not pegged at 100 (which 200K would give).
     assert s["tokens_window_pct"] == 62
+
+
+def test_set_name_shadows_replaced_name_when_transcript_missing(tmp_path):
+    """When the transcript file hasn't materialized yet (hook recorded the
+    path at SessionStart, claude writes the file on the first message),
+    set_name can read no titles from it — so it must shadow the name it is
+    replacing directly, or claude's later re-emit of its -n title reverts
+    the rename."""
+    idx_path = str(tmp_path / "index.json")
+    index.seed_new_session(idx_path, "S9", "feature/x", str(tmp_path))
+    dangling = str(tmp_path / "no-such-dir" / "S9.jsonl")
+    index.set_name(idx_path, "S9", "user-story/feature-x", dangling)
+    row = index.load(idx_path)["sessions"]["S9"]
+    assert row["name_cached"] == "user-story/feature-x"
+    assert "feature/x" in row.get("name_shadows", [])
+
+
+def test_set_name_shadows_replaced_name_without_transcript(tmp_path):
+    """Same contract when there is no transcript_path at all (seeded stub)."""
+    idx_path = str(tmp_path / "index.json")
+    index.seed_new_session(idx_path, "S9", "feature/x", str(tmp_path))
+    index.set_name(idx_path, "S9", "renamed")
+    row = index.load(idx_path)["sessions"]["S9"]
+    assert row["name_cached"] == "renamed"
+    assert "feature/x" in row.get("name_shadows", [])

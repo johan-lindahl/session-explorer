@@ -2868,3 +2868,145 @@ async def test_check_launch_alive_window_no_stamp(tmp_path, monkeypatch):
     assert "last_launch_error" not in row   # alive → not stamped
     assert not notes                        # no toast
     assert not os.path.exists(err)          # errfile still cleaned up
+
+
+# ---------------------------------------------------------------------------
+# Dangling transcript_path: the hook records the path at SessionStart, but
+# claude only creates the file (and its project dir) on the first message.
+# Until then the path is dangling and rename/move/resume must not trust it.
+# ---------------------------------------------------------------------------
+
+def _dangling_session(tmp_path, index_path, sid="sid-1"):
+    """Point sid's transcript_path into a directory that doesn't exist."""
+    data = json.load(open(index_path))
+    dangling = str(tmp_path / "no-such-project-dir" / f"{sid}.jsonl")
+    data["sessions"][sid]["transcript_path"] = dangling
+    data["sessions"][sid]["message_count"] = 0
+    json.dump(data, open(index_path, "w"))
+    return dangling
+
+
+async def test_move_with_dangling_transcript_moves_without_crash(index_path, tmp_path):
+    """Moving a session whose transcript file doesn't exist yet must not
+    crash the app (FileNotFoundError in append_custom_title) and must still
+    persist the move in the index — without creating the JSONL ourselves."""
+    dangling = _dangling_session(tmp_path, index_path)
+
+    from _pkg.tui import SessionExplorerApp, MoveScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        leaf = _find(app._tree.root, "sprint14")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        await pilot.press("m"); await pilot.pause()
+        assert isinstance(app.screen, MoveScreen)
+        app.screen.dismiss("release")
+        await pilot.pause()
+
+    row = json.load(open(index_path))["sessions"]["sid-1"]
+    assert row["name_cached"] == "release/sprint14"
+    # The old name must be shadowed so claude's later re-emit of its -n title
+    # (the first transcript write) cannot revert the move.
+    assert "planning/sprint14" in row.get("name_shadows", [])
+    # We never create claude's transcript for it.
+    assert not os.path.exists(dangling)
+
+
+async def test_rename_with_dangling_transcript_renames_without_crash(index_path, tmp_path):
+    dangling = _dangling_session(tmp_path, index_path)
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        leaf = _find(app._tree.root, "sprint14")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        await pilot.press("r"); await pilot.pause()
+        for _ in range(40):                      # clear the prefilled name
+            await pilot.press("backspace")
+        for ch in "renamed":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    row = json.load(open(index_path))["sessions"]["sid-1"]
+    assert row["name_cached"] == "renamed"
+    assert "planning/sprint14" in row.get("name_shadows", [])
+    assert not os.path.exists(dangling)
+
+
+async def test_relabel_folder_with_dangling_transcript_no_crash(index_path, tmp_path):
+    """The folder-cascade rename hits append_custom_title per session; a
+    dangling transcript among them must not crash the cascade."""
+    _dangling_session(tmp_path, index_path)
+
+    from _pkg.tui import SessionExplorerApp, ConfirmScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        folder = _find(app._tree.root, "planning")
+        app._tree.select_node(folder); app._tree.cursor_line = folder.line
+        await pilot.pause()
+        app._relabel_folder("/tmp/demo-project", ["planning"], ["renamed"],
+                            verb="Rename")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        app.screen.dismiss(True)
+        await pilot.pause()
+
+    row = json.load(open(index_path))["sessions"]["sid-1"]
+    assert row["name_cached"] == "renamed/sprint14"
+
+
+async def test_resume_with_dangling_transcript_starts_fresh(index_path, tmp_path):
+    """Enter on a stopped session whose transcript never materialized must
+    start it fresh (like a stub), not `claude --resume` a nonexistent file."""
+    _dangling_session(tmp_path, index_path)
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    captured = {}
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._tmux_enabled = True
+        app._do_new_session = lambda sid, cwd, name, wt, label: captured.update(
+            sid=sid, name=name)
+        leaf = _find(app._tree.root, "sprint14")
+        app._tree.select_node(leaf); app._tree.cursor_line = leaf.line
+        await pilot.pause()
+        app.action_resume()
+        await pilot.pause()
+    assert captured.get("sid") == "sid-1"
+    assert captured.get("name") == "planning/sprint14"
+
+
+@pytest.mark.asyncio
+async def test_check_launch_phantom_dock_is_dead(tmp_path, monkeypatch):
+    """A new session that docks and then dies leaves _docked_sid pointing at a
+    pane that no longer exists. _check_launch must not count that phantom as
+    alive — it must surface the failure and clear the phantom dock."""
+    from _pkg import index, tui as tuimod
+    from _pkg.tui import SessionExplorerApp, _launch_err_path
+    idx = str(tmp_path / "index.json")
+    index.seed_new_session(idx, "S9", "feature/x", str(tmp_path))
+    err = _launch_err_path("S9")
+    with open(err, "w") as f:
+        f.write("Error creating worktree: worktree \"x\" already exists\n")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])    # window gone
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda *a, **k: None)  # pane gone
+    app = SessionExplorerApp(index_path=idx)
+    notes = []
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "S9"          # phantom: join succeeded, claude died
+        app._live_states = {}
+        app.notify = lambda *a, **k: notes.append((a, k))
+        app._check_launch("S9", err, "feature/x")
+        await pilot.pause()
+        assert app._docked_sid is None  # phantom cleared
+    row = index.load(idx)["sessions"]["S9"]
+    assert "already exists" in row["last_launch_error"]
+    assert notes, "expected a warning toast"
+    assert not os.path.exists(err)

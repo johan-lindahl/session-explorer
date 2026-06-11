@@ -280,6 +280,14 @@ def set_name(index_path: str, session_id: str, new_name: str,
     def mutator(data: dict) -> dict:
         entry = data["sessions"].setdefault(session_id, {})
         shadows = set(entry.get("name_shadows") or []) | titles
+        # Shadow the name being replaced even when the transcript yields no
+        # titles — the hook records transcript_path at SessionStart, but claude
+        # only writes the file on the first message, so a just-created session
+        # has a dangling path and `titles` is empty. Without this, claude's
+        # first write (re-emitting its `-n` title) would revert the rename.
+        prev = entry.get("name_cached")
+        if prev:
+            shadows.add(prev)
         shadows.discard(new_name)
         if shadows:
             entry["name_shadows"] = sorted(shadows)
