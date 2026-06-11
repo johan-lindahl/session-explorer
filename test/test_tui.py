@@ -2223,6 +2223,10 @@ async def test_dock_helper_swaps_docked_session(index_path, monkeypatch):
                         lambda sid, focus=True: calls.append(("dock", sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "select_pane",
                         lambda pane: calls.append(("select", pane)) or 0)
+    # This test targets _dock itself; neutralize the debounced cursor-follow
+    # sync, which otherwise fires ~0.2s after mount (cursor on root → undock)
+    # and clobbers _docked_sid/calls on a slow CI runner.
+    monkeypatch.setattr(SessionExplorerApp, "_sync_dock_to_cursor", lambda self: None)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -2242,6 +2246,8 @@ async def test_dock_helper_refocuses_when_same_session(index_path, monkeypatch):
                         lambda pane: calls.append(("select", pane)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.append(("dock", sid)) or 0)
+    # Neutralize the debounced cursor-follow sync (see the swap test above).
+    monkeypatch.setattr(SessionExplorerApp, "_sync_dock_to_cursor", lambda self: None)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
