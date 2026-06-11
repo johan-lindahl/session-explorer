@@ -3021,3 +3021,80 @@ async def test_check_launch_phantom_dock_is_dead(tmp_path, monkeypatch):
     assert "already exists" in row["last_launch_error"]
     assert notes, "expected a warning toast"
     assert not os.path.exists(err)
+
+
+# ---------------------------------------------------------------------------
+# Crash resilience: every TUI death must leave a traceback in the log, and the
+# periodic workers must log-and-survive instead of exiting the app
+# (@work defaults to exit_on_error=True). Three explorer crashes shipped no
+# traceback because stderr died with the tmux pane.
+# ---------------------------------------------------------------------------
+
+def test_run_app_logs_crash_traceback(monkeypatch):
+    from _pkg import tui as tuimod
+    logged = []
+    monkeypatch.setattr(tuimod, "_log_line", lambda m: logged.append(m))
+
+    class Boom:
+        def run(self):
+            raise ValueError("kaboom in message pump")
+
+    with pytest.raises(ValueError):
+        tuimod._run_app(Boom())
+    assert logged, "crash must be logged"
+    assert "ValueError" in logged[0] and "kaboom" in logged[0]
+    assert "Traceback" in logged[0]
+
+
+async def test_live_meta_tick_survives_refresh_error(index_path, monkeypatch):
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    logged = []
+    monkeypatch.setattr(tuimod, "_log_line", lambda m: logged.append(m))
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(
+            app, "_do_live_metadata_refresh",
+            lambda: (_ for _ in ()).throw(RuntimeError("transcript race")))
+        app._live_meta_tick()          # must not raise (worker would kill app)
+        await pilot.pause()
+    assert logged and "transcript race" in logged[0]
+
+
+async def test_usage_tick_survives_scrape_error(index_path, monkeypatch):
+    from _pkg import tui as tuimod, usage as usagemod
+    from _pkg.tui import SessionExplorerApp
+    logged = []
+    monkeypatch.setattr(tuimod, "_log_line", lambda m: logged.append(m))
+    monkeypatch.setattr(
+        usagemod, "scrape_usage",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("tmux went away")))
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._usage_tick()              # must not raise (worker would kill app)
+        await pilot.pause()
+    assert logged and "tmux went away" in logged[0]
+
+
+async def test_mount_marks_own_pane_remain_on_exit(index_path, monkeypatch):
+    """In tmux mode the TUI sets remain-on-exit=failed on its own pane at
+    mount, so a crash preserves the pane instead of handing the window to the
+    docked claude."""
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    calls = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setenv("TMUX_PANE", "%3")
+    monkeypatch.setattr(tuimod._tmux, "set_remain_on_exit",
+                        lambda pane: calls.append(pane) or 0)
+    # Neutralize the other tmux touchpoints on_mount/_poll_live reach for.
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "list_panes", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda *a, **k: None)
+    monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda *a: 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+    assert calls == ["%3"]

@@ -289,3 +289,13 @@ def test_build_set_status_left_escapes_percent():
 def test_build_config_sets_status_left_length():
     cfg = tmux.build_config()
     assert "set -g status-left-length 40" in cfg
+
+
+def test_build_set_remain_on_exit_failed():
+    """The TUI marks its own pane remain-on-exit=failed so a crash preserves
+    the pane (traceback on screen) instead of letting the docked claude pane
+    swallow the explorer window. 'failed' (tmux >= 3.2) keeps the pane only on
+    a non-zero exit, so a clean quit still closes it."""
+    argv = tmux.build_set_remain_on_exit("%7")
+    assert argv == ["tmux", "-L", "session-explorer", "set-option", "-p",
+                    "-t", "%7", "remain-on-exit", "failed"]
