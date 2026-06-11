@@ -1,5 +1,4 @@
-from _pkg.tui import (SHARED_ROOT_DEFAULTS, QUEUE_EXPERIMENTAL,
-                      parse_path_lines)
+from _pkg.tui import SHARED_ROOT_DEFAULTS, QUEUE_EXPERIMENTAL
 
 
 def test_shared_root_defaults_are_the_overlay_shape():
@@ -26,13 +25,8 @@ def test_shared_root_defaults_pass_config_validation(tmp_path):
     assert queue_config.get_resource(cfg, "p1", "root")["path"] == "/repo"
 
 
-def test_parse_path_lines():
-    assert parse_path_lines("/.git\n  /.env  \n\n/certs") == [
-        "/.git", "/.env", "/certs"]
-
-
 def test_experimental_labels():
-    from _pkg.tui import _render_queue_rows, _queue_help_text
+    from _pkg.tui import _render_queue_rows, _share_enable_detail
     assert "enforced for claude tool calls" in QUEUE_EXPERIMENTAL.lower()
     assert "experimental" in _render_queue_rows([]).lower()  # pane header tag
-    assert QUEUE_EXPERIMENTAL in _queue_help_text()          # full caveat
+    assert QUEUE_EXPERIMENTAL in _share_enable_detail()      # full caveat

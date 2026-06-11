@@ -3,6 +3,36 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.1
+
+### Changed
+- **Shared-root setup is now a parameterless `s` toggle, not a dialog.** Once the
+  `protect` list left the UI (it only ever fed the engine's `sync` strategy, which
+  is no longer a UI surface — setup always writes the `command`/overlay shape),
+  "share" had nothing left to configure. `s` on a selected project now pushes a
+  `y`/`n` `ConfirmScreen`: a currently-shared (overlay) root → **stop sharing**;
+  otherwise → **enable** (the confirm's detail line carries the explainer + the
+  copyable guide URL). Enabling over a legacy non-overlay `root-dir` resource
+  migrates it in place, keeping its id and dropping the old destructive
+  `sync`/`guard` fields. `s` is also now listed on the `h` help screen.
+
+### Fixed
+- **`ctrl+d` "stop sharing" was dead in the old setup dialog.** Its only focusable
+  widget was the Protect `TextArea`, and vendored Textual binds `ctrl+d` to
+  forward-delete — so the text box swallowed the key before the screen's binding
+  could fire, and with no other focusable widget it could never reach it. Removing
+  the (inert) Protect box removes the `TextArea`, and the confirm-toggle's
+  `y`/`n`/`esc` keys are unobstructed.
+- **Long holder/waiter session names line-wrapped in the Queues pane**, breaking
+  column alignment. Names are now truncated to 20 chars with an ellipsis. The
+  populated pane also gains a dim footer hint advertising `s` (set up sharing) +
+  the guide path, so the shortcut is discoverable once a resource is configured
+  (previously only the empty-state showed it).
+
+### Removed
+- `SharedRootScreen`, `QueueHelpScreen`, `_queue_help_text`, and `parse_path_lines`
+  (the Protect parser) — folded into the confirm toggle and `_share_enable_detail()`.
+
 ## 1.17.0
 
 ### Added

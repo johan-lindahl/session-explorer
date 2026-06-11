@@ -98,11 +98,12 @@ the shared installed root once (`q` → `s` in the explorer), then run as:
 
 ### Setting up
 
-In the explorer, press **q** to open the Queues pane, then **s** to open the
-**"Shared installed root"** dialog for the selected project. The root path is
-auto-derived from the repo's main working tree and shown read-only; only the
-protect list is editable. Save with ctrl-s. The Queues pane shows live holders
-and waiters across every opted-in project.
+In the explorer, select the project and press **s**. Sharing has nothing to
+configure — the root is the repo's main working tree and the overlay shape is
+implicit — so `s` is a confirm toggle: press it once to **enable** shared-root
+queueing (a `y`/`n` confirm explains what it does and links the guide), and
+again later to **stop sharing**. The Queues pane (**q**) shows live holders and
+waiters across every opted-in project, and its footer repeats the `s` hint.
 
 ### Limits
 
