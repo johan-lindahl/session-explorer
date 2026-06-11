@@ -142,9 +142,21 @@ from _pkg import launcher as _launcher
 def test_wrap_in_tmux_builds_dedicated_session():
     cmd = _launcher.wrap_in_tmux("exec /abs/session-explorer tui",
                                  config_path="/tmp/se.conf")
-    assert cmd.startswith("tmux -L session-explorer")
-    assert "-f /tmp/se.conf" in cmd
+    # The attach command itself (the respawn-dead-pane prefix may precede it).
+    assert "tmux -L session-explorer -f /tmp/se.conf new-session" in cmd
     assert "new-session -A -s explorer -n explorer" in cmd
     assert "exec /abs/session-explorer tui" in cmd
     # The explorer marks itself so the TUI knows it is tmux-hosted:
     assert "SESSION_EXPLORER_TMUX=1" in cmd
+
+
+def test_wrap_in_tmux_respawns_dead_explorer_pane():
+    """A crashed TUI leaves a dead pane (remain-on-exit=failed); re-/open must
+    revive it via respawn-pane before attaching, or the user reattaches to a
+    dead explorer."""
+    cmd = _launcher.wrap_in_tmux("exec /abs/session-explorer tui",
+                                 config_path="/tmp/se.conf")
+    respawn, attach = cmd.split("new-session", 1)
+    assert "respawn-pane" in respawn          # heal BEFORE attaching
+    assert "pane_dead" in respawn             # only dead panes are respawned
+    assert "-A -s explorer" in attach         # attach still intact

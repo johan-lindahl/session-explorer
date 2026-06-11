@@ -3,6 +3,29 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.4
+
+### Fixed
+- **A TUI crash left no trace and handed the explorer window to the docked
+  claude.** The TUI's stderr is its tmux pane; when the process died the pane
+  closed, the docked claude expanded to fill the `explorer` window, and every
+  re-`/open` (`new-session -A`) reattached straight into a fullscreen claude —
+  with zero traceback anywhere (three production crashes shipped no evidence).
+  Three independent layers fix this: `_run_app` appends every crash's full
+  traceback to `~/.claude/session-explorer.log` before re-raising; the TUI
+  marks its own pane `remain-on-exit failed` at mount (tmux ≥ 3.2,
+  best-effort), so a crash keeps the dead pane — traceback on screen, window
+  intact — while a clean `x` exit still closes it; and the launcher respawns
+  any dead pane in the explorer window before attaching, so the next `/open`
+  heals a crashed explorer in place.
+- **One failed periodic tick could kill the whole app.** The live-metadata and
+  usage workers run with Textual's `exit_on_error=True` default, and
+  `call_from_thread` re-raises UI-side exceptions in the worker — so a single
+  exception while refreshing live rows or applying the usage bar (every 2s /
+  5min) silently exited the explorer. Both workers now run guarded bodies
+  (`_live_meta_tick` / `_usage_tick`) that log the traceback and skip the
+  tick; the next poll retries.
+
 ## 1.17.3
 
 ### Fixed

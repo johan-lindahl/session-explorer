@@ -92,6 +92,16 @@ def build_set_label(sid: str, label: str) -> List[str]:
     return build_base() + ["set-option", "-w", "-t", sid, "@se_label", label]
 
 
+def build_set_remain_on_exit(pane_id: str) -> List[str]:
+    """set-option argv marking `pane_id` remain-on-exit=failed: a pane whose
+    process exits non-zero (a TUI crash) is kept on screen — traceback visible,
+    window not ceded to the docked claude pane — while a clean exit still
+    closes it. 'failed' needs tmux >= 3.2; on older tmux the call fails and the
+    caller ignores it (pre-3.2 behaviour is unchanged)."""
+    return build_base() + ["set-option", "-p", "-t", pane_id,
+                           "remain-on-exit", "failed"]
+
+
 def build_select_window(target: str) -> List[str]:
     return build_base() + ["select-window", "-t", target]
 
@@ -299,6 +309,10 @@ def capture_plain(target: str) -> str:
 
 def set_status_left(text: str) -> int:
     return _call(build_set_status_left(text))
+
+
+def set_remain_on_exit(pane_id: str) -> int:
+    return _call(build_set_remain_on_exit(pane_id))
 
 
 def list_windows() -> List[str]:

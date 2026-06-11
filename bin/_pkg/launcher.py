@@ -140,7 +140,22 @@ def wrap_in_tmux(target_command: str, config_path: str,
     `-A` attaches to an existing `explorer` session (so a re-`/open` reattaches
     to still-running sessions); `-n explorer` names window 0 so list-windows can
     distinguish it from session windows. SESSION_EXPLORER_TMUX=1 tells the TUI it
-    is tmux-hosted and may use the interaction layer."""
+    is tmux-hosted and may use the interaction layer.
+
+    A crashed TUI leaves a dead pane in the explorer window (its pane is
+    remain-on-exit=failed, set at mount so the traceback stays on screen), so
+    the attach is preceded by a best-effort respawn of any dead pane there —
+    otherwise a re-`/open` would reattach to a dead explorer. Only the TUI pane
+    can be dead (claude panes keep the default remain-on-exit=off), and
+    respawn-pane reruns the pane's original command, i.e. the TUI itself."""
     inner = f"SESSION_EXPLORER_TMUX=1 {target_command}"
-    return (f"tmux -L {socket} -f {shlex.quote(config_path)} "
-            f"new-session -A -s explorer -n explorer {shlex.quote(inner)}")
+    respawn = (
+        f"for p in $(tmux -L {socket} list-panes -t explorer:explorer "
+        f"-F '#{{pane_id}} #{{pane_dead}}' 2>/dev/null "
+        f"| awk '$2==1{{print $1}}'); do "
+        # $p unquoted on purpose: pane ids (%12) have no whitespace, and the
+        # whole command is interpolated raw into an AppleScript double-quoted
+        # string on macOS (build_macos_command), where a literal '"' breaks it.
+        f"tmux -L {socket} respawn-pane -t $p; done; ")
+    return respawn + (f"tmux -L {socket} -f {shlex.quote(config_path)} "
+                      f"new-session -A -s explorer -n explorer {shlex.quote(inner)}")

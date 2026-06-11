@@ -943,6 +943,16 @@ class SessionExplorerApp(App):
 
     def on_mount(self) -> None:
         self.title = "session-explorer"
+        # Mark our own pane remain-on-exit=failed (tmux >= 3.2; best-effort):
+        # a crashed TUI then leaves a dead pane with the traceback on screen
+        # instead of closing — which handed the window to the docked claude
+        # pane, the "/open reattaches into a fullscreen claude" failure. The
+        # launcher respawns the dead pane on the next /open.
+        if self._tmux_enabled and self._self_pane:
+            try:
+                _tmux.set_remain_on_exit(self._self_pane)
+            except Exception:
+                pass
         self._populate()
         from . import ui_state as _ui
         self._queue_visible = bool(_ui.load(self._ui_path()).get("queue_pane_visible"))
@@ -2064,8 +2074,19 @@ class SessionExplorerApp(App):
         """Off-thread: scrape /usage (spawns a hidden claude, ~seconds), then push
         the rendered bar on the UI thread. `exclusive` so a slow scrape can't
         stack across the 5-min interval."""
-        info = _usage.scrape_usage(self._claude_dir())
-        self.call_from_thread(self._apply_usage, info)
+        self._usage_tick()
+
+    def _usage_tick(self) -> None:
+        """Guarded body of the usage worker — same contract as _live_meta_tick:
+        a failed scrape/apply logs and skips the tick (the bar keeps its last
+        value), never exits the app via the worker's exit_on_error default."""
+        try:
+            info = _usage.scrape_usage(self._claude_dir())
+            self.call_from_thread(self._apply_usage, info)
+        except Exception:
+            import traceback
+            _log_line("usage refresh failed (tick skipped):\n"
+                      + traceback.format_exc())
 
     def _apply_usage(self, info) -> None:
         if info is not None:
@@ -2270,8 +2291,21 @@ class SessionExplorerApp(App):
     def _refresh_live_metadata(self) -> None:
         """Off-thread wrapper: refresh live metadata on disk, then update rows on
         the UI thread. `exclusive` so a slow refresh can't stack across polls."""
-        self._do_live_metadata_refresh()
-        self.call_from_thread(self._apply_live_metadata)
+        self._live_meta_tick()
+
+    def _live_meta_tick(self) -> None:
+        """Guarded body of the live-meta worker. @work defaults to
+        exit_on_error=True, so an exception escaping the worker (including one
+        raised on the UI thread and re-raised here by call_from_thread) exits
+        the whole app. A periodic refresh failing must log and skip the tick —
+        the next poll retries — never take the explorer down."""
+        try:
+            self._do_live_metadata_refresh()
+            self.call_from_thread(self._apply_live_metadata)
+        except Exception:
+            import traceback
+            _log_line("live-meta refresh failed (tick skipped):\n"
+                      + traceback.format_exc())
 
     def _apply_live_metadata(self) -> None:
         """Reload the index and refresh only the live rows in place (update each
@@ -2567,9 +2601,25 @@ def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> lis
     return argv
 
 
+def _run_app(app) -> None:
+    """app.run() with crash persistence: any exception that tears the app down
+    is written to ~/.claude/session-explorer.log (with full traceback) before
+    re-raising. The TUI's stderr is a tmux pane that historically closed on
+    death, so without this a crash leaves no trace anywhere — three production
+    crashes shipped zero tracebacks. KeyboardInterrupt stays unlogged (^C is a
+    user action, not a crash); the re-raise keeps the exit code non-zero so the
+    pane's remain-on-exit=failed retains the traceback on screen too."""
+    try:
+        app.run()
+    except Exception:
+        import traceback
+        _log_line("TUI crashed:\n" + traceback.format_exc())
+        raise
+
+
 def run() -> int:
     app = SessionExplorerApp()
-    app.run()
+    _run_app(app)
     new_argv = getattr(app, "_new_session_argv", None)
     if new_argv:
         # chdir into the chosen project dir so claude (and `-w`) operate in the
