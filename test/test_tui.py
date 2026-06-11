@@ -2724,6 +2724,17 @@ def test_worktree_slug_blank_is_blank():
     assert worktree_slug("team/") == ""
 
 
+def test_worktree_slug_caps_at_64_chars():
+    # `claude -w` refuses names over 64 chars ("Invalid worktree name: must
+    # be 64 characters or fewer"), so the auto-slug must never exceed it.
+    assert len(worktree_slug("x" * 100)) == 64
+
+
+def test_worktree_slug_cap_never_leaves_trailing_dash():
+    out = worktree_slug("a" * 63 + " " + "b" * 40)   # cut lands on the dash
+    assert len(out) <= 64 and not out.endswith("-")
+
+
 def test_preview_shows_last_launch_error():
     from _pkg.tui import _preview_text
     s = {"sid": "S9", "name_cached": "feature/x", "project_path": "/p",
