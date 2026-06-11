@@ -1287,7 +1287,10 @@ class SessionExplorerApp(App):
         # the seeded id + name).
         if (not data.get("message_count")
                 and not _transcript_on_disk(data.get("transcript_path"))):
-            running = _tmux.session_windows() if self._tmux_enabled else []
+            try:
+                running = _tmux.session_windows() if self._tmux_enabled else []
+            except OSError:
+                running = []   # no/broken tmux → nothing of ours is running
             if not (sid == self._docked_sid or sid in running
                     or sid in self._live_states):
                 self._start_stub_fresh(sid, data)
