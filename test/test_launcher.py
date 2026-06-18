@@ -160,3 +160,23 @@ def test_wrap_in_tmux_respawns_dead_explorer_pane():
     assert "respawn-pane" in respawn          # heal BEFORE attaching
     assert "pane_dead" in respawn             # only dead panes are respawned
     assert "-A -s explorer" in attach         # attach still intact
+
+
+def test_wrap_in_tmux_recreates_missing_explorer_window():
+    """When a clean TUI exit (e.g. `x → b` leave-running, or `q`) destroys the
+    explorer window but background session windows keep the tmux session alive,
+    `new-session -A` would merely re-attach to a surviving claude window — no
+    explorer, no TUI. The re-/open command must, before attaching, recreate the
+    explorer window running the TUI whenever the session exists without it."""
+    cmd = _launcher.wrap_in_tmux("exec /abs/session-explorer tui",
+                                 config_path="/tmp/se.conf")
+    prefix, _attach = cmd.split("new-session -A", 1)
+    assert "has-session -t explorer" in prefix      # only when the session exists
+    # recreate the explorer window running the TUI when it is missing
+    assert "new-window" in prefix
+    assert "-n explorer" in prefix
+    assert "SESSION_EXPLORER_TMUX=1" in prefix
+    # land the attach on the explorer window, not a docked claude window
+    assert "select-window -t explorer:explorer" in prefix
+    # no literal double-quote may leak into the AppleScript-wrapped command
+    assert '"' not in prefix

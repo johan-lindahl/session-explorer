@@ -3,6 +3,25 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.5
+
+### Fixed
+- **The recurring "explorer opens as a single claude pane, no tree."** A *clean*
+  TUI exit (`q`, or the `x → b` leave-running quit) closes its pane with exit 0,
+  which `remain-on-exit=failed` lets through — destroying the `explorer` window
+  outright. If any background session window was still running, the tmux
+  *session* survived **without** an explorer window, so the v1.17.4 respawn loop
+  found no dead pane to revive and the bare `new-session -A` re-attached
+  straight into a docked claude with no tree. (`new-session -A` against an
+  already-existing session ignores both its `-n` window name and its command
+  argument — it only attaches.) The launcher's wrapped command now, after the
+  respawn loop, recreates the `explorer` window running the TUI and
+  `select-window`s it whenever the session exists but lacks it — so a re-`/open`
+  lands on a live explorer in every state (fresh, detached-alive,
+  crashed-dead-pane, or clean-exit-no-window). The recreate is idempotent
+  (skipped when the window already exists) and double-quote-free so it survives
+  raw interpolation into the macOS AppleScript launch command.
+
 ## 1.17.4
 
 ### Fixed

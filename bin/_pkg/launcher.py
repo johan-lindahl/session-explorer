@@ -147,15 +147,36 @@ def wrap_in_tmux(target_command: str, config_path: str,
     the attach is preceded by a best-effort respawn of any dead pane there —
     otherwise a re-`/open` would reattach to a dead explorer. Only the TUI pane
     can be dead (claude panes keep the default remain-on-exit=off), and
-    respawn-pane reruns the pane's original command, i.e. the TUI itself."""
+    respawn-pane reruns the pane's original command, i.e. the TUI itself.
+
+    A *clean* TUI exit (`q`, or the `x → b` leave-running quit) is different:
+    remain-on-exit=failed lets a zero-exit pane close, which destroys the
+    explorer window outright. If background session windows are still running,
+    the tmux *session* survives without an explorer window — and a bare
+    `new-session -A` would then merely re-attach to a surviving claude window
+    (no explorer, no TUI). So the respawn is followed by a recreate step: when
+    the session exists but has no `explorer` window, build one running the TUI
+    and select it, so the attach lands on a live explorer either way.
+
+    None of the prefixed commands may contain a literal double-quote — the whole
+    string is interpolated raw into an AppleScript double-quoted string on macOS
+    (build_macos_command), where a `"` would break it. Hence single quotes and
+    unquoted `$p` (pane ids like %12 have no whitespace) throughout."""
     inner = f"SESSION_EXPLORER_TMUX=1 {target_command}"
+    qinner = shlex.quote(inner)
     respawn = (
         f"for p in $(tmux -L {socket} list-panes -t explorer:explorer "
         f"-F '#{{pane_id}} #{{pane_dead}}' 2>/dev/null "
         f"| awk '$2==1{{print $1}}'); do "
-        # $p unquoted on purpose: pane ids (%12) have no whitespace, and the
-        # whole command is interpolated raw into an AppleScript double-quoted
-        # string on macOS (build_macos_command), where a literal '"' breaks it.
         f"tmux -L {socket} respawn-pane -t $p; done; ")
-    return respawn + (f"tmux -L {socket} -f {shlex.quote(config_path)} "
-                      f"new-session -A -s explorer -n explorer {shlex.quote(inner)}")
+    # Recreate a destroyed explorer window (clean-exit case) before attaching.
+    recreate = (
+        f"if tmux -L {socket} has-session -t explorer 2>/dev/null; then "
+        f"tmux -L {socket} list-windows -t explorer -F '#{{window_name}}' "
+        f"2>/dev/null | grep -qx explorer "
+        f"|| tmux -L {socket} new-window -d -t explorer: -n explorer {qinner}; "
+        f"tmux -L {socket} select-window -t explorer:explorer 2>/dev/null; "
+        f"fi; ")
+    return respawn + recreate + (
+        f"tmux -L {socket} -f {shlex.quote(config_path)} "
+        f"new-session -A -s explorer -n explorer {qinner}")
