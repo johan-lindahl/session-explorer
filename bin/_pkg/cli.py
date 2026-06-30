@@ -282,6 +282,14 @@ def _cmd_launch() -> int:
         conf = os.path.join(claude_dir, ".session-explorer.tmux.conf")
         with open(conf, "w") as f:
             f.write(_tmux.build_config())
+        # Self-heal before attaching: if a docked claude has swallowed the
+        # explorer window (its TUI pane closed while the window survived),
+        # rename that impostor aside so wrap_in_tmux's recreate rebuilds a
+        # fresh explorer. Best-effort — never let a heal hiccup block /open.
+        try:
+            _tmux.heal_explorer_impostors()
+        except Exception:
+            pass
         target = _launcher.wrap_in_tmux(target, config_path=conf)
     return _launcher.launch(target)
 

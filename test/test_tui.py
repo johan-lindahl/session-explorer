@@ -3104,3 +3104,84 @@ async def test_mount_marks_own_pane_remain_on_exit(index_path, monkeypatch):
     async with app.run_test() as pilot:
         await pilot.pause()
     assert calls == ["%3"]
+
+
+# --- tmux-hosting detection + post-exit handoff guard (explorer-window-loss fix) ---
+
+def test_detect_tmux_hosted_true_via_env_var():
+    """The launcher's SESSION_EXPLORER_TMUX=1 is the primary hosted signal."""
+    from _pkg.tui import _detect_tmux_hosted
+    assert _detect_tmux_hosted({"SESSION_EXPLORER_TMUX": "1"}) is True
+
+
+def test_detect_tmux_hosted_true_inside_dedicated_server_without_env_var():
+    """The bug: an explorer running INSIDE our dedicated tmux server but whose
+    SESSION_EXPLORER_TMUX got lost must STILL be treated as tmux-hosted. The
+    old `env == "1"` check returned False here, which armed the no-tmux
+    execvp path and let `run()` replace the explorer's own pane with claude,
+    destroying the explorer window. $TMUX names the dedicated socket."""
+    from _pkg.tui import _detect_tmux_hosted
+    env = {"TMUX": "/private/tmp/tmux-501/session-explorer,48225,0"}
+    assert _detect_tmux_hosted(env) is True
+
+
+def test_detect_tmux_hosted_false_in_users_personal_tmux():
+    """A user's own tmux (different socket) is NOT our host; no env var → no
+    interaction layer, and the no-tmux execvp path is correct there."""
+    from _pkg.tui import _detect_tmux_hosted
+    env = {"TMUX": "/private/tmp/tmux-501/default,1234,0"}
+    assert _detect_tmux_hosted(env) is False
+
+
+def test_detect_tmux_hosted_false_without_tmux_at_all():
+    from _pkg.tui import _detect_tmux_hosted
+    assert _detect_tmux_hosted({}) is False
+
+
+class _FakeExitedApp:
+    def __init__(self, **attrs):
+        for k, v in attrs.items():
+            setattr(self, k, v)
+
+
+def test_handoff_execs_new_session_when_not_inside_server():
+    """No-tmux mode (genuinely outside our server): a new session hands the
+    pane over to claude via execvp — the established behaviour."""
+    from _pkg.tui import _handoff_after_exit
+    seen = {}
+    app = _FakeExitedApp(_new_session_argv=["claude", "--session-id", "x"],
+                         _new_session_cwd=None)
+    rc = _handoff_after_exit(
+        app, inside_server=False,
+        execvp=lambda f, a: seen.setdefault("execvp", (f, a)),
+        chdir=lambda c: None, isdir=lambda c: False)
+    assert seen["execvp"] == ("claude", ["claude", "--session-id", "x"])
+    # execvp normally never returns; the fake does, so rc is the fallthrough.
+    assert rc == 0
+
+
+def test_handoff_refuses_new_session_execvp_inside_dedicated_server():
+    """Defense in depth: inside our dedicated server, execvp would replace the
+    explorer's own pane with claude and destroy the explorer window. Refuse."""
+    from _pkg.tui import _handoff_after_exit
+    seen = {}
+    app = _FakeExitedApp(_new_session_argv=["claude", "--session-id", "x"],
+                         _new_session_cwd=None)
+    rc = _handoff_after_exit(
+        app, inside_server=True,
+        execvp=lambda f, a: seen.setdefault("execvp", True),
+        chdir=lambda c: None, isdir=lambda c: False)
+    assert "execvp" not in seen
+    assert rc == 0
+
+
+def test_handoff_refuses_resume_execvp_inside_dedicated_server():
+    from _pkg.tui import _handoff_after_exit
+    seen = {}
+    app = _FakeExitedApp(_resume_target="sid-1", _resume_cwd=None)
+    rc = _handoff_after_exit(
+        app, inside_server=True,
+        execvp=lambda f, a: seen.setdefault("execvp", True),
+        chdir=lambda c: None, isdir=lambda c: False)
+    assert "execvp" not in seen
+    assert rc == 0

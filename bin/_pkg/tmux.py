@@ -176,6 +176,68 @@ def build_kill_window(target: str) -> List[str]:
     return build_base() + ["kill-window", "-t", target]
 
 
+def build_rename_window(target: str, new_name: str) -> List[str]:
+    return build_base() + ["rename-window", "-t", target, new_name]
+
+
+# --- explorer-window self-heal (recover a claude-swallowed explorer) ----------
+
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def explorer_window_has_tui(pane_cmds) -> bool:
+    """True if any pane command is our Textual TUI (python). A window named
+    EXPLORER_WINDOW with no such pane has been swallowed by a docked claude —
+    its own TUI pane closed and the claude pane is all that's left."""
+    for c in pane_cmds:
+        cl = (c or "").lower()
+        if cl.startswith("python") or "session-explorer" in cl:
+            return True
+    return False
+
+
+def sid_from_claude_cmd(cmd) -> "str | None":
+    """Extract a claude session id (UUID) from its process command line —
+    `--session-id <uuid>` or `--resume=<uuid>`. None when absent."""
+    m = _UUID_RE.search(cmd or "")
+    return m.group(0) if m else None
+
+
+def heal_explorer_impostors(*, list_windows=None, panes_of=None,
+                            cmd_of_pid=None, rename=None):
+    """Recover a claude-swallowed explorer window. When a window named
+    EXPLORER_WINDOW has no live TUI pane (only claude pane(s)), the explorer's
+    own pane closed and a docked claude took the window over — yet because the
+    window is still *named* 'explorer', the launcher's recreate step is fooled
+    into thinking a live explorer exists, so a re-/open never rebuilds the TUI.
+
+    Rename such a window to its claude session id (so it rejoins the
+    background-session windows and the tree can map it) — or to a unique
+    non-'explorer' fallback when no id is derivable. The launcher's recreate
+    step then builds a fresh explorer window. Best-effort; all tmux/ps access
+    is injected so the decision logic is unit-tested. Returns the (old, new)
+    renames performed."""
+    list_windows = _list_windows_fn() if list_windows is None else list_windows
+    panes_of = _panes_of_window if panes_of is None else panes_of
+    cmd_of_pid = _cmd_of_pid if cmd_of_pid is None else cmd_of_pid
+    rename = rename_window if rename is None else rename
+    renames = []
+    for w in list_windows():
+        if w != EXPLORER_WINDOW:
+            continue
+        panes = panes_of(w)
+        if not panes or explorer_window_has_tui([c for c, _ in panes]):
+            continue                      # empty/odd, or a healthy explorer
+        first_pid = panes[0][1]
+        sid = sid_from_claude_cmd(cmd_of_pid(first_pid))
+        new_name = sid or f"orphan-{first_pid}"
+        rename(w, new_name)
+        renames.append((w, new_name))
+    return renames
+
+
 def build_kill_server() -> List[str]:
     return build_base() + ["kill-server"]
 
@@ -326,6 +388,48 @@ def session_windows(_list: Callable[[], List[str]] = list_windows) -> List[str]:
 
 def kill_window(target: str) -> int:
     return _call(build_kill_window(target))
+
+
+def rename_window(target: str, new_name: str) -> int:
+    return _call(build_rename_window(target, new_name))
+
+
+def _list_windows_fn():
+    """Indirection so heal_explorer_impostors can default to the module-level
+    list_windows (defined above) without capturing it at def-time."""
+    return list_windows
+
+
+def _panes_of_window(window: str):
+    """[(pane_current_command, pane_pid:int), ...] for `window`; [] on error.
+    pane_current_command is a single token (e.g. 'Python', 'claude', a claude
+    version like '2.1.196'), so a right-split cleanly separates it from pid."""
+    out = _capture(build_base() + [
+        "list-panes", "-t", window, "-F", "#{pane_current_command} #{pane_pid}"])
+    panes = []
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        parts = ln.rsplit(" ", 1)
+        cmd = parts[0]
+        try:
+            pid = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError:
+            pid = 0
+        panes.append((cmd, pid))
+    return panes
+
+
+def _cmd_of_pid(pid) -> str:
+    """Full command line of `pid` via ps (to read claude's --session-id); ''
+    on any error."""
+    try:
+        return subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True).stdout.strip()
+    except Exception:
+        return ""
 
 
 def kill_server() -> int:
