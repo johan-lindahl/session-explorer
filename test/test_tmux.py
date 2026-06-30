@@ -299,3 +299,90 @@ def test_build_set_remain_on_exit_failed():
     argv = tmux.build_set_remain_on_exit("%7")
     assert argv == ["tmux", "-L", "session-explorer", "set-option", "-p",
                     "-t", "%7", "remain-on-exit", "failed"]
+
+
+# --- explorer-window self-heal (recover a claude-swallowed explorer on /open) ---
+
+def test_explorer_window_has_tui_recognizes_python_pane():
+    """The explorer's own pane runs the Textual TUI (python). A window holding
+    such a pane is a live explorer."""
+    assert tmux.explorer_window_has_tui(["Python"]) is True
+    assert tmux.explorer_window_has_tui(["python3"]) is True
+    assert tmux.explorer_window_has_tui(["session-explorer"]) is True
+
+
+def test_explorer_window_has_tui_false_when_only_claude():
+    """A window named 'explorer' whose only pane(s) run claude has been
+    swallowed — the TUI pane is gone. (claude reports its version string as the
+    pane command, e.g. '2.1.196', or 'claude'/'node'.)"""
+    assert tmux.explorer_window_has_tui(["2.1.196"]) is False
+    assert tmux.explorer_window_has_tui(["claude"]) is False
+    assert tmux.explorer_window_has_tui(["node"]) is False
+    assert tmux.explorer_window_has_tui([]) is False
+
+
+def test_explorer_window_has_tui_true_when_tui_plus_docked_claude():
+    """A healthy docked layout: explorer TUI pane + a docked claude pane."""
+    assert tmux.explorer_window_has_tui(["Python", "2.1.196"]) is True
+
+
+def test_sid_from_claude_cmd_extracts_session_id():
+    cmd = ("claude --session-id 34f4be54-a854-405d-adc2-efbd47e2eb8b "
+           "-n user-story/45331 -w slug")
+    assert tmux.sid_from_claude_cmd(cmd) == "34f4be54-a854-405d-adc2-efbd47e2eb8b"
+
+
+def test_sid_from_claude_cmd_extracts_resume_uuid():
+    cmd = "claude --resume=43e4a61a-86bc-4d17-b0ed-6b519613710b"
+    assert tmux.sid_from_claude_cmd(cmd) == "43e4a61a-86bc-4d17-b0ed-6b519613710b"
+
+
+def test_sid_from_claude_cmd_none_when_absent():
+    assert tmux.sid_from_claude_cmd("claude") is None
+    assert tmux.sid_from_claude_cmd("") is None
+    assert tmux.sid_from_claude_cmd(None) is None
+
+
+def test_heal_explorer_impostors_renames_swallowed_window_to_its_sid():
+    """When a window named 'explorer' contains only a claude pane (the TUI pane
+    closed and a docked claude took the window), rename it to its session id so
+    it rejoins the background-session windows and the launcher's recreate step
+    rebuilds a fresh explorer. A healthy explorer (with a TUI pane) is left
+    alone."""
+    sid = "34f4be54-a854-405d-adc2-efbd47e2eb8b"
+    renames = []
+    tmux.heal_explorer_impostors(
+        list_windows=lambda: ["explorer", "other-sid-window"],
+        panes_of=lambda w: {"explorer": [("2.1.196", 45228)]}.get(w, []),
+        cmd_of_pid=lambda pid: f"claude --session-id {sid} -n foo -w bar",
+        rename=lambda old, new: renames.append((old, new)),
+    )
+    assert renames == [("explorer", sid)]
+
+
+def test_heal_explorer_impostors_leaves_healthy_explorer_alone():
+    renames = []
+    tmux.heal_explorer_impostors(
+        list_windows=lambda: ["explorer"],
+        panes_of=lambda w: [("Python", 52289)],   # live TUI pane present
+        cmd_of_pid=lambda pid: "",
+        rename=lambda old, new: renames.append((old, new)),
+    )
+    assert renames == []
+
+
+def test_heal_explorer_impostors_falls_back_when_no_sid_derivable():
+    """A swallowed window whose claude args yield no UUID still must stop
+    masquerading as 'explorer' (so select-window/recreate are unambiguous);
+    rename to a unique, non-'explorer' fallback that keeps it running."""
+    renames = []
+    tmux.heal_explorer_impostors(
+        list_windows=lambda: ["explorer"],
+        panes_of=lambda w: [("claude", 999)],
+        cmd_of_pid=lambda pid: "claude",          # no session id in args
+        rename=lambda old, new: renames.append((old, new)),
+    )
+    assert len(renames) == 1
+    old, new = renames[0]
+    assert old == "explorer"
+    assert new != "explorer"

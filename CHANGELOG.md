@@ -3,6 +3,26 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.6
+
+### Fixed
+- **The real cause of "explorer gone, only a claude pane, restart doesn't
+  help."** It was never a crash (no traceback, no dead pane). `_tmux_enabled`
+  was decided solely by the `SESSION_EXPLORER_TMUX` env var, so an explorer
+  running *inside* the dedicated tmux server but missing that var silently ran
+  in no-tmux mode — and on new-session/resume, `run()` does
+  `os.execvp("claude", …)`, replacing the explorer's **own** pane with claude.
+  The explorer window survives holding claude, which is why a re-`/open` never
+  restored it (v1.17.5's recreate only fired when *no* `explorer` window
+  existed). Three changes: (1) `_detect_tmux_hosted` also treats "running
+  inside the dedicated server" (`$TMUX` socket-path basename == the explorer
+  socket) as hosted, so a lost env var can't flip the mode; (2) `run()`'s
+  handoff refuses to `execvp` when inside the dedicated server (logs instead of
+  destroying the window); (3) `/open` now runs `heal_explorer_impostors()` —
+  an `explorer` window with no live TUI pane (only claude) is renamed to its
+  session id so the launcher's recreate rebuilds a fresh explorer and the tree
+  can still map it.
+
 ## 1.17.5
 
 ### Fixed

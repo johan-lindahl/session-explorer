@@ -834,9 +834,13 @@ class SessionExplorerApp(App):
         # accumulate at most O(projects × folder-depth) per session.
         self._collapse_mode: bool = False
         self._expanded: set[str] = set()
-        # tmux-hosted interaction layer (spec §1). The launcher sets this env
-        # var only when it wrapped the explorer in our dedicated tmux server.
-        self._tmux_enabled: bool = os.environ.get("SESSION_EXPLORER_TMUX") == "1"
+        # tmux-hosted interaction layer (spec §1). The launcher sets
+        # SESSION_EXPLORER_TMUX=1 when it wrapped us in the dedicated server;
+        # _detect_tmux_hosted also recognises "running inside the dedicated
+        # server" via $TMUX, so a lost env var can't flip us into the no-tmux
+        # mode whose resume/new-session paths execvp the explorer's own pane
+        # into claude and destroy the explorer window.
+        self._tmux_enabled: bool = _detect_tmux_hosted()
         # sids that are live windows in *our* tmux server (accessible via flip),
         # refreshed by _poll_live. Distinct from sessions live in other terminals.
         self._our_windows: set = set()
@@ -2617,27 +2621,81 @@ def _run_app(app) -> None:
         raise
 
 
+def _inside_dedicated_server(env=None, socket=None) -> bool:
+    """True when this process is running inside our dedicated tmux server: its
+    $TMUX value is `<socket-path>,<pid>,<session>` and the socket-path basename
+    is our SOCKET. This is the precise signal that an execvp self-replace would
+    destroy the explorer window (the explorer's pane lives in that server)."""
+    env = os.environ if env is None else env
+    tmux = env.get("TMUX", "")
+    sock_path = tmux.split(",", 1)[0] if tmux else ""
+    socket = _tmux.SOCKET if socket is None else socket
+    return bool(sock_path) and os.path.basename(sock_path) == socket
+
+
+def _detect_tmux_hosted(env=None, socket=None) -> bool:
+    """True when the explorer is hosted by our dedicated tmux server and may use
+    the split-pane interaction layer. SESSION_EXPLORER_TMUX=1 (set by the
+    launcher) is the primary signal; as a belt-and-suspenders fallback we also
+    treat "running inside the dedicated server" as hosted, so a lost env var
+    can't silently flip us into the no-tmux mode whose resume/new-session paths
+    execvp and replace the explorer's own pane with claude."""
+    env = os.environ if env is None else env
+    if env.get("SESSION_EXPLORER_TMUX") == "1":
+        return True
+    return _inside_dedicated_server(env, socket)
+
+
 def run() -> int:
     app = SessionExplorerApp()
     _run_app(app)
+    return _handoff_after_exit(app)
+
+
+def _handoff_after_exit(app, *, inside_server=None, execvp=None,
+                        chdir=None, isdir=None) -> int:
+    """After a clean TUI exit in no-tmux mode, hand the pane over to claude
+    (execvp) for a new or resumed session.
+
+    REFUSES to execvp when running inside our dedicated tmux server: there,
+    replacing our own pane with claude destroys the explorer window (the
+    "claude swallowed the explorer" failure). With robust _detect_tmux_hosted
+    the no-tmux paths that set these attributes should never run inside the
+    server — this is the last-resort guard if that ever regresses.
+
+    os.* are resolved at call time (not bound as defaults) so a test that
+    monkeypatches tui.os.execvp still intercepts the handoff."""
+    execvp = os.execvp if execvp is None else execvp
+    chdir = os.chdir if chdir is None else chdir
+    isdir = os.path.isdir if isdir is None else isdir
+    if inside_server is None:
+        inside_server = _inside_dedicated_server()
     new_argv = getattr(app, "_new_session_argv", None)
     if new_argv:
+        if inside_server:
+            _log_line("refused new-session execvp inside the dedicated tmux "
+                      f"server (would destroy the explorer window): {new_argv!r}")
+            return 0
         # chdir into the chosen project dir so claude (and `-w`) operate in the
         # right repo, then hand the window over to a fresh claude session.
-        cwd = getattr(app, "_new_session_cwd", None)
         # Fail open: if the chosen dir no longer exists, start from cwd as-is
         # rather than aborting the launch.
-        if cwd and os.path.isdir(cwd):
-            os.chdir(cwd)
-        os.execvp("claude", new_argv)
+        cwd = getattr(app, "_new_session_cwd", None)
+        if cwd and isdir(cwd):
+            chdir(cwd)
+        execvp("claude", new_argv)
     target = getattr(app, "_resume_target", None)
     if target:
+        if inside_server:
+            _log_line("refused resume execvp inside the dedicated tmux server "
+                      f"(would destroy the explorer window): {target!r}")
+            return 0
         # chdir into the session's original project so `claude --resume`
         # opens in the right workspace — without this, Claude inherits the
         # spawned terminal's cwd (usually $HOME) and shows a fresh "trust
         # folder" prompt instead of restoring the session.
         cwd = _resolve_resume_cwd(getattr(app, "_resume_cwd", None))
         if cwd:
-            os.chdir(cwd)
-        os.execvp("claude", _resume_argv(target))
+            chdir(cwd)
+        execvp("claude", _resume_argv(target))
     return 0
