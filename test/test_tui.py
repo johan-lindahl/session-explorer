@@ -3096,6 +3096,7 @@ async def test_mount_marks_own_pane_remain_on_exit(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "set_remain_on_exit",
                         lambda pane: calls.append(pane) or 0)
     # Neutralize the other tmux touchpoints on_mount/_poll_live reach for.
+    monkeypatch.setattr(tuimod._tmux, "reclaim_explorer_panes", lambda *a, **k: [])
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "list_panes", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda *a, **k: None)
@@ -3185,3 +3186,26 @@ def test_handoff_refuses_resume_execvp_inside_dedicated_server():
         chdir=lambda c: None, isdir=lambda c: False)
     assert "execvp" not in seen
     assert rc == 0
+
+
+async def test_mount_reclaims_orphan_panes(index_path, monkeypatch):
+    """On mount in tmux mode, the explorer breaks out any pre-existing claude
+    pane in its window (left by a previous process lifetime — e.g. a respawn
+    after a crash that happened while a session was docked) so it starts
+    single-paned and can't stack orphan docks on the next Enter."""
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    seen = []
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setenv("TMUX_PANE", "%0")
+    monkeypatch.setattr(tuimod._tmux, "reclaim_explorer_panes",
+                        lambda self_pane: seen.append(self_pane) or [])
+    monkeypatch.setattr(tuimod._tmux, "set_remain_on_exit", lambda *a: 0)
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "list_panes", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda *a, **k: None)
+    monkeypatch.setattr(tuimod._tmux, "set_status_left", lambda *a: 0)
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+    assert seen == ["%0"]

@@ -18,6 +18,41 @@ import json
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _protect_live_tmux(monkeypatch):
+    """Hard isolation from the maintainer's LIVE `session-explorer` tmux server
+    (their own explorer + running claude sessions). `uninstall`/quit issue a
+    real `tmux kill-server`, so a test that reaches one MUST NOT hit the real
+    socket. Two defenses, covering both process boundaries:
+
+    (1) SUBPROCESS: `test_cli`/`test_uninstall` run the real `session-explorer`
+        CLI in a child process where in-process monkeypatching does NOT apply.
+        Point the socket at a throwaway via env, inherited by every child — so
+        `session-explorer uninstall`'s kill-server targets a dead throwaway
+        socket, never the live one.
+    (2) IN-PROCESS: block `_call`/`_capture` from executing ANY command on the
+        live socket (the in-process SOCKET stays "session-explorer" so the
+        build_* argv assertions still pass). Tests that need tmux behaviour stub
+        the higher-level wrapper, so blocking the raw exec is invisible to them.
+
+    CI has no live server, so both are harmless there."""
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX_SOCKET", "se-pytest-throwaway")
+    try:
+        from _pkg import tmux as _t
+    except Exception:
+        return
+    _real_call, _real_capture = _t._call, _t._capture
+
+    def _guard_call(argv):
+        return 0 if "session-explorer" in argv else _real_call(argv)
+
+    def _guard_capture(argv):
+        return "" if "session-explorer" in argv else _real_capture(argv)
+
+    monkeypatch.setattr(_t, "_call", _guard_call)
+    monkeypatch.setattr(_t, "_capture", _guard_capture)
+
+
 @pytest.fixture
 def index_path(tmp_path):
     """Per-test index in an isolated directory (shared across TUI test modules).

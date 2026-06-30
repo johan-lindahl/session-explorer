@@ -957,6 +957,17 @@ class SessionExplorerApp(App):
                 _tmux.set_remain_on_exit(self._self_pane)
             except Exception:
                 pass
+            # A fresh/respawned TUI can inherit a docked claude pane from a
+            # previous process lifetime (crash-respawn, or a manual restart
+            # while docked). We have no _docked_sid for it, so a later dock
+            # would stack a second pane. Break any leftover out to its own
+            # background window so we start single-paned (it keeps running,
+            # re-dockable from the tree). Safe no-op unless our pane is really
+            # in this window — see tmux.reclaim_explorer_panes.
+            try:
+                _tmux.reclaim_explorer_panes(self._self_pane)
+            except Exception:
+                pass
         self._populate()
         from . import ui_state as _ui
         self._queue_visible = bool(_ui.load(self._ui_path()).get("queue_pane_visible"))

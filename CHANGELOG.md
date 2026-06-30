@@ -3,6 +3,28 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.17.7
+
+### Fixed
+- **Orphan panes after an explorer restart (the "three panes" state).** A fresh
+  or respawned TUI could inherit a docked claude pane from a previous process
+  lifetime (a crash-respawn, or a manual restart while a session was docked).
+  Having no `_docked_sid` for it, the next dock *stacked* a second claude pane
+  instead of swapping. The explorer now reconciles its window on mount
+  (`tmux.reclaim_explorer_panes`): any inherited claude pane is broken out to its
+  own background window (named by session id, re-dockable from the tree) so the
+  explorer starts single-paned. Guarded to act only when our own pane is
+  genuinely in the window, so it can never touch panes that aren't ours.
+
+### Changed
+- **`tmux.SOCKET` is overridable via `SESSION_EXPLORER_TMUX_SOCKET`** (default
+  unchanged: `session-explorer`). This lets the test suite target a throwaway
+  server so it can never `kill-server` a developer's live `session-explorer`
+  server — `test_cli`/`test_uninstall` run the real `session-explorer uninstall`
+  in a subprocess, and uninstall tears down the dedicated tmux server
+  unconditionally. `test/conftest.py` now points every test subprocess at a
+  throwaway socket and blocks in-process tmux exec on the live socket.
+
 ## 1.17.6
 
 ### Fixed

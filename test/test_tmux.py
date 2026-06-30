@@ -386,3 +386,60 @@ def test_heal_explorer_impostors_falls_back_when_no_sid_derivable():
     old, new = renames[0]
     assert old == "explorer"
     assert new != "explorer"
+
+
+# --- explorer window reconcile on startup (no orphan docks after a respawn) ---
+
+def test_reclaim_explorer_panes_breaks_out_orphan_docks():
+    """A fresh/respawned explorer can inherit leftover claude pane(s) in its
+    window (docked by a previous process lifetime). Reclaim breaks each out to
+    its own background window named by sid, leaving only the explorer's own
+    pane — so it can't stack a second pane on the next dock."""
+    sid1 = "11111111-1111-1111-1111-111111111111"
+    sid2 = "22222222-2222-2222-2222-222222222222"
+    cmds = {101: f"claude --resume={sid1}", 102: f"claude --session-id {sid2} -n x"}
+    broke = []
+    tmux.reclaim_explorer_panes(
+        "%0",
+        panes=lambda: [("%0", 100), ("%5", 101), ("%6", 102)],
+        cmd_of_pid=lambda pid: cmds.get(pid, ""),
+        break_pane=lambda pane, name: broke.append((pane, name)),
+    )
+    assert broke == [("%5", sid1), ("%6", sid2)]
+
+
+def test_reclaim_explorer_panes_leaves_self_pane():
+    broke = []
+    tmux.reclaim_explorer_panes(
+        "%0", panes=lambda: [("%0", 100)],
+        cmd_of_pid=lambda pid: "", break_pane=lambda p, n: broke.append((p, n)))
+    assert broke == []
+
+
+def test_reclaim_explorer_panes_noop_when_self_pane_absent():
+    """Safety floor: if our own pane id isn't even in the window's pane list we
+    are NOT this server's explorer (e.g. a unit test with a fake $TMUX_PANE) —
+    never break out panes that aren't ours."""
+    broke = []
+    tmux.reclaim_explorer_panes(
+        "%99",
+        panes=lambda: [("%0", 100), ("%5", 101)],
+        cmd_of_pid=lambda pid: "claude --resume=33333333-3333-3333-3333-333333333333",
+        break_pane=lambda p, n: broke.append((p, n)))
+    assert broke == []
+
+
+def test_reclaim_explorer_panes_noop_when_self_pane_none():
+    broke = []
+    tmux.reclaim_explorer_panes(
+        None, panes=lambda: [("%0", 100), ("%5", 101)],
+        cmd_of_pid=lambda pid: "", break_pane=lambda p, n: broke.append((p, n)))
+    assert broke == []
+
+
+def test_reclaim_explorer_panes_fallback_name_without_sid():
+    broke = []
+    tmux.reclaim_explorer_panes(
+        "%0", panes=lambda: [("%0", 100), ("%5", 999)],
+        cmd_of_pid=lambda pid: "claude", break_pane=lambda p, n: broke.append((p, n)))
+    assert broke == [("%5", "orphan-999")]
