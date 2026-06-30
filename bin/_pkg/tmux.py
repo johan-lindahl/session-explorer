@@ -8,13 +8,19 @@ bottom are thin subprocess calls. Mirrors launcher.py's builder/launch split.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
 import subprocess
 from typing import Callable, List, Optional
 
-SOCKET = "session-explorer"
+# The dedicated-server socket name. Overridable via SESSION_EXPLORER_TMUX_SOCKET
+# so the test suite (and any second instance) can target a throwaway server and
+# never touch a live `session-explorer` server — uninstall/quit issue a real
+# `kill-server`, so a CLI subprocess in a test must NOT run against the real
+# socket. Defaults to the real name; production never sets the env var.
+SOCKET = os.environ.get("SESSION_EXPLORER_TMUX_SOCKET") or "session-explorer"
 VERSION_FLOOR = (3, 1)  # 3.1 adds `-l <n>%` sizing for join-pane (split dock)
 EXPLORER_WINDOW = "explorer"
 DOCK_PCT = 65  # claude pane width when docked beside the explorer tree
@@ -238,6 +244,42 @@ def heal_explorer_impostors(*, list_windows=None, panes_of=None,
     return renames
 
 
+def reclaim_explorer_panes(self_pane, *, panes=None, cmd_of_pid=None,
+                           break_pane=None):
+    """Break every non-self pane out of the explorer window to its own
+    background window (named by its claude session id; fallback `orphan-<pid>`),
+    so a fresh or respawned TUI starts single-paned.
+
+    A previous explorer process can leave a docked claude pane behind — a
+    crash-respawn (the v1.17.4 self-heal) or a manual restart while a session
+    was docked. The new process has no `_docked_sid` for that pane, so without
+    this a later dock *stacks* a second pane instead of swapping it. Breaking
+    leftovers out (they keep running, re-dockable from the tree) restores the
+    one-pane-at-startup invariant.
+
+    Safety floor: no-op unless `self_pane` is genuinely one of the window's
+    panes — so a unit test with a fake `$TMUX_PANE` (or any process that isn't
+    actually this server's explorer) can never break out a real server's panes.
+    All tmux/ps access is injected so the decision logic is unit-tested.
+    Returns the (pane_id, window_name) breakouts performed."""
+    if not self_pane:
+        return []
+    panes = _panes_of_explorer if panes is None else panes
+    cmd_of_pid = _cmd_of_pid if cmd_of_pid is None else cmd_of_pid
+    break_pane = undock if break_pane is None else break_pane
+    plist = panes()
+    if self_pane not in [pid_pane for pid_pane, _ in plist]:
+        return []
+    done = []
+    for pane_id, pid in plist:
+        if pane_id == self_pane:
+            continue
+        sid = sid_from_claude_cmd(cmd_of_pid(pid)) or f"orphan-{pid}"
+        break_pane(pane_id, sid)
+        done.append((pane_id, sid))
+    return done
+
+
 def build_kill_server() -> List[str]:
     return build_base() + ["kill-server"]
 
@@ -419,6 +461,22 @@ def _panes_of_window(window: str):
             pid = 0
         panes.append((cmd, pid))
     return panes
+
+
+def _panes_of_explorer():
+    """[(pane_id, pane_pid:int), ...] for the explorer window; [] on error."""
+    out = _capture(build_base() + [
+        "list-panes", "-t", EXPLORER_WINDOW, "-F", "#{pane_id} #{pane_pid}"])
+    res = []
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) >= 2:
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                pid = 0
+            res.append((parts[0], pid))
+    return res
 
 
 def _cmd_of_pid(pid) -> str:
