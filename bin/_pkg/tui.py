@@ -829,14 +829,22 @@ class HelpScreen(ModalScreen[None]):
 
 
 class SearchScreen(ModalScreen):
-    """Live full-text search over one project's transcripts (spec 2026-07-01).
-    Type a term, Enter searches, results are matching sessions with in-context
-    snippets. Enter on a result dismisses with its sid; Esc cancels. ctrl+u
-    toggles including unnamed sessions."""
+    """Full-text search over one project's transcripts (spec 2026-07-01).
+    Type a term in the search box, press Enter to scan. Matches are listed as
+    sessions with in-context snippets; the results list stays hidden until a
+    scan returns something, so there's no empty box to Tab into. Focus stays on
+    the input after a search (edit + Enter to refine); Tab moves into the
+    populated results, arrows navigate, Enter opens, Esc cancels. ctrl+u toggles
+    including unnamed sessions.
+
+    A per-project scan reads the JSONL bodies live (~1.4s for a 200-session
+    project), so search is Enter-driven, not live-as-you-type."""
 
     BINDINGS = [
         Binding("escape", "dismiss(None)", "Cancel"),
-        Binding("ctrl+u", "toggle_unnamed", "Incl. unnamed"),
+        # priority so it fires before the focused Input, whose own ctrl+u would
+        # otherwise "delete to line start" and swallow the toggle.
+        Binding("ctrl+u", "toggle_unnamed", "Incl. unnamed", priority=True),
     ]
 
     def __init__(self, rows, project_label):
@@ -844,24 +852,30 @@ class SearchScreen(ModalScreen):
         self._rows = list(rows)            # all (sid, s) for the project
         self._project_label = project_label
         self.include_unnamed = False
+        self._searched_once = False
 
     def compose(self) -> ComposeResult:
-        self._input = Input(placeholder=f"search {self._project_label}…",
+        self._input = Input(placeholder="type a word, then press Enter…",
                             id="search-input")
         self._status = Label("", id="search-status")
         self._results = OptionList(id="search-results")
         yield Vertical(self._input, self._status, self._results, id="search-panel")
 
     def on_mount(self) -> None:
+        self._input.border_title = f"Search {self._project_label}"
+        self._results.display = False       # no empty box to Tab into pre-search
         self._update_status_idle()
         self._input.focus()
 
     def _update_status_idle(self) -> None:
         toggle = "on" if self.include_unnamed else "off"
-        self._status.update(f"[dim]Enter to search · ctrl+u unnamed: {toggle}[/dim]")
+        self._status.update(
+            f"[dim]Enter to search · ctrl+u include unnamed: [b]{toggle}[/b][/dim]")
 
     def action_toggle_unnamed(self) -> None:
         self.include_unnamed = not self.include_unnamed
+        # Re-run if a query is present so the result set reflects the toggle;
+        # otherwise just reflect the new state in the status line.
         if self._input.value.strip():
             self.run_worker(self._run_search())
         else:
@@ -887,7 +901,7 @@ class SearchScreen(ModalScreen):
 
         def progress(done, total):
             self.app.call_from_thread(
-                self._status.update, f"[dim]searched {done}/{total}[/dim]")
+                self._status.update, f"[dim]searching… {done}/{total}[/dim]")
 
         def scan():
             return _search.search_project(
@@ -895,7 +909,7 @@ class SearchScreen(ModalScreen):
                 progress=progress)
 
         try:
-            results = await self.run_worker(scan, thread=True).wait()
+            results = await self.run_worker(scan, thread=True, exclusive=True).wait()
         except Exception:
             import traceback
             _log_line("conversation search failed (skipped):\n" + traceback.format_exc())
@@ -906,11 +920,14 @@ class SearchScreen(ModalScreen):
     def _show_results(self, needle, results) -> None:
         from . import search as _search
         from rich.text import Text
+        self._searched_once = True
         self._results.clear_options()
         searched = sum(
             1 for _sid, s in self._rows
             if (self.include_unnamed or s.get("name_cached")))
+        toggle = "on" if self.include_unnamed else "off"
         if not results:
+            self._results.display = False   # nothing to Tab into
             self._status.update(
                 _search.empty_state(needle, self._project_label, searched,
                                     self.include_unnamed))
@@ -918,11 +935,12 @@ class SearchScreen(ModalScreen):
         for r in results:
             markup = _search.format_session(r, needle)
             self._results.add_option(Option(Text.from_markup(markup), id=r["sid"]))
-        toggle = "on" if self.include_unnamed else "off"
+        self._results.display = True
+        # Keep focus on the input so the query stays editable (edit + Enter to
+        # refine); Tab moves into the now-populated list to pick.
         self._status.update(
-            f"[dim]{len(results)} sessions · {searched} searched · "
-            f"ctrl+u unnamed: {toggle}[/dim]")
-        self._results.focus()
+            f"[dim]{len(results)} sessions ({searched} searched) · Tab to pick · "
+            f"Enter to open · ctrl+u unnamed: [b]{toggle}[/b][/dim]")
 
 
 class SessionExplorerApp(App):
@@ -939,8 +957,10 @@ class SessionExplorerApp(App):
     SearchScreen { align: center middle; }
     #search-panel { width: 90; max-width: 95%; height: auto; max-height: 90%;
                     padding: 1 2; border: round $accent; background: $surface; }
+    #search-input { border: round $accent; }
+    #search-input:focus { border: round $accent; }
     #search-results { height: auto; max-height: 80%; }
-    #search-status { color: $text-muted; padding: 0 0 1 0; }
+    #search-status { color: $text-muted; padding: 0 1 1 1; }
     """
 
     BINDINGS = [

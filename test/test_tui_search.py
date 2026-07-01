@@ -36,13 +36,46 @@ async def test_search_screen_lists_only_matching_sessions(tmp_path):
         screen = tui.SearchScreen(rows, "repo")
         await app.push_screen(screen)
         await pilot.pause()
+        ol = screen.query_one("#search-results")
+        assert ol.display is False           # hidden until a search runs (no empty box)
         screen.query_one("#search-input").value = "media-common"
         await screen._run_search()          # await the worker deterministically
         await pilot.pause()
-        ol = screen.query_one("#search-results")
         # exactly one matching session, and its option id is the sid
         assert ol.option_count == 1
         assert ol.get_option_at_index(0).id == "a"
+        assert ol.display is True            # shown once there are results
+
+
+async def test_search_screen_hides_results_when_no_match(tmp_path):
+    idx, proj = _seed_index(tmp_path)
+    rows = [("b", {"name_cached": "beta", "transcript_path": str(tmp_path / "b.jsonl"),
+                   "last_active_at": "2026-01-01T00:00:00Z"})]
+    app = tui.SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        screen = tui.SearchScreen(rows, "repo")
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#search-input").value = "media-common"
+        await screen._run_search()
+        await pilot.pause()
+        ol = screen.query_one("#search-results")
+        assert ol.option_count == 0
+        assert ol.display is False           # no empty box to Tab into
+
+
+async def test_search_ctrl_u_toggles_include_unnamed(tmp_path):
+    idx, proj = _seed_index(tmp_path)
+    app = tui.SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        screen = tui.SearchScreen([], "repo")
+        await app.push_screen(screen)
+        await pilot.pause()
+        assert screen.include_unnamed is False
+        screen.action_toggle_unnamed()       # the ctrl+u action
+        assert screen.include_unnamed is True
+        screen.action_toggle_unnamed()
+        assert screen.include_unnamed is False
 
 
 def test_rows_for_project_groups_by_repo_root(tmp_path):
