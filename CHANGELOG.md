@@ -3,6 +3,17 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.18.3
+
+### Changed
+- **Clearer feedback while a summary is generating.** The `claude -p` call takes
+  several seconds, but the only progress signal was a toast that auto-dismisses
+  well before it returns — so `u` looked broken (a dead gap, then the summary
+  appears). The **Summary field itself** now shows a persistent *"⏳ Summarising…
+  (takes a few seconds)"* from the moment you press `u` until the text lands (or a
+  warning toast if it fails), and `u` opens the preview pane so that state is
+  always visible. Applies to auto-on-exit summaries too.
+
 ## 1.18.2
 
 ### Fixed

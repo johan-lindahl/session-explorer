@@ -271,7 +271,8 @@ def _preview_text(s: dict) -> str:
         s.get("notes") or "(no notes)",
         "",
         _summary_header(s),
-        s.get("summary") or "(no summary — press u to generate)",
+        ("[dim]⏳ Summarising… (takes a few seconds)[/]" if s.get("summarizing")
+         else s.get("summary") or "(no summary — press u to generate)"),
         "",
         "[b]First prompt[/]",
         s.get("first_prompt") or "(no first prompt recorded)",
@@ -891,6 +892,7 @@ class SessionExplorerApp(App):
         self._spinner_frame: int = 0
         self._wt_size_cache: dict[str, str] = {}   # sid -> human size, lazy
         self._offered_cleanup: set[str] = set()     # sids already asked to clean
+        self._summarizing: set[str] = set()          # sids with a summary in flight
         # sid -> (TreeNode, child_depth) for in-place glyph updates without a
         # full rebuild. Rebuilt by _populate.
         self._row_nodes: dict[str, tuple] = {}
@@ -2046,7 +2048,10 @@ class SessionExplorerApp(App):
             self.notify("No transcript on disk to summarise yet.", severity="warning")
             return
         self.notify("Summarising…")
-        self._summarize_worker(sid, tp, data.get("message_count") or 0)
+        # Open the preview so the persistent "Summarising…" state (and the result)
+        # is visible — otherwise the only signal is the auto-dismissing toast.
+        self._preview.display = True
+        self._start_summarize(sid, tp, data.get("message_count") or 0)
 
     def action_notes(self) -> None:
         node = self._tree.cursor_node
@@ -2508,7 +2513,15 @@ class SessionExplorerApp(App):
         tp = entry.get("transcript_path")
         if not tp or not os.path.exists(tp):
             return
-        self._summarize_worker(sid, tp, entry.get("message_count") or 0)
+        self._start_summarize(sid, tp, entry.get("message_count") or 0)
+
+    def _start_summarize(self, sid: str, transcript_path: str, msg_count: int) -> None:
+        """Mark the session in-progress (so the Summary field shows a persistent
+        'Summarising…' — the transient toast auto-dismisses before the several-
+        second `claude -p` call returns) and dispatch the worker."""
+        self._summarizing.add(sid)
+        self._refresh_preview()
+        self._summarize_worker(sid, transcript_path, msg_count)
 
     @work(thread=True, group="summarize")
     def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int) -> None:
@@ -2520,22 +2533,34 @@ class SessionExplorerApp(App):
         never take the app down (see the live-meta worker rule in CLAUDE.md)."""
         from . import summary as _summary
         from . import summarize as _summarize
+        ok = False
         try:
             digest = _summary.build_digest(transcript_path)
-            if not digest.strip():
-                return
-            text = _summarize.run(digest)
-            from datetime import datetime, timezone
-            _summary.set(_summary.default_path_for(self._index_path), sid, {
-                "text": text,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "msg_count": int(msg_count),
-                "model": _summarize.SUMMARY_MODEL,
-            })
-            self.call_from_thread(self._refresh_preview)
+            if digest.strip():
+                text = _summarize.run(digest)
+                from datetime import datetime, timezone
+                _summary.set(_summary.default_path_for(self._index_path), sid, {
+                    "text": text,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "msg_count": int(msg_count),
+                    "model": _summarize.SUMMARY_MODEL,
+                })
+                ok = True
         except Exception:
             import traceback
             _log_line("summary generation failed (skipped):\n" + traceback.format_exc())
+        finally:
+            self.call_from_thread(self._finish_summarizing, sid, ok)
+
+    def _finish_summarizing(self, sid: str, ok: bool) -> None:
+        """Clear the in-progress flag and repaint. On failure, tell the user
+        (else the field would silently snap back to '(no summary…)' and read as
+        a no-op)."""
+        self._summarizing.discard(sid)
+        if not ok:
+            self.notify("Couldn't summarise this session "
+                        "(see ~/.claude/session-explorer.log).", severity="warning")
+        self._refresh_preview()
 
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /
@@ -2683,6 +2708,8 @@ class SessionExplorerApp(App):
         if _se:
             data = {**data, "summary": _se.get("text"),
                     "summary_msg_count": _se.get("msg_count")}
+        if sid in self._summarizing:
+            data = {**data, "summarizing": True}
         from . import worktree as _wt
         if _wt.MARKER in (data.get("project_path") or ""):
             if sid not in self._wt_size_cache:
