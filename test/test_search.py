@@ -136,3 +136,13 @@ def test_format_session_escapes_markup_in_snippet():
 def test_empty_state_names_project_and_toggle():
     out = search.empty_state("media-common", "myrepo", 12, include_unnamed=False)
     assert "media-common" in out and "myrepo" in out and "12" in out
+
+
+def test_format_match_block_titles_and_highlights():
+    snips = [{"role": "user", "snippet": "tag media-common now", "match_start": 4, "match_end": 16},
+             {"role": "assistant", "snippet": "renamed media-common", "match_start": 8, "match_end": 20}]
+    out = search.format_match_block("media-common", snips)
+    assert "Search matches" in out
+    assert "media-common" in out
+    assert "[reverse]media-common[/reverse]" in out
+    assert "you" in out and "claude" in out

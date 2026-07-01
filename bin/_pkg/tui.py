@@ -854,6 +854,7 @@ class SearchScreen(ModalScreen):
         self.include_unnamed = False
         self._searched_once = False
         self._search_gen = 0               # bumped per search; stale renders drop
+        self._results_by_sid = {}          # sid -> result, for the preview handoff
 
     def compose(self) -> ComposeResult:
         self._input = Input(placeholder="type a word, then press Enter…",
@@ -888,7 +889,14 @@ class SearchScreen(ModalScreen):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list is self._results and event.option.id:
-            self.dismiss(event.option.id)
+            sid = event.option.id
+            # Hand the match to the app so the preview can show it in context
+            # ("go to the find" — a resumed live session can't be scrolled).
+            r = self._results_by_sid.get(sid)
+            self.app._search_match = ({
+                "sid": sid, "needle": self._input.value.strip(),
+                "snippets": r["snippets"]} if r else None)
+            self.dismiss(sid)
 
     async def _run_search(self) -> None:
         """Scan in a thread, then render on the UI thread. Awaitable so tests can
@@ -943,6 +951,7 @@ class SearchScreen(ModalScreen):
                 _search.empty_state(needle, self._project_label, searched,
                                     self.include_unnamed))
             return
+        self._results_by_sid = {r["sid"]: r for r in results}
         for r in results:
             markup = _search.format_session(r, needle)
             # Trailing blank line separates each session card from the next.
@@ -1070,6 +1079,10 @@ class SessionExplorerApp(App):
         # `q` press even when nothing is configured (cleared on next toggle-off).
         self._queue_visible: bool = False
         self._queue_hint_forced: bool = False
+        # Last search pick: {sid, needle, snippets} so the preview can show the
+        # match in context after a search selection. Cleared implicitly — the
+        # block only renders while the cursor is on that sid.
+        self._search_match: "dict | None" = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
@@ -2842,6 +2855,10 @@ class SessionExplorerApp(App):
                 self._view_mode = 2
             self._pending_select_sid = sid
             self._populate()
+            # Open the preview so the pick's details + the matching snippet show
+            # immediately (resume stays a deliberate second Enter on the tree).
+            self._preview.display = True
+            self._refresh_preview()
 
         self.push_screen(SearchScreen(rows, label), after)
 
@@ -2885,7 +2902,18 @@ class SessionExplorerApp(App):
             if sid not in self._wt_size_cache:
                 self._wt_size_cache[sid] = _wt.size(data.get("project_path"))
             data = {**data, "worktree_size": self._wt_size_cache[sid]}
-        self._preview.update(_preview_text(data))
+        text = _preview_text(data)
+        text += self._search_match_suffix(sid)
+        self._preview.update(text)
+
+    def _search_match_suffix(self, sid: str) -> str:
+        """A 'Search matches' block for the preview when this session is the one
+        just picked from search — else empty."""
+        m = self._search_match
+        if not m or m.get("sid") != sid:
+            return ""
+        from . import search as _search
+        return "\n\n" + _search.format_match_block(m["needle"], m["snippets"])
 
     def _render_live_preview(self, data: dict, sid: str):
         """Full metadata block (same as a stopped session) followed by a live
@@ -2897,7 +2925,7 @@ class SessionExplorerApp(App):
             transcript_path=data.get("transcript_path", ""),
             tmux_window_names=_tmux.session_windows(),
             capture_fn=_tmux.capture_pane)
-        meta = Text.from_markup(_preview_text(data))
+        meta = Text.from_markup(_preview_text(data) + self._search_match_suffix(sid))
         state = self._live_states.get(sid, "")
         divider = Text.from_markup(f"\n[dim]──[/] [green]live[/] [dim]({state}) ──────[/]\n")
         # Keep the metadata block visible: cap the live section to its last lines

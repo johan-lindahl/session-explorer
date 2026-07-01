@@ -132,6 +132,19 @@ def format_session(result, needle):
     return "\n".join(lines)
 
 
+def format_match_block(needle, snippets):
+    """Markup for a 'Search matches' block in the preview pane — the feasible
+    version of 'jump to the find' (a resumed live session can't be scrolled to
+    a message, but the matching snippets can be shown here)."""
+    from rich.markup import escape
+    lines = [f"[b]Search matches[/] [dim]for '{escape(needle)}'[/]"]
+    for h in snippets:
+        role = "[green]you   [/green]" if h["role"] == "user" else "[cyan]claude[/cyan]"
+        body = _highlight(h["snippet"], h["match_start"], h["match_end"])
+        lines.append(f"  {role}  {body}")
+    return "\n".join(lines)
+
+
 def empty_state(needle, project_label, searched, include_unnamed):
     from rich.markup import escape
     toggle = "on" if include_unnamed else "off"

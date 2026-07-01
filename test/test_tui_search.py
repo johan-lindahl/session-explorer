@@ -133,3 +133,30 @@ async def test_search_via_worker_path_renders_results(tmp_path):
         ol = screen.query_one("#search-results")
         assert ol.option_count == 1
         assert ol.display is True
+
+
+async def test_selecting_result_opens_preview_with_match_block(tmp_path):
+    idx, proj = _seed_index(tmp_path)
+    app = tui.SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        app._scanned = True
+        app._populate()
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("f")
+        await pilot.pause()
+        screen = app.screen
+        screen.query_one("#search-input").value = "media-common"
+        await screen._run_search()
+        await pilot.pause()
+        # simulate picking the option (sets app._search_match, dismisses)
+        ol = screen.query_one("#search-results")
+        screen.on_option_list_option_selected(
+            tui.OptionList.OptionSelected(ol, ol.get_option_at_index(0), 0))
+        await pilot.pause()
+        assert app._search_match is not None
+        assert app._search_match["sid"] == "a"
+        # preview is open and contains the match block
+        assert app._preview.display is True
+        rendered = str(app._preview.render())
+        assert "Search matches" in rendered
