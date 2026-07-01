@@ -14,7 +14,7 @@ import uuid
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Checkbox, Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
 from textual.widgets.option_list import Option
@@ -135,6 +135,7 @@ SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
+SUMMARY_MIN_MSGS = 8  # skip auto-summaries for sessions shorter than this
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
                           # docked pane follows it (coalesces hold-scroll churn)
@@ -219,6 +220,16 @@ def _column_header() -> str:
     return " " * GLYPH_W + f"{'NAME':<{name_region}}" + " " * WT_W + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
+def _summary_header(s: dict) -> str:
+    """'Summary' header, tagged '(may be stale)' when the session has grown since
+    the stored summary was generated."""
+    from . import summary as _summary
+    if s.get("summary") and _summary.is_stale(
+            {"msg_count": s.get("summary_msg_count") or 0}, s.get("message_count") or 0):
+        return "[b]Summary (may be stale)[/]"
+    return "[b]Summary[/]"
+
+
 def _preview_text(s: dict) -> str:
     """Markup for the preview pane of a session `data` dict. Pure so it can be
     unit-tested without spinning up the app.
@@ -258,6 +269,9 @@ def _preview_text(s: dict) -> str:
         "",
         "[b]Notes[/]",
         s.get("notes") or "(no notes)",
+        "",
+        _summary_header(s),
+        s.get("summary") or "(no summary — press u to generate)",
         "",
         "[b]First prompt[/]",
         s.get("first_prompt") or "(no first prompt recorded)",
@@ -347,6 +361,13 @@ def _help_text() -> str:
         "worktree; it turns [dark_red]⎇[/] if that worktree directory was deleted.",
         "Plain (no glyph) means a normal checkout. Updated on rescan ([b]F5[/]).",
         "Press [b]w[/] to reclaim a stopped worktree's directory — resume rebuilds it.",
+        "Deleting a session ([b]d[/]) also removes its worktree and safe-deletes the",
+        "merged branch (an unmerged branch, or a dirty tree, is kept).",
+        "",
+        "[b]Summaries[/]",
+        "Named sessions can carry a short AI summary of what they were about,",
+        "shown in the preview pane ([b]Space[/]). Turn on auto-summaries-on-exit in",
+        "Settings ([b],[/]), or press [b]u[/] to summarise the selected session now.",
         "",
         "[b]Running sessions in tmux[/]",
         "When launched with tmux, the explorer stays in the left pane and the",
@@ -372,17 +393,19 @@ def _help_text() -> str:
         key("m", "Move a session, or re-parent a whole folder, to another path"),
         key("n", "New folder under the current project/folder"),
         key("c", "New session (blank name → temporary unnamed; optional worktree)"),
-        key("d", "Delete the selected session, or an empty folder (confirms)"),
+        key("d", "Delete the selected session (+ its worktree), or an empty folder (confirms)"),
         key("w", "Remove the selected worktree's directory (branch + transcript kept)"),
         key("e", "Edit notes (Ctrl+S to save)"),
+        key("u", "Summarise (or refresh) the selected session"),
         key("Tab", "Cycle view: named+active → active only → all"),
         key("z", "Collapse the tree to project roots (toggle)"),
         key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
-        key("/", "Live filter across name, notes, first prompt"),
+        key("/", "Live filter across name, notes, first prompt, summary"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
         key("q", "Toggle the Queues pane (shared-resource leases)"),
         key("s", "Toggle shared-root queueing for the selected project"),
+        key(",", "Settings — auto-summaries, retention, usage, queues, tmux"),
         key("x", "Exit"),
         "",
         "[dim]Esc, q, h, or Space closes this help.[/]",
@@ -654,6 +677,50 @@ class QuitScreen(_PanelScreen):
         )
 
 
+class SettingsScreen(_PanelScreen):
+    """Persisted-preferences screen. ↑/↓ move · Enter/Space toggle · Esc close.
+    Rows and their activation live on the app (_settings_rows/_settings_activate)
+    so they're unit-testable; this screen is a thin re-rendering shell."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss()", "Close"),
+        Binding("enter", "toggle", "Toggle", show=False),
+        Binding("space", "toggle", "Toggle", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("Settings", classes="dialog-title"),
+            OptionList(id="settings-list"),
+            Label("↑↓ move · enter/space toggle · esc close", classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        ol = self.query_one("#settings-list", OptionList)
+        highlighted = ol.highlighted
+        ol.clear_options()
+        for rid, label in self.app._settings_rows():
+            ol.add_option(Option(label, id=rid))
+        if highlighted is not None and highlighted < ol.option_count:
+            ol.highlighted = highlighted
+
+    def action_toggle(self) -> None:
+        ol = self.query_one("#settings-list", OptionList)
+        if ol.highlighted is None:
+            return
+        rid = ol.get_option_at_index(ol.highlighted).id
+        self.app._settings_activate(rid)
+        self._rebuild()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.app._settings_activate(event.option.id)
+        self._rebuild()
+
+
 class NotesScreen(_PanelScreen):
     """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
 
@@ -761,7 +828,7 @@ class SessionExplorerApp(App):
     #empty-state { padding: 2 2; color: $text-muted; }
     #queues { height: auto; max-height: 40%; padding: 0 1; border-top: solid $accent; }
     Tree { padding: 0 1; width: 1fr; }
-    #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
+    #preview { height: auto; max-height: 40%; padding: 0 1; border-top: solid $accent; }
     HelpScreen { align: center middle; }
     #help { width: 78; max-width: 90%; height: auto; max-height: 90%;
             padding: 1 2; border: round $accent; background: $surface; }
@@ -777,6 +844,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("w", "remove_worktree", "Remove worktree"),
         Binding("e", "notes", "Edit notes"),
+        Binding("u", "update_summary", "Summarise"),
         Binding("tab", "cycle_view", "Cycle view", key_display="Tab", priority=True),
         Binding("z", "toggle_collapse", "Collapse tree"),
         Binding("g", "toggle_usage", "Usage bar"),
@@ -785,6 +853,7 @@ class SessionExplorerApp(App):
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
         Binding("q", "toggle_queues", "Queues"),
+        Binding("comma", "settings", "Settings"),
         Binding("x", "quit", "Exit"),
         Binding("s", "resource_setup", "Shared resources", show=False),
         Binding("escape", "close_preview", "Close preview", show=False),
@@ -863,7 +932,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q`/`x` fire the global
         # Queues-toggle or Exit bindings — the keystrokes belong in the text.
@@ -917,10 +986,12 @@ class SessionExplorerApp(App):
         self._empty.display = False
         self._queues = Static("", id="queues")
         self._queues.display = False
-        yield Horizontal(
-            Vertical(self._colheader, self._tree, self._queues, self._empty, id="treepane"),
-            self._preview,
-        )
+        # The preview sits under the tree (above the queues pane), not to the
+        # right: the explorer is the left tmux pane, so a right-side preview gets
+        # squeezed against a docked session. Vertical stacking suits the narrow
+        # left pane. See 2026-07-01 session-summaries design.
+        yield Vertical(self._colheader, self._tree, self._preview,
+                       self._queues, self._empty, id="treepane")
         self._filter = Input(placeholder="filter…", id="filter")
         self._filter.display = False
         self._filter.disabled = True  # also prevents focus while hidden
@@ -1046,6 +1117,40 @@ class SessionExplorerApp(App):
         if not os.path.exists(self._help_marker_path()):
             self._mark_help_seen()
             self.action_help()
+        self._maybe_prompt_summaries()
+
+    def _maybe_prompt_summaries(self) -> None:
+        """One-time discoverability nudge: introduce summaries + offer auto-on-exit,
+        then reveal the preview pane once. Only when there's ≥1 named session so a
+        brand-new empty install isn't nagged (it'll appear on a later launch)."""
+        # Escape hatch for automated/non-interactive runs (CI, scripted launch,
+        # the test suite): suppress the one-time nag entirely. Mirrors
+        # SESSION_EXPLORER_TMUX_NO_OFFER.
+        if os.environ.get("SESSION_EXPLORER_SUMMARY_NO_PROMPT"):
+            return
+        from . import summary as _summary
+        cd = self._claude_dir()
+        if _summary.prompted(cd):
+            return
+        try:
+            sessions = _index.load(self._index_path).get("sessions", {})
+        except Exception:
+            return
+        if not any(s.get("name_cached") for s in sessions.values()):
+            return
+
+        def after(ok: bool) -> None:
+            _summary.set_auto(cd, bool(ok))
+            _summary.mark_prompted(cd)
+            self._preview.display = True   # reveal so the user sees where summaries live
+            self._refresh_preview()
+
+        self.push_screen(ConfirmScreen(
+            "session-explorer can summarise what each session was about — shown in the "
+            "details pane (Space).",
+            detail="Auto-summarise sessions when you leave them? "
+                   "(You can also press u to summarise the selected one anytime.)"),
+            after)
 
     def _help_marker_path(self) -> str:
         return os.path.join(
@@ -1084,6 +1189,16 @@ class SessionExplorerApp(App):
                 self._index_path, _fs.default_path_for(self._index_path))
             self._fs_keys_migrated = True
         data = _index.load(self._index_path)
+        # Merge stored summaries into the in-memory session dicts so the preview
+        # and the `/` filter (which already searches s["summary"]) see them,
+        # without bloating the on-disk index.
+        from . import summary as _summary
+        _sums = _summary.load(_summary.default_path_for(self._index_path)).get("summaries", {})
+        for _sid, _s in data.get("sessions", {}).items():
+            _se = _sums.get(_sid)
+            if _se:
+                _s["summary"] = _se.get("text")
+                _s["summary_msg_count"] = _se.get("msg_count")
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
         live_ids = set(self._live_states)
         tree = build_nested_tree(
@@ -1912,6 +2027,27 @@ class SessionExplorerApp(App):
             f"(The branch and transcript are kept; resume rebuilds it.)"),
             lambda ok: self._apply_worktree_removal(sid, path, size) if ok else None)
 
+    def action_update_summary(self) -> None:
+        """(Re)generate the selected session's summary now. Session leaves only;
+        refuses a live session (transcript mid-write); bypasses the auto message
+        threshold since it's an explicit user action."""
+        node = self._tree.cursor_node
+        data = node.data if (node and node.data) else {}
+        sid = data.get("sid")
+        if not sid:
+            self.bell()
+            return
+        running = set(self._running_sids()) if self._tmux_enabled else set()
+        if sid in self._live_states or sid in running or sid == self._docked_sid:
+            self.notify("Stop the session before summarising it.", severity="warning")
+            return
+        tp = data.get("transcript_path")
+        if not tp or not os.path.exists(tp):
+            self.notify("No transcript on disk to summarise yet.", severity="warning")
+            return
+        self.notify("Summarising…")
+        self._summarize_worker(sid, tp, data.get("message_count") or 0)
+
     def action_notes(self) -> None:
         node = self._tree.cursor_node
         if not node or not node.data or "sid" not in node.data:
@@ -2082,6 +2218,79 @@ class SessionExplorerApp(App):
         if self._usage_timer is not None:
             self._usage_timer.stop()
             self._usage_timer = None
+
+    def action_settings(self) -> None:
+        self.push_screen(SettingsScreen())
+
+    def _tmux_installed(self) -> bool:
+        from . import tmux as _tmux
+        try:
+            return bool(_tmux.available()) or self._tmux_enabled
+        except Exception:
+            return self._tmux_enabled
+
+    def _settings_rows(self) -> "list[tuple[str, str]]":
+        """(row_id, label) for the Settings screen, reflecting current state.
+        The usage row only appears in the tmux-hosted layout (that's the only
+        place the bar exists); tmux is status/set-up only, never a disable."""
+        from . import summary as _summary
+        from . import retention
+        from . import ui_state as _ui
+        cd = self._claude_dir()
+
+        def box(on):
+            return "[x]" if on else "[ ]"
+
+        ret_on = retention.is_enabled(cd)
+        days = _ui.get_retention_days(self._ui_path())
+        rows = [
+            ("auto_summary", f"{box(_summary.auto_enabled(cd))} Auto-summarise sessions on exit"),
+            ("retention", f"{box(ret_on)} Auto-delete unnamed sessions"),
+            ("retention_days",
+             f"      after {days} days" + ("" if ret_on else "  (enable above first)")),
+        ]
+        if self._tmux_enabled:
+            rows.append(("usage", f"{box(self._usage_enabled())} Usage bar"))
+        rows.append(("queues", f"{box(self._queue_visible)} Queues pane"))
+        if self._tmux_installed():
+            rows.append(("tmux", "    tmux hosting: on"))
+        else:
+            rows.append(("tmux", "    tmux hosting: not set up  — Enter to set up"))
+        return rows
+
+    def _settings_activate(self, row_id: str) -> None:
+        from . import summary as _summary
+        from . import retention
+        from . import ui_state as _ui
+        cd = self._claude_dir()
+        if row_id == "auto_summary":
+            _summary.set_auto(cd, not _summary.auto_enabled(cd))
+        elif row_id == "retention":
+            if retention.is_enabled(cd):
+                retention.disable(cd)
+            else:
+                retention.enable(cd)
+        elif row_id == "retention_days":
+            def after(val: str) -> None:
+                try:
+                    n = int((val or "").strip())
+                except (ValueError, AttributeError):
+                    return
+                if n > 0:
+                    _ui.set_retention_days(self._ui_path(), n)
+            self.push_screen(
+                RenameScreen(str(_ui.get_retention_days(self._ui_path())),
+                             title="Auto-delete after how many days?"), after)
+        elif row_id == "usage":
+            self.action_toggle_usage()
+        elif row_id == "queues":
+            self.action_toggle_queues()
+        elif row_id == "tmux":
+            if not self._tmux_installed():
+                marker = self._tmux_decline_marker()
+                if os.path.exists(marker):
+                    os.unlink(marker)
+                self._maybe_offer_tmux()
         _tmux.set_status_left("")
 
     @work(thread=True, exclusive=True, group="usage")
@@ -2150,6 +2359,7 @@ class SessionExplorerApp(App):
         ended = prev_live - set(new_states)
         if ended:
             self._maybe_offer_worktree_cleanup(ended)
+            self._maybe_summarize(ended)
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
@@ -2277,6 +2487,55 @@ class SessionExplorerApp(App):
             f"Session '{name}' ended. Remove its worktree to free {size}?\n"
             f"{path}\n(The branch and transcript are kept; resume rebuilds it.)"),
             after)
+
+    def _maybe_summarize(self, ended: "set[str]") -> None:
+        """Auto-summarise the docked session when it just stopped, if the user
+        enabled auto-summaries and the session is named + long enough."""
+        from . import summary as _summary
+        if not _summary.auto_enabled(self._claude_dir()):
+            return
+        sid = self._docked_sid
+        if not sid or sid not in ended:
+            return
+        try:
+            entry = _index.load(self._index_path).get("sessions", {}).get(sid) or {}
+        except Exception:
+            return
+        if not entry.get("name_cached"):
+            return
+        if int(entry.get("message_count") or 0) < SUMMARY_MIN_MSGS:
+            return
+        tp = entry.get("transcript_path")
+        if not tp or not os.path.exists(tp):
+            return
+        self._summarize_worker(sid, tp, entry.get("message_count") or 0)
+
+    @work(thread=True, group="summarize")
+    def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int) -> None:
+        self._summarize_tick(sid, transcript_path, msg_count)
+
+    def _summarize_tick(self, sid: str, transcript_path: str, msg_count: int) -> None:
+        """Guarded worker body: build digest -> claude -p -> store -> refresh.
+        @work defaults to exit_on_error=True, so a failure here must log + skip,
+        never take the app down (see the live-meta worker rule in CLAUDE.md)."""
+        from . import summary as _summary
+        from . import summarize as _summarize
+        try:
+            digest = _summary.build_digest(transcript_path)
+            if not digest.strip():
+                return
+            text = _summarize.run(digest)
+            from datetime import datetime, timezone
+            _summary.set(_summary.default_path_for(self._index_path), sid, {
+                "text": text,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "msg_count": int(msg_count),
+                "model": _summarize.SUMMARY_MODEL,
+            })
+            self.call_from_thread(self._refresh_preview)
+        except Exception:
+            import traceback
+            _log_line("summary generation failed (skipped):\n" + traceback.format_exc())
 
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /

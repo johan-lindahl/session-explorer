@@ -64,6 +64,35 @@ def remove(project_path: "str | None") -> str:
     return "failed"
 
 
+def purge(project_path: "str | None") -> str:
+    """Permanent-delete cleanup: remove the working directory (no --force) AND
+    safe-delete the branch `worktree-<leaf>` (git branch -d — refuses unmerged).
+
+    Unlike remove(), this deletes the branch, because a permanently-deleted
+    session has nothing left to rebuild. Returns:
+      "removed"             dir gone (or absent) + branch deleted
+      "removed_branch_kept" dir gone (or absent) but branch unmerged/absent
+      "dirty"               git refused the dir (uncommitted/untracked work) — nothing changed
+      "error"               not a worktree path / repo root missing
+    """
+    root = root_of(project_path)
+    if not root or not os.path.isdir(root):
+        return "error"
+    if os.path.isdir(project_path):
+        rc = _git(root, "worktree", "remove", project_path).returncode
+        if rc != 0:
+            if os.path.isdir(project_path) and not removable(project_path):
+                return "dirty"
+            return "error"
+        _git(root, "worktree", "prune")
+    leaf = project_path.split(MARKER, 1)[1].strip("/")
+    if not leaf:
+        return "removed_branch_kept"
+    branch = f"worktree-{leaf}"
+    rc = _git(root, "branch", "-d", branch).returncode
+    return "removed" if rc == 0 else "removed_branch_kept"
+
+
 def size(project_path: "str | None") -> str:
     """Human-readable on-disk size (e.g. "12M"), or "" if unavailable."""
     if not project_path or not os.path.isdir(project_path):

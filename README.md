@@ -256,7 +256,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.17.7.** Released and installable from the Claude Code marketplace. Textual
+**v1.18.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders
@@ -275,7 +275,15 @@ always kept, resume rebuilds); and a shared-resource lease engine (see note belo
 pane** (`q`), a per-project **"Shared installed root"** setup dialog (`q` → `s`),
 new-session worktree auto-slug, plus a location-based `PreToolUse` deny hook
 (`root_guard.py`) that blocks worktree sessions from touching the shared root
-through tools, and a SessionStart usage hint.
+through tools, and a SessionStart usage hint. v1.18.0 adds **session summaries** —
+a short AI recap of what each named session was about, generated with `claude -p`
+(auto on exit once opted in, or on demand with `u`) and shown in the now
+bottom-docked preview/`Summary` pane (also searchable via `/`); a consolidated
+**Settings screen** (`,`) that houses the persisted toggles (auto-summaries,
+auto-delete retention **with a configurable period**, usage bar, queues pane, and
+tmux hosting status/set-up); and **delete-cascades-to-worktree** so removing a
+session (via `d` or `--gc`) also reclaims its worktree directory and safe-deletes
+its merged branch.
 
 > ⚠️ **Experimental.** The shared-resource queue is enforced for Claude tool
 > calls; non-Claude writers (scripts, the user's own terminal, runtime-computed

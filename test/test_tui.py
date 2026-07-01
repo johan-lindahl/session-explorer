@@ -243,7 +243,9 @@ def test_preview_text_includes_relevant_fields():
     ):
         assert needle in text, needle
     assert "18K" in text and "9%" in text   # context size + window pct
-    assert "Summary" not in text             # summary block dropped
+    # A Summary section is now shown; with no stored summary it invites `u`.
+    assert "Summary" in text
+    assert "(no summary — press u to generate)" in text
 
 
 async def test_esc_closes_preview_then_does_not_quit(index_path):
@@ -3209,3 +3211,228 @@ async def test_mount_reclaims_orphan_panes(index_path, monkeypatch):
     async with app.run_test() as pilot:
         await pilot.pause()
     assert seen == ["%0"]
+
+
+async def test_auto_summary_on_exit(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"
+    t.write_text('{"type":"user","message":{"content":"hi there"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    data["sessions"]["sid-1"]["message_count"] = 20
+    json.dump(data, open(index_path, "w"))
+    _summary.set_auto(str(tmp_path), True)
+    monkeypatch.setattr("_pkg.summarize.run", lambda digest, **k: "AUTO SUMMARY")
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "sid-1"
+        app._maybe_summarize({"sid-1"})
+        await pilot.pause()
+        await pilot.pause()
+    sp = _summary.default_path_for(index_path)
+    assert _summary.get(sp, "sid-1")["text"] == "AUTO SUMMARY"
+
+
+async def test_auto_summary_skipped_when_disabled(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    data["sessions"]["sid-1"]["message_count"] = 20
+    json.dump(data, open(index_path, "w"))
+    # auto NOT enabled
+    monkeypatch.setattr("_pkg.summarize.run", lambda *a, **k: "NOPE")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "sid-1"
+        app._maybe_summarize({"sid-1"})
+        await pilot.pause()
+    assert _summary.get(_summary.default_path_for(index_path), "sid-1") is None
+
+
+async def test_u_summarises_selected_session(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    data["sessions"]["sid-1"]["message_count"] = 3  # below threshold, but u bypasses it
+    json.dump(data, open(index_path, "w"))
+    monkeypatch.setattr("_pkg.summarize.run", lambda *a, **k: "MANUAL SUMMARY")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # to sid-1 leaf
+        await pilot.press("u")
+        await pilot.pause(); await pilot.pause()
+    assert _summary.get(_summary.default_path_for(index_path), "sid-1")["text"] == "MANUAL SUMMARY"
+
+
+async def test_u_refuses_live_session(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)  # transcript present, so only liveness can refuse
+    json.dump(data, open(index_path, "w"))
+    called = {"n": 0}
+    def _boom(*a, **k):
+        called["n"] += 1
+        return "SHOULD NOT RUN"
+    monkeypatch.setattr("_pkg.summarize.run", _boom)
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # cursor on sid-1
+        app._live_states = {"sid-1": "idle"}        # mark live, then call synchronously
+        app.action_update_summary()
+        await pilot.pause()
+    assert called["n"] == 0
+    assert _summary.get(_summary.default_path_for(index_path), "sid-1") is None
+
+
+async def test_preview_is_in_treepane_not_horizontal(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tp = app.query_one("#treepane")
+        assert app._preview in list(tp.walk_children())
+
+
+async def test_preview_shows_summary(index_path, tmp_path):
+    from _pkg import summary as _summary
+    _summary.set(_summary.default_path_for(index_path), "sid-1",
+                 {"text": "Refactored auth.", "msg_count": 18, "model": "x",
+                  "generated_at": "2026-07-01T00:00:00Z"})
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # sid-1
+        await pilot.press("space")                 # open preview
+        await pilot.pause()
+        assert "Refactored auth." in str(app._preview.render())
+
+
+def test_preview_text_has_summary_block():
+    from _pkg.tui import _preview_text
+    out = _preview_text({"sid": "s", "name_cached": "x", "summary": "did things",
+                         "message_count": 5, "summary_msg_count": 5})
+    assert "Summary" in out and "did things" in out
+
+
+def test_preview_text_marks_stale_summary():
+    from _pkg.tui import _preview_text
+    out = _preview_text({"sid": "s", "name_cached": "x", "summary": "old",
+                         "message_count": 30, "summary_msg_count": 10})
+    assert "may be stale" in out
+
+
+async def test_filter_finds_summary_text(index_path):
+    from _pkg import summary as _summary
+    _summary.set(_summary.default_path_for(index_path), "sid-1",
+                 {"text": "zebraword unique", "msg_count": 18, "model": "x",
+                  "generated_at": "2026-07-01T00:00:00Z"})
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._filter_needle = "zebraword"
+        app._populate()
+        await pilot.pause()
+        assert "sid-1" in app._row_nodes  # row survived the filter via its summary
+
+
+async def test_settings_toggles_auto_summary(index_path, tmp_path):
+    from _pkg import summary as _summary
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert _summary.auto_enabled(str(tmp_path)) is False
+        app._settings_activate("auto_summary")
+        assert _summary.auto_enabled(str(tmp_path)) is True
+        app._settings_activate("auto_summary")
+        assert _summary.auto_enabled(str(tmp_path)) is False
+
+
+async def test_settings_toggles_retention(index_path, tmp_path):
+    import json
+    (tmp_path / "settings.json").write_text(json.dumps({"cleanupPeriodDays": 30}))
+    from _pkg import retention
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._settings_activate("retention")
+        assert retention.is_enabled(str(tmp_path)) is True
+        app._settings_activate("retention")
+        assert retention.is_enabled(str(tmp_path)) is False
+
+
+async def test_settings_rows_reflect_state(index_path, tmp_path):
+    from _pkg import summary as _summary
+    _summary.set_auto(str(tmp_path), True)
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        rows = dict(app._settings_rows())
+        assert "[x]" in rows["auto_summary"]
+
+
+async def test_comma_opens_settings_screen(index_path):
+    from _pkg.tui import SessionExplorerApp, SettingsScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press(",")
+        await pilot.pause()
+        assert isinstance(app.screen, SettingsScreen)
+
+
+async def test_first_run_summaries_prompt_shows_and_enables(tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    monkeypatch.delenv("SESSION_EXPLORER_SUMMARY_NO_PROMPT", raising=False)
+    p = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "sessions": {"sid-1": {
+        "project_label": "demo", "project_path": "/tmp/demo",
+        "name_cached": "planning/x", "message_count": 10,
+    }}}, open(p, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    from _pkg.tui import SessionExplorerApp, ConfirmScreen
+    app = SessionExplorerApp(index_path=p)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)  # the summaries prompt
+        await pilot.press("y")
+        await pilot.pause()
+    assert _summary.auto_enabled(str(tmp_path)) is True
+    assert _summary.prompted(str(tmp_path)) is True
+
+
+async def test_first_run_summaries_prompt_skipped_when_no_named_session(tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    monkeypatch.delenv("SESSION_EXPLORER_SUMMARY_NO_PROMPT", raising=False)
+    p = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "sessions": {}}, open(p, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=p)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+    assert _summary.prompted(str(tmp_path)) is False  # not shown → not marked

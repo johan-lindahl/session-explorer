@@ -75,6 +75,30 @@ def enable(claude_dir: str) -> int:
     return prior
 
 
+def disable(claude_dir: str) -> None:
+    """Turn retention back off: restore the backed-up cleanupPeriodDays and drop
+    the backup file (which is the 'enabled' signal). No-op when not enabled.
+    Review-sensitive: this rewrites settings.json."""
+    bp = backup_path(claude_dir)
+    if not os.path.exists(bp):
+        return
+    try:
+        prior = int(open(bp, encoding="utf-8").read().strip())
+    except (ValueError, OSError):
+        prior = _DEFAULT_PRIOR
+    sp = _settings_path(claude_dir)
+    try:
+        with open(sp, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        data = {}
+    data["cleanupPeriodDays"] = prior
+    os.makedirs(claude_dir, exist_ok=True)
+    with open(sp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.unlink(bp)
+
+
 def decline(claude_dir: str) -> None:
     """Record that the user declined retention, so the prompt isn't shown again.
     Leaves settings.json untouched (native cleanup stays in charge)."""

@@ -1,6 +1,6 @@
 {
   "name": "session-explorer",
-  "version": "1.17.7",
+  "version": "1.18.0",
   "description": "File-explorer-style session management for Claude Code",
   "author": {
     "name": "Johan Lindahl",

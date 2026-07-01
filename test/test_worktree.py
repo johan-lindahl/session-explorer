@@ -82,3 +82,46 @@ def test_remove_then_recreate_round_trip(tmp_path):
     out = sp.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
                  capture_output=True, text=True).stdout
     assert "worktree-feat" in out
+
+
+def _commit_in_worktree(wt):
+    """Add a unique commit on the worktree's branch so `git branch -d` refuses."""
+    with open(os.path.join(wt, "new.txt"), "w") as f:
+        f.write("work")
+    sp.run(["git", "-C", wt, "add", "."], check=True, capture_output=True)
+    sp.run(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t",
+            "commit", "-qm", "wip"], check=True, capture_output=True)
+
+
+def test_purge_clean_merged_removes_dir_and_branch(tmp_path):
+    repo = tmp_path / "repo"
+    wt = _make_worktree(repo)
+    assert worktree.purge(wt) == "removed"
+    assert not os.path.isdir(wt)
+    branches = sp.run(["git", "-C", str(repo), "branch", "--list", "worktree-feat"],
+                      capture_output=True, text=True).stdout
+    assert "worktree-feat" not in branches            # branch deleted (was merged)
+
+
+def test_purge_unmerged_branch_kept(tmp_path):
+    repo = tmp_path / "repo"
+    wt = _make_worktree(repo)
+    _commit_in_worktree(wt)                            # branch now has a unique commit
+    assert worktree.purge(wt) == "removed_branch_kept"
+    assert not os.path.isdir(wt)
+    branches = sp.run(["git", "-C", str(repo), "branch", "--list", "worktree-feat"],
+                      capture_output=True, text=True).stdout
+    assert "worktree-feat" in branches                # branch kept (unmerged work)
+
+
+def test_purge_dirty_leaves_everything(tmp_path):
+    repo = tmp_path / "repo"
+    wt = _make_worktree(repo)
+    with open(os.path.join(wt, "dirty.txt"), "w") as f:
+        f.write("uncommitted")
+    assert worktree.purge(wt) == "dirty"
+    assert os.path.isdir(wt)
+
+
+def test_purge_non_worktree_path_is_error(tmp_path):
+    assert worktree.purge(str(tmp_path)) == "error"

@@ -11,13 +11,13 @@ def test_default_path_is_sibling_of_index(tmp_path):
 
 def test_load_missing_returns_default(tmp_path):
     p = str(tmp_path / "session-explorer-ui.json")
-    assert ui_state.load(p) == {"version": 1, "queue_pane_visible": False}
+    assert ui_state.load(p) == {"version": 1, "queue_pane_visible": False, "retention_days": 30}
 
 
 def test_load_corrupt_returns_default(tmp_path):
     p = tmp_path / "session-explorer-ui.json"
     p.write_text("{not json")
-    assert ui_state.load(str(p)) == {"version": 1, "queue_pane_visible": False}
+    assert ui_state.load(str(p)) == {"version": 1, "queue_pane_visible": False, "retention_days": 30}
 
 
 def test_set_and_load_roundtrip(tmp_path):
@@ -34,3 +34,10 @@ def test_set_preserves_unknown_keys(tmp_path):
     ui_state.set_queue_pane_visible(str(p), True)
     data = json.loads(p.read_text())
     assert data["future"] == 7 and data["queue_pane_visible"] is True
+
+
+def test_retention_days_default_and_roundtrip(tmp_path):
+    p = str(tmp_path / "ui.json")
+    assert ui_state.get_retention_days(p) == 30
+    ui_state.set_retention_days(p, 7)
+    assert ui_state.get_retention_days(p) == 7

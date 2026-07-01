@@ -12,7 +12,7 @@ import os
 import tempfile
 from typing import Any, Dict
 
-_DEFAULT: Dict[str, Any] = {"version": 1, "queue_pane_visible": False}
+_DEFAULT: Dict[str, Any] = {"version": 1, "queue_pane_visible": False, "retention_days": 30}
 
 
 def default_path_for(index_path: str) -> str:
@@ -53,4 +53,17 @@ def save(path: str, data: dict) -> None:
 def set_queue_pane_visible(path: str, visible: bool) -> None:
     data = load(path)
     data["queue_pane_visible"] = bool(visible)
+    save(path, data)
+
+
+def get_retention_days(path: str) -> int:
+    try:
+        return int(load(path).get("retention_days", 30))
+    except (TypeError, ValueError):
+        return 30
+
+
+def set_retention_days(path: str, days: int) -> None:
+    data = load(path)
+    data["retention_days"] = int(days)
     save(path, data)

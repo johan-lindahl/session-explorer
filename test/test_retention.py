@@ -59,3 +59,17 @@ def test_enable_clears_prior_decline(tmp_path):
     retention.enable(d)
     assert retention.is_declined(d) is False
     assert retention.is_enabled(d) is True
+
+
+def test_disable_restores_prior_and_removes_backup(tmp_path):
+    cd = str(tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({"cleanupPeriodDays": 45}))
+    retention.enable(cd)  # backs up 45, sets 36500
+    assert json.load(open(tmp_path / "settings.json"))["cleanupPeriodDays"] == 36500
+    retention.disable(cd)
+    assert json.load(open(tmp_path / "settings.json"))["cleanupPeriodDays"] == 45
+    assert not retention.is_enabled(cd)  # backup gone
+
+
+def test_disable_without_backup_is_noop(tmp_path):
+    retention.disable(str(tmp_path))  # must not raise

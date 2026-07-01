@@ -217,3 +217,15 @@ def test_teardown_no_mac_app_is_noop(tmp_path):
         mac_apps_dir=str(apps),
     )
     assert not any("Session Explorer.app" in a for a in actions)
+
+
+def test_teardown_removes_summary_artifacts(tmp_path):
+    from _pkg import uninstall
+    cd = tmp_path
+    (cd / ".session-explorer.summaries-auto").write_text("")
+    (cd / ".session-explorer.summaries-prompted").write_text("")
+    (cd / "session-explorer-summaries.json").write_text("{}")
+    uninstall.teardown(claude_dir=str(cd), purge_data=True)
+    assert not (cd / ".session-explorer.summaries-auto").exists()
+    assert not (cd / ".session-explorer.summaries-prompted").exists()
+    assert not (cd / "session-explorer-summaries.json").exists()
