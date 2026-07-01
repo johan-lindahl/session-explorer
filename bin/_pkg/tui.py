@@ -348,6 +348,12 @@ def _help_text() -> str:
         "Only named (renamed) sessions show by default. Press [b]Tab[/] to cycle",
         "the view: named+active → active only → all (incl. unnamed) → back.",
         "",
+        "[b]Search[/]",
+        "Press [b]f[/] to full-text search the current project's conversations —",
+        "it reads the transcripts and lists sessions whose messages match, with",
+        "snippets. [b]ctrl+u[/] includes unnamed sessions. (The [b]/[/] filter still",
+        "matches names, notes, the first prompt and summaries only.)",
+        "",
         "[b]Live sessions[/]",
         "Sessions running right now are flagged in the left column:",
         "  [green]⠿[/] spinner = working    [green]●[/] = idle, started here (Enter to jump in)",
@@ -954,6 +960,7 @@ class SessionExplorerApp(App):
         Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
+        Binding("f", "search", "Search"),
         Binding("h", "help", "Help"),
         Binding("q", "toggle_queues", "Queues"),
         Binding("comma", "settings", "Settings"),
@@ -1036,11 +1043,11 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "search", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
             return False
-        # While the filter Input is focused, never let `q`/`x` fire the global
-        # Queues-toggle or Exit bindings — the keystrokes belong in the text.
-        if action in ("quit", "toggle_queues") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+        # While the filter Input is focused, never let `q`/`x`/`f` fire the global
+        # Queues-toggle, Exit, or Search bindings — the keystrokes belong in the text.
+        if action in ("quit", "toggle_queues", "search") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # Tab is a priority binding (it must beat Textual's focus traversal), so
         # explicitly suppress it while the filter Input is focused — there, Tab
@@ -2776,6 +2783,35 @@ class SessionExplorerApp(App):
         self._filter.display = True
         self._filter.disabled = False
         self._filter.focus()
+
+    def _rows_for_project(self, project_root):
+        """All (sid, s) rows whose repo root == project_root (worktrees collapse
+        in), named and unnamed alike — SearchScreen applies the unnamed filter."""
+        from . import tree_model as _tm
+        data = _index.load(self._index_path).get("sessions", {})
+        return [(sid, s) for sid, s in data.items()
+                if _tm.session_root(s) == project_root]
+
+    def action_search(self) -> None:
+        project, _ = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+        rows = self._rows_for_project(project)
+        label = os.path.basename(project) or project
+
+        def after(sid: "str | None") -> None:
+            if not sid:
+                return
+            data = _index.load(self._index_path).get("sessions", {})
+            s = data.get(sid) or {}
+            # Reveal unnamed rows if the pick is unnamed and the tree hides them,
+            # so _populate's pending-select can actually land the cursor.
+            if not s.get("name_cached") and self._view_mode == 0:
+                self._view_mode = 2
+            self._pending_select_sid = sid
+            self._populate()
+
+        self.push_screen(SearchScreen(rows, label), after)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self._filter:
