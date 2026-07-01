@@ -135,6 +135,7 @@ SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
+SUMMARY_MIN_MSGS = 8  # skip auto-summaries for sessions shorter than this
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
                           # docked pane follows it (coalesces hold-scroll churn)
@@ -2150,6 +2151,7 @@ class SessionExplorerApp(App):
         ended = prev_live - set(new_states)
         if ended:
             self._maybe_offer_worktree_cleanup(ended)
+            self._maybe_summarize(ended)
         # Always refresh live metadata (stats change even when liveness doesn't).
         if self._live_states:
             self._refresh_live_metadata()
@@ -2277,6 +2279,55 @@ class SessionExplorerApp(App):
             f"Session '{name}' ended. Remove its worktree to free {size}?\n"
             f"{path}\n(The branch and transcript are kept; resume rebuilds it.)"),
             after)
+
+    def _maybe_summarize(self, ended: "set[str]") -> None:
+        """Auto-summarise the docked session when it just stopped, if the user
+        enabled auto-summaries and the session is named + long enough."""
+        from . import summary as _summary
+        if not _summary.auto_enabled(self._claude_dir()):
+            return
+        sid = self._docked_sid
+        if not sid or sid not in ended:
+            return
+        try:
+            entry = _index.load(self._index_path).get("sessions", {}).get(sid) or {}
+        except Exception:
+            return
+        if not entry.get("name_cached"):
+            return
+        if int(entry.get("message_count") or 0) < SUMMARY_MIN_MSGS:
+            return
+        tp = entry.get("transcript_path")
+        if not tp or not os.path.exists(tp):
+            return
+        self._summarize_worker(sid, tp, entry.get("message_count") or 0)
+
+    @work(thread=True, group="summarize")
+    def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int) -> None:
+        self._summarize_tick(sid, transcript_path, msg_count)
+
+    def _summarize_tick(self, sid: str, transcript_path: str, msg_count: int) -> None:
+        """Guarded worker body: build digest -> claude -p -> store -> refresh.
+        @work defaults to exit_on_error=True, so a failure here must log + skip,
+        never take the app down (see the live-meta worker rule in CLAUDE.md)."""
+        from . import summary as _summary
+        from . import summarize as _summarize
+        try:
+            digest = _summary.build_digest(transcript_path)
+            if not digest.strip():
+                return
+            text = _summarize.run(digest)
+            from datetime import datetime, timezone
+            _summary.set(_summary.default_path_for(self._index_path), sid, {
+                "text": text,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "msg_count": int(msg_count),
+                "model": _summarize.SUMMARY_MODEL,
+            })
+            self.call_from_thread(self._refresh_preview)
+        except Exception:
+            import traceback
+            _log_line("summary generation failed (skipped):\n" + traceback.format_exc())
 
     def _do_live_metadata_refresh(self) -> None:
         """Re-index each live session from its transcript so first_prompt / msgs /

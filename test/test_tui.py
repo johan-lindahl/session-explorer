@@ -3209,3 +3209,47 @@ async def test_mount_reclaims_orphan_panes(index_path, monkeypatch):
     async with app.run_test() as pilot:
         await pilot.pause()
     assert seen == ["%0"]
+
+
+async def test_auto_summary_on_exit(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"
+    t.write_text('{"type":"user","message":{"content":"hi there"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    data["sessions"]["sid-1"]["message_count"] = 20
+    json.dump(data, open(index_path, "w"))
+    _summary.set_auto(str(tmp_path), True)
+    monkeypatch.setattr("_pkg.summarize.run", lambda digest, **k: "AUTO SUMMARY")
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "sid-1"
+        app._maybe_summarize({"sid-1"})
+        await pilot.pause()
+        await pilot.pause()
+    sp = _summary.default_path_for(index_path)
+    assert _summary.get(sp, "sid-1")["text"] == "AUTO SUMMARY"
+
+
+async def test_auto_summary_skipped_when_disabled(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    data["sessions"]["sid-1"]["message_count"] = 20
+    json.dump(data, open(index_path, "w"))
+    # auto NOT enabled
+    monkeypatch.setattr("_pkg.summarize.run", lambda *a, **k: "NOPE")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._docked_sid = "sid-1"
+        app._maybe_summarize({"sid-1"})
+        await pilot.pause()
+    assert _summary.get(_summary.default_path_for(index_path), "sid-1") is None
