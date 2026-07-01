@@ -778,6 +778,7 @@ class SessionExplorerApp(App):
         Binding("d", "delete", "Delete"),
         Binding("w", "remove_worktree", "Remove worktree"),
         Binding("e", "notes", "Edit notes"),
+        Binding("u", "update_summary", "Summarise"),
         Binding("tab", "cycle_view", "Cycle view", key_display="Tab", priority=True),
         Binding("z", "toggle_collapse", "Collapse tree"),
         Binding("g", "toggle_usage", "Usage bar"),
@@ -864,7 +865,7 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q`/`x` fire the global
         # Queues-toggle or Exit bindings — the keystrokes belong in the text.
@@ -1912,6 +1913,27 @@ class SessionExplorerApp(App):
             f"Remove this worktree to free {size}?\n{path}\n"
             f"(The branch and transcript are kept; resume rebuilds it.)"),
             lambda ok: self._apply_worktree_removal(sid, path, size) if ok else None)
+
+    def action_update_summary(self) -> None:
+        """(Re)generate the selected session's summary now. Session leaves only;
+        refuses a live session (transcript mid-write); bypasses the auto message
+        threshold since it's an explicit user action."""
+        node = self._tree.cursor_node
+        data = node.data if (node and node.data) else {}
+        sid = data.get("sid")
+        if not sid:
+            self.bell()
+            return
+        running = set(self._running_sids()) if self._tmux_enabled else set()
+        if sid in self._live_states or sid in running or sid == self._docked_sid:
+            self.notify("Stop the session before summarising it.", severity="warning")
+            return
+        tp = data.get("transcript_path")
+        if not tp or not os.path.exists(tp):
+            self.notify("No transcript on disk to summarise yet.", severity="warning")
+            return
+        self.notify("Summarising…")
+        self._summarize_worker(sid, tp, data.get("message_count") or 0)
 
     def action_notes(self) -> None:
         node = self._tree.cursor_node

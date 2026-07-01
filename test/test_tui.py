@@ -3253,3 +3253,46 @@ async def test_auto_summary_skipped_when_disabled(index_path, tmp_path, monkeypa
         app._maybe_summarize({"sid-1"})
         await pilot.pause()
     assert _summary.get(_summary.default_path_for(index_path), "sid-1") is None
+
+
+async def test_u_summarises_selected_session(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    data["sessions"]["sid-1"]["message_count"] = 3  # below threshold, but u bypasses it
+    json.dump(data, open(index_path, "w"))
+    monkeypatch.setattr("_pkg.summarize.run", lambda *a, **k: "MANUAL SUMMARY")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # to sid-1 leaf
+        await pilot.press("u")
+        await pilot.pause(); await pilot.pause()
+    assert _summary.get(_summary.default_path_for(index_path), "sid-1")["text"] == "MANUAL SUMMARY"
+
+
+async def test_u_refuses_live_session(index_path, tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)  # transcript present, so only liveness can refuse
+    json.dump(data, open(index_path, "w"))
+    called = {"n": 0}
+    def _boom(*a, **k):
+        called["n"] += 1
+        return "SHOULD NOT RUN"
+    monkeypatch.setattr("_pkg.summarize.run", _boom)
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # cursor on sid-1
+        app._live_states = {"sid-1": "idle"}        # mark live, then call synchronously
+        app.action_update_summary()
+        await pilot.pause()
+    assert called["n"] == 0
+    assert _summary.get(_summary.default_path_for(index_path), "sid-1") is None
