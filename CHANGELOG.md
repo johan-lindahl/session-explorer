@@ -3,6 +3,17 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.18.2
+
+### Fixed
+- **A summary generated with `u` (or auto-on-exit) didn't appear until an F5
+  rescan.** The preview rendered the row's cached data, which was built by the
+  last repopulate — before the summary existed — so the freshly-written summary
+  sat in the sidecar unseen until a full refresh. The preview now reads the
+  current session's summary straight from the sidecar on every refresh, and the
+  summariser worker already refreshes the preview on completion, so pressing `u`
+  fills the Summary pane in place a few seconds later with no F5.
+
 ## 1.18.1
 
 ### Fixed

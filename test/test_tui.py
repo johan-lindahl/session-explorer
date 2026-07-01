@@ -3436,3 +3436,24 @@ async def test_first_run_summaries_prompt_skipped_when_no_named_session(tmp_path
     async with app.run_test() as pilot:
         await pilot.pause()
     assert _summary.prompted(str(tmp_path)) is False  # not shown → not marked
+
+
+async def test_refresh_preview_reads_fresh_summary_from_sidecar(index_path):
+    # A summary generated AFTER _populate (as 'u'/auto-on-exit does) must show in
+    # the preview without waiting for a repopulate/F5. Guards against the preview
+    # reading stale node.data instead of the sidecar.
+    from _pkg import summary as _summary
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # cursor on sid-1
+        await pilot.press("space")                 # open preview
+        await pilot.pause()
+        assert "no summary" in str(app._preview.render())
+        # Summary lands in the sidecar after populate (worker just wrote it):
+        _summary.set(_summary.default_path_for(index_path), "sid-1",
+                     {"text": "LATE SUMMARY", "msg_count": 18, "model": "x",
+                      "generated_at": "2026-07-01T00:00:00Z"})
+        app._refresh_preview()
+        assert "LATE SUMMARY" in str(app._preview.render())
