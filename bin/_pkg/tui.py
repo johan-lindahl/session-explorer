@@ -2675,6 +2675,14 @@ class SessionExplorerApp(App):
         if self._tmux_enabled and sid in self._live_states:
             self._preview.update(self._render_live_preview(data, sid))
             return
+        # Merge the summary fresh from the sidecar: it may have been generated
+        # (via `u` or auto-on-exit) *after* this row's data was built by
+        # _populate, so node.data can be stale. Cheap targeted read.
+        from . import summary as _summary
+        _se = _summary.get(_summary.default_path_for(self._index_path), sid)
+        if _se:
+            data = {**data, "summary": _se.get("text"),
+                    "summary_msg_count": _se.get("msg_count")}
         from . import worktree as _wt
         if _wt.MARKER in (data.get("project_path") or ""):
             if sid not in self._wt_size_cache:
