@@ -237,3 +237,9 @@ PY
   [ "$status" -eq 0 ]
   [ -z "$(echo -n "$output" | tr -d '[:space:]')" ]
 }
+
+@test "summariser sessions leave no trace (SESSION_EXPLORER_SUMMARIZER guard)" {
+  SESSION_EXPLORER_SUMMARIZER=1 run run_hook
+  [ "$status" -eq 0 ]
+  [ ! -f "$HOME/.claude/.session-explorer.current" ]
+}

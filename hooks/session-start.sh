@@ -7,9 +7,10 @@
 
 set -u
 
-# Usage-bar probe sessions (see usage.py / SESSION_EXPLORER_PROBE) must leave no
-# trace: no current-pointer, no index record, no GC. Bail out before any work.
-if [ "${SESSION_EXPLORER_PROBE:-}" = "1" ]; then exit 0; fi
+# Usage-bar probe sessions (see usage.py / SESSION_EXPLORER_PROBE) and the
+# transcript summariser (see summarize.py / SESSION_EXPLORER_SUMMARIZER) must
+# leave no trace: no current-pointer, no index record, no GC. Bail before work.
+if [ "${SESSION_EXPLORER_PROBE:-}" = "1" ] || [ "${SESSION_EXPLORER_SUMMARIZER:-}" = "1" ]; then exit 0; fi
 
 CLAUDE_DIR="${HOME}/.claude"
 LOG="${CLAUDE_DIR}/session-explorer.log"
