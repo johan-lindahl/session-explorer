@@ -35,11 +35,16 @@ _OPERATIONAL_SIDECARS = (
     ".session-explorer.tmux.conf",
     ".session-explorer.tmux-persist",  # legacy (pre-1.15): persist mechanism removed; clean leftovers
     ".session-explorer.tmux-declined",
+    # session-summary consent markers.
+    ".session-explorer.summaries-auto",
+    ".session-explorer.summaries-prompted",
 )
 _DATA_FILES = (
     "session-explorer-index.json",
     "session-explorer-index.json.lock",
     "session-explorer-folders.json",
+    "session-explorer-summaries.json",
+    "session-explorer-summaries.json.lock",
 )
 
 
