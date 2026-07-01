@@ -9,7 +9,8 @@ import re
 
 from . import jsonl as _jsonl
 
-SNIPPET_WIDTH = 80              # chars of context around a match
+SNIPPET_WIDTH = 64              # context chars around a match (fits one line
+                               # after the ~10-char role indent in the panel)
 MAX_SNIPPETS_PER_SESSION = 5   # cap snippets shown per session
 
 _WS = re.compile(r"\s+")
@@ -104,20 +105,28 @@ def _highlight(snippet, start, end):
 
 
 def format_session(result, needle):
-    """Rich markup for one session result: bold header + indented snippets."""
+    """Rich markup for one session result, in three visual tiers so the card
+    scans cleanly: a title line (accent ▌ marker + bold name), a dim metadata
+    line (hit count · date), then the snippet lines (speaker-coloured role label
+    + normal-weight text with the match reverse-highlighted)."""
     from rich.markup import escape
     hits = result["hit_count"]
     plural = "hit" if hits == 1 else "hits"
     when = (result.get("last_active_at") or "")[:10]
-    head = f"[b]{escape(result['name'])}[/b]  [dim]· {hits} {plural}"
+    # Tier 1 — title. Tier 2 — metadata on its own line (never wraps mid-phrase).
+    lines = [f"[yellow]▌[/yellow] [b]{escape(result['name'])}[/b]"]
+    meta = f"{hits} {plural}"
     if when:
-        head += f" · {when}"
-    head += "[/dim]"
-    lines = [head]
+        meta += f" · {when}"
+    lines.append(f"  [dim]{meta}[/dim]")
+    # Tier 3 — content. Role labels are colour-coded and padded so snippets align.
     for h in result["snippets"]:
-        who = "you" if h["role"] == "user" else "claude"
+        if h["role"] == "user":
+            role = "[green]you   [/green]"
+        else:
+            role = "[cyan]claude[/cyan]"
         body = _highlight(h["snippet"], h["match_start"], h["match_end"])
-        lines.append(f"  [dim]{who}:[/dim] {body}")
+        lines.append(f"  {role}  {body}")
     if result["overflow"]:
         lines.append(f"  [dim]+{result['overflow']} more[/dim]")
     return "\n".join(lines)

@@ -945,7 +945,8 @@ class SearchScreen(ModalScreen):
             return
         for r in results:
             markup = _search.format_session(r, needle)
-            self._results.add_option(Option(Text.from_markup(markup), id=r["sid"]))
+            # Trailing blank line separates each session card from the next.
+            self._results.add_option(Option(Text.from_markup(markup + "\n"), id=r["sid"]))
         self._results.display = True
         # Keep focus on the input so the query stays editable (edit + Enter to
         # refine); Tab moves into the now-populated list to pick.
