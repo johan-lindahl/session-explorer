@@ -3,6 +3,21 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.18.1
+
+### Fixed
+- **Session summaries returned nothing (the `u`/auto path silently produced no
+  summary).** The `claude -p` invocation was broken two ways: the transcript was
+  piped on **stdin**, which the CLI ignores (it answers the `-p` argument and
+  never sees the pipe), and it ran in the explorer's cwd, so Claude loaded that
+  project's `CLAUDE.md` and summarised the *wrong thing*. The digest now rides in
+  the `-p` argument, wrapped in explicit `<<<TRANSCRIPT_START/END>>>` markers with
+  the instruction repeated at both ends and a "do not continue the conversation —
+  only describe it" directive (a long transcript of `USER:`/`ASSISTANT:` turns
+  otherwise reads as a live chat the model *continues* — "Ready for your next
+  task…"), the summariser runs in a throwaway empty cwd (no project context
+  bleed), and stdin is closed so the CLI doesn't wait ~3s for pipe input.
+
 ## 1.18.0
 
 ### Added
