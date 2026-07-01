@@ -112,3 +112,24 @@ async def test_f_key_opens_search_and_selection_moves_cursor(tmp_path):
         await pilot.pause()
         node = app._tree.cursor_node
         assert node is not None and (node.data or {}).get("sid") == "a"
+
+
+async def test_search_via_worker_path_renders_results(tmp_path):
+    # Reproduces the real Enter path: on_input_submitted wraps _run_search in a
+    # worker; an exclusive inner scan worker must NOT cancel that outer worker
+    # (which raised WorkerCancelled → "search failed").
+    idx, proj = _seed_index(tmp_path)
+    rows = [("a", {"name_cached": "alpha", "transcript_path": str(tmp_path / "a.jsonl"),
+                   "last_active_at": "2026-01-02T00:00:00Z"})]
+    app = tui.SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        screen = tui.SearchScreen(rows, "repo")
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#search-input").value = "media-common"
+        w = screen.run_worker(screen._run_search())   # mimic on_input_submitted
+        await w.wait()
+        await pilot.pause()
+        ol = screen.query_one("#search-results")
+        assert ol.option_count == 1
+        assert ol.display is True

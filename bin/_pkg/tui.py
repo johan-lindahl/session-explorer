@@ -853,6 +853,7 @@ class SearchScreen(ModalScreen):
         self._project_label = project_label
         self.include_unnamed = False
         self._searched_once = False
+        self._search_gen = 0               # bumped per search; stale renders drop
 
     def compose(self) -> ComposeResult:
         self._input = Input(placeholder="type a word, then press Enter…",
@@ -894,9 +895,12 @@ class SearchScreen(ModalScreen):
         drive it deterministically; guarded so a scan failure can't kill the app
         (see _summarize_tick / CLAUDE.md worker rule)."""
         from . import search as _search
+        from textual.worker import WorkerCancelled
         needle = self._input.value.strip()
         if not needle:
             return
+        self._search_gen += 1
+        gen = self._search_gen
         self._status.update("[dim]searching…[/dim]")
 
         def progress(done, total):
@@ -908,13 +912,20 @@ class SearchScreen(ModalScreen):
                 self._rows, needle, include_unnamed=self.include_unnamed,
                 progress=progress)
 
+        # NOT exclusive: the scan runs inside this coroutine's own worker, so an
+        # exclusive scan would cancel its own parent (→ WorkerCancelled). A
+        # generation token discards a superseded search's results instead.
         try:
-            results = await self.run_worker(scan, thread=True, exclusive=True).wait()
+            results = await self.run_worker(scan, thread=True).wait()
+        except WorkerCancelled:
+            return                          # superseded/cancelled — not a failure
         except Exception:
             import traceback
             _log_line("conversation search failed (skipped):\n" + traceback.format_exc())
             self._status.update("[dim]search failed (see ~/.claude/session-explorer.log)[/dim]")
             return
+        if gen != self._search_gen:
+            return                          # a newer search superseded this one
         self._show_results(needle, results)
 
     def _show_results(self, needle, results) -> None:
