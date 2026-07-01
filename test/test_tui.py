@@ -243,7 +243,9 @@ def test_preview_text_includes_relevant_fields():
     ):
         assert needle in text, needle
     assert "18K" in text and "9%" in text   # context size + window pct
-    assert "Summary" not in text             # summary block dropped
+    # A Summary section is now shown; with no stored summary it invites `u`.
+    assert "Summary" in text
+    assert "(no summary — press u to generate)" in text
 
 
 async def test_esc_closes_preview_then_does_not_quit(index_path):
@@ -3296,3 +3298,56 @@ async def test_u_refuses_live_session(index_path, tmp_path, monkeypatch):
         await pilot.pause()
     assert called["n"] == 0
     assert _summary.get(_summary.default_path_for(index_path), "sid-1") is None
+
+
+async def test_preview_is_in_treepane_not_horizontal(index_path):
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tp = app.query_one("#treepane")
+        assert app._preview in list(tp.walk_children())
+
+
+async def test_preview_shows_summary(index_path, tmp_path):
+    from _pkg import summary as _summary
+    _summary.set(_summary.default_path_for(index_path), "sid-1",
+                 {"text": "Refactored auth.", "msg_count": 18, "model": "x",
+                  "generated_at": "2026-07-01T00:00:00Z"})
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # sid-1
+        await pilot.press("space")                 # open preview
+        await pilot.pause()
+        assert "Refactored auth." in str(app._preview.render())
+
+
+def test_preview_text_has_summary_block():
+    from _pkg.tui import _preview_text
+    out = _preview_text({"sid": "s", "name_cached": "x", "summary": "did things",
+                         "message_count": 5, "summary_msg_count": 5})
+    assert "Summary" in out and "did things" in out
+
+
+def test_preview_text_marks_stale_summary():
+    from _pkg.tui import _preview_text
+    out = _preview_text({"sid": "s", "name_cached": "x", "summary": "old",
+                         "message_count": 30, "summary_msg_count": 10})
+    assert "may be stale" in out
+
+
+async def test_filter_finds_summary_text(index_path):
+    from _pkg import summary as _summary
+    _summary.set(_summary.default_path_for(index_path), "sid-1",
+                 {"text": "zebraword unique", "msg_count": 18, "model": "x",
+                  "generated_at": "2026-07-01T00:00:00Z"})
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._filter_needle = "zebraword"
+        app._populate()
+        await pilot.pause()
+        assert "sid-1" in app._row_nodes  # row survived the filter via its summary

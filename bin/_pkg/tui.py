@@ -14,7 +14,7 @@ import uuid
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Checkbox, Footer, Header, Input, Label, OptionList, ProgressBar, Static, TextArea, Tree
 from textual.widgets.option_list import Option
@@ -220,6 +220,16 @@ def _column_header() -> str:
     return " " * GLYPH_W + f"{'NAME':<{name_region}}" + " " * WT_W + _stat_suffix("AGE", "~TOK", "CTX", "MSGS", "    ", "FIRST PROMPT")
 
 
+def _summary_header(s: dict) -> str:
+    """'Summary' header, tagged '(may be stale)' when the session has grown since
+    the stored summary was generated."""
+    from . import summary as _summary
+    if s.get("summary") and _summary.is_stale(
+            {"msg_count": s.get("summary_msg_count") or 0}, s.get("message_count") or 0):
+        return "[b]Summary (may be stale)[/]"
+    return "[b]Summary[/]"
+
+
 def _preview_text(s: dict) -> str:
     """Markup for the preview pane of a session `data` dict. Pure so it can be
     unit-tested without spinning up the app.
@@ -259,6 +269,9 @@ def _preview_text(s: dict) -> str:
         "",
         "[b]Notes[/]",
         s.get("notes") or "(no notes)",
+        "",
+        _summary_header(s),
+        s.get("summary") or "(no summary — press u to generate)",
         "",
         "[b]First prompt[/]",
         s.get("first_prompt") or "(no first prompt recorded)",
@@ -762,7 +775,7 @@ class SessionExplorerApp(App):
     #empty-state { padding: 2 2; color: $text-muted; }
     #queues { height: auto; max-height: 40%; padding: 0 1; border-top: solid $accent; }
     Tree { padding: 0 1; width: 1fr; }
-    #preview { width: 1fr; padding: 0 1; border-left: solid $accent; }
+    #preview { height: auto; max-height: 40%; padding: 0 1; border-top: solid $accent; }
     HelpScreen { align: center middle; }
     #help { width: 78; max-width: 90%; height: auto; max-height: 90%;
             padding: 1 2; border: round $accent; background: $surface; }
@@ -919,10 +932,12 @@ class SessionExplorerApp(App):
         self._empty.display = False
         self._queues = Static("", id="queues")
         self._queues.display = False
-        yield Horizontal(
-            Vertical(self._colheader, self._tree, self._queues, self._empty, id="treepane"),
-            self._preview,
-        )
+        # The preview sits under the tree (above the queues pane), not to the
+        # right: the explorer is the left tmux pane, so a right-side preview gets
+        # squeezed against a docked session. Vertical stacking suits the narrow
+        # left pane. See 2026-07-01 session-summaries design.
+        yield Vertical(self._colheader, self._tree, self._preview,
+                       self._queues, self._empty, id="treepane")
         self._filter = Input(placeholder="filter…", id="filter")
         self._filter.display = False
         self._filter.disabled = True  # also prevents focus while hidden
@@ -1086,6 +1101,16 @@ class SessionExplorerApp(App):
                 self._index_path, _fs.default_path_for(self._index_path))
             self._fs_keys_migrated = True
         data = _index.load(self._index_path)
+        # Merge stored summaries into the in-memory session dicts so the preview
+        # and the `/` filter (which already searches s["summary"]) see them,
+        # without bloating the on-disk index.
+        from . import summary as _summary
+        _sums = _summary.load(_summary.default_path_for(self._index_path)).get("summaries", {})
+        for _sid, _s in data.get("sessions", {}).items():
+            _se = _sums.get(_sid)
+            if _se:
+                _s["summary"] = _se.get("text")
+                _s["summary_msg_count"] = _se.get("msg_count")
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
         live_ids = set(self._live_states)
         tree = build_nested_tree(
