@@ -668,6 +668,50 @@ class QuitScreen(_PanelScreen):
         )
 
 
+class SettingsScreen(_PanelScreen):
+    """Persisted-preferences screen. ↑/↓ move · Enter/Space toggle · Esc close.
+    Rows and their activation live on the app (_settings_rows/_settings_activate)
+    so they're unit-testable; this screen is a thin re-rendering shell."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss()", "Close"),
+        Binding("enter", "toggle", "Toggle", show=False),
+        Binding("space", "toggle", "Toggle", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("Settings", classes="dialog-title"),
+            OptionList(id="settings-list"),
+            Label("↑↓ move · enter/space toggle · esc close", classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        ol = self.query_one("#settings-list", OptionList)
+        highlighted = ol.highlighted
+        ol.clear_options()
+        for rid, label in self.app._settings_rows():
+            ol.add_option(Option(label, id=rid))
+        if highlighted is not None and highlighted < ol.option_count:
+            ol.highlighted = highlighted
+
+    def action_toggle(self) -> None:
+        ol = self.query_one("#settings-list", OptionList)
+        if ol.highlighted is None:
+            return
+        rid = ol.get_option_at_index(ol.highlighted).id
+        self.app._settings_activate(rid)
+        self._rebuild()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.app._settings_activate(event.option.id)
+        self._rebuild()
+
+
 class NotesScreen(_PanelScreen):
     """Multi-line editor. Returns the new notes (may be empty) or None on cancel."""
 
@@ -800,6 +844,7 @@ class SessionExplorerApp(App):
         Binding("slash", "filter", "Filter"),
         Binding("h", "help", "Help"),
         Binding("q", "toggle_queues", "Queues"),
+        Binding("comma", "settings", "Settings"),
         Binding("x", "quit", "Exit"),
         Binding("s", "resource_setup", "Shared resources", show=False),
         Binding("escape", "close_preview", "Close preview", show=False),
@@ -2130,6 +2175,79 @@ class SessionExplorerApp(App):
         if self._usage_timer is not None:
             self._usage_timer.stop()
             self._usage_timer = None
+
+    def action_settings(self) -> None:
+        self.push_screen(SettingsScreen())
+
+    def _tmux_installed(self) -> bool:
+        from . import tmux as _tmux
+        try:
+            return bool(_tmux.available()) or self._tmux_enabled
+        except Exception:
+            return self._tmux_enabled
+
+    def _settings_rows(self) -> "list[tuple[str, str]]":
+        """(row_id, label) for the Settings screen, reflecting current state.
+        The usage row only appears in the tmux-hosted layout (that's the only
+        place the bar exists); tmux is status/set-up only, never a disable."""
+        from . import summary as _summary
+        from . import retention
+        from . import ui_state as _ui
+        cd = self._claude_dir()
+
+        def box(on):
+            return "[x]" if on else "[ ]"
+
+        ret_on = retention.is_enabled(cd)
+        days = _ui.get_retention_days(self._ui_path())
+        rows = [
+            ("auto_summary", f"{box(_summary.auto_enabled(cd))} Auto-summarise sessions on exit"),
+            ("retention", f"{box(ret_on)} Auto-delete unnamed sessions"),
+            ("retention_days",
+             f"      after {days} days" + ("" if ret_on else "  (enable above first)")),
+        ]
+        if self._tmux_enabled:
+            rows.append(("usage", f"{box(self._usage_enabled())} Usage bar"))
+        rows.append(("queues", f"{box(self._queue_visible)} Queues pane"))
+        if self._tmux_installed():
+            rows.append(("tmux", "    tmux hosting: on"))
+        else:
+            rows.append(("tmux", "    tmux hosting: not set up  — Enter to set up"))
+        return rows
+
+    def _settings_activate(self, row_id: str) -> None:
+        from . import summary as _summary
+        from . import retention
+        from . import ui_state as _ui
+        cd = self._claude_dir()
+        if row_id == "auto_summary":
+            _summary.set_auto(cd, not _summary.auto_enabled(cd))
+        elif row_id == "retention":
+            if retention.is_enabled(cd):
+                retention.disable(cd)
+            else:
+                retention.enable(cd)
+        elif row_id == "retention_days":
+            def after(val: str) -> None:
+                try:
+                    n = int((val or "").strip())
+                except (ValueError, AttributeError):
+                    return
+                if n > 0:
+                    _ui.set_retention_days(self._ui_path(), n)
+            self.push_screen(
+                RenameScreen(str(_ui.get_retention_days(self._ui_path())),
+                             title="Auto-delete after how many days?"), after)
+        elif row_id == "usage":
+            self.action_toggle_usage()
+        elif row_id == "queues":
+            self.action_toggle_queues()
+        elif row_id == "tmux":
+            if not self._tmux_installed():
+                marker = self._tmux_decline_marker()
+                if os.path.exists(marker):
+                    os.unlink(marker)
+                self._maybe_offer_tmux()
         _tmux.set_status_left("")
 
     @work(thread=True, exclusive=True, group="usage")

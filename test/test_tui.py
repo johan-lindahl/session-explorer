@@ -3351,3 +3351,51 @@ async def test_filter_finds_summary_text(index_path):
         app._populate()
         await pilot.pause()
         assert "sid-1" in app._row_nodes  # row survived the filter via its summary
+
+
+async def test_settings_toggles_auto_summary(index_path, tmp_path):
+    from _pkg import summary as _summary
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert _summary.auto_enabled(str(tmp_path)) is False
+        app._settings_activate("auto_summary")
+        assert _summary.auto_enabled(str(tmp_path)) is True
+        app._settings_activate("auto_summary")
+        assert _summary.auto_enabled(str(tmp_path)) is False
+
+
+async def test_settings_toggles_retention(index_path, tmp_path):
+    import json
+    (tmp_path / "settings.json").write_text(json.dumps({"cleanupPeriodDays": 30}))
+    from _pkg import retention
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._settings_activate("retention")
+        assert retention.is_enabled(str(tmp_path)) is True
+        app._settings_activate("retention")
+        assert retention.is_enabled(str(tmp_path)) is False
+
+
+async def test_settings_rows_reflect_state(index_path, tmp_path):
+    from _pkg import summary as _summary
+    _summary.set_auto(str(tmp_path), True)
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        rows = dict(app._settings_rows())
+        assert "[x]" in rows["auto_summary"]
+
+
+async def test_comma_opens_settings_screen(index_path):
+    from _pkg.tui import SessionExplorerApp, SettingsScreen
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press(",")
+        await pilot.pause()
+        assert isinstance(app.screen, SettingsScreen)
