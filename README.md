@@ -7,9 +7,9 @@ file-explorer-style listing: browse, organize, and resume sessions from a single
 slash command.
 
 The Textual TUI gives you arrow navigation, expand/collapse, rename, move,
-delete, notes, a preview pane, live filter, and a live indicator showing which
-sessions are running right now. The text-mode `list` subcommand remains for
-scripting.
+delete, notes, a preview pane, live filter, full-text search across your past
+conversations (`f`), and a live indicator showing which sessions are running
+right now. The text-mode `list` subcommand remains for scripting.
 
 See [`SPEC.md`](./SPEC.md) for the full design.
 
@@ -168,6 +168,7 @@ session-explorer tui       # run the TUI in the current terminal
 | `F9` | *(tmux-hosted)* Switch focus between the explorer and the docked session pane — also by mouse click |
 | `F12` | *(tmux-hosted)* Zoom the focused pane fullscreen and back |
 | `/` | Live filter across name, notes, first prompt, summary |
+| `f` | Full-text **search** the current project's conversations — reads the transcripts and lists sessions whose messages match, with snippets (`ctrl+u` to include unnamed) |
 | `h` | Show help (auto-opens once on first launch) |
 | `Esc` | Close the preview pane / help (or clear an active filter) |
 | `q` | Quit |
@@ -256,7 +257,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.18.3.** Released and installable from the Claude Code marketplace. Textual
+**v1.19.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders

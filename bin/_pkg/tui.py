@@ -221,9 +221,11 @@ def _column_header() -> str:
 
 
 def _summary_header(s: dict) -> str:
-    """'Summary' header, tagged '(may be stale)' when the session has grown since
-    the stored summary was generated."""
+    """'Summary' header, tagged when the summary is a live snapshot (regenerated
+    on exit) or has gone stale since it was generated."""
     from . import summary as _summary
+    if s.get("summary") and s.get("provisional"):
+        return "[b]Summary[/] [dim](live snapshot — refreshes on exit)[/]"
     if s.get("summary") and _summary.is_stale(
             {"msg_count": s.get("summary_msg_count") or 0}, s.get("message_count") or 0):
         return "[b]Summary (may be stale)[/]"
@@ -348,6 +350,12 @@ def _help_text() -> str:
         "Only named (renamed) sessions show by default. Press [b]Tab[/] to cycle",
         "the view: named+active → active only → all (incl. unnamed) → back.",
         "",
+        "[b]Search[/]",
+        "Press [b]f[/] to full-text search the current project's conversations —",
+        "it reads the transcripts and lists sessions whose messages match, with",
+        "snippets. [b]ctrl+u[/] includes unnamed sessions. (The [b]/[/] filter still",
+        "matches names, notes, the first prompt and summaries only.)",
+        "",
         "[b]Live sessions[/]",
         "Sessions running right now are flagged in the left column:",
         "  [green]⠿[/] spinner = working    [green]●[/] = idle, started here (Enter to jump in)",
@@ -368,7 +376,8 @@ def _help_text() -> str:
         "[b]Summaries[/]",
         "Named sessions can carry a short AI summary of what they were about,",
         "shown in the preview pane ([b]Space[/]). Turn on auto-summaries-on-exit in",
-        "Settings ([b],[/]), or press [b]u[/] to summarise the selected session now.",
+        "Settings ([b],[/]), or press [b]u[/] to summarise the selected session now —",
+        "including a [b]running[/] one (a snapshot so far, refreshed when it exits).",
         "",
         "[b]Running sessions in tmux[/]",
         "When launched with tmux, the explorer stays in the left pane and the",
@@ -822,6 +831,142 @@ class HelpScreen(ModalScreen[None]):
         yield VerticalScroll(Static(_help_text(), id="help-body"), id="help")
 
 
+class SearchScreen(ModalScreen):
+    """Full-text search over one project's transcripts (spec 2026-07-01).
+    Type a term in the search box, press Enter to scan. Matches are listed as
+    sessions with in-context snippets; the results list stays hidden until a
+    scan returns something, so there's no empty box to Tab into. Focus stays on
+    the input after a search (edit + Enter to refine); Tab moves into the
+    populated results, arrows navigate, Enter opens, Esc cancels. ctrl+u toggles
+    including unnamed sessions.
+
+    A per-project scan reads the JSONL bodies live (~1.4s for a 200-session
+    project), so search is Enter-driven, not live-as-you-type."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Cancel"),
+        # priority so it fires before the focused Input, whose own ctrl+u would
+        # otherwise "delete to line start" and swallow the toggle.
+        Binding("ctrl+u", "toggle_unnamed", "Incl. unnamed", priority=True),
+    ]
+
+    def __init__(self, rows, project_label):
+        super().__init__()
+        self._rows = list(rows)            # all (sid, s) for the project
+        self._project_label = project_label
+        self.include_unnamed = False
+        self._searched_once = False
+        self._search_gen = 0               # bumped per search; stale renders drop
+        self._results_by_sid = {}          # sid -> result, for the preview handoff
+
+    def compose(self) -> ComposeResult:
+        self._input = Input(placeholder="type a word, then press Enter…",
+                            id="search-input")
+        self._status = Label("", id="search-status")
+        self._results = OptionList(id="search-results")
+        yield Vertical(self._input, self._status, self._results, id="search-panel")
+
+    def on_mount(self) -> None:
+        self._input.border_title = f"Search {self._project_label}"
+        self._results.display = False       # no empty box to Tab into pre-search
+        self._update_status_idle()
+        self._input.focus()
+
+    def _update_status_idle(self) -> None:
+        toggle = "on" if self.include_unnamed else "off"
+        self._status.update(
+            f"[dim]Enter to search · ctrl+u include unnamed: [b]{toggle}[/b][/dim]")
+
+    def action_toggle_unnamed(self) -> None:
+        self.include_unnamed = not self.include_unnamed
+        # Re-run if a query is present so the result set reflects the toggle;
+        # otherwise just reflect the new state in the status line.
+        if self._input.value.strip():
+            self.run_worker(self._run_search())
+        else:
+            self._update_status_idle()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input is self._input:
+            self.run_worker(self._run_search())
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list is self._results and event.option.id:
+            sid = event.option.id
+            # Hand the match to the app so the preview can show it in context
+            # ("go to the find" — a resumed live session can't be scrolled).
+            r = self._results_by_sid.get(sid)
+            self.app._search_match = ({
+                "sid": sid, "needle": self._input.value.strip(),
+                "snippets": r["snippets"]} if r else None)
+            self.dismiss(sid)
+
+    async def _run_search(self) -> None:
+        """Scan in a thread, then render on the UI thread. Awaitable so tests can
+        drive it deterministically; guarded so a scan failure can't kill the app
+        (see _summarize_tick / CLAUDE.md worker rule)."""
+        from . import search as _search
+        from textual.worker import WorkerCancelled
+        needle = self._input.value.strip()
+        if not needle:
+            return
+        self._search_gen += 1
+        gen = self._search_gen
+        self._status.update("[dim]searching…[/dim]")
+
+        def progress(done, total):
+            self.app.call_from_thread(
+                self._status.update, f"[dim]searching… {done}/{total}[/dim]")
+
+        def scan():
+            return _search.search_project(
+                self._rows, needle, include_unnamed=self.include_unnamed,
+                progress=progress)
+
+        # NOT exclusive: the scan runs inside this coroutine's own worker, so an
+        # exclusive scan would cancel its own parent (→ WorkerCancelled). A
+        # generation token discards a superseded search's results instead.
+        try:
+            results = await self.run_worker(scan, thread=True).wait()
+        except WorkerCancelled:
+            return                          # superseded/cancelled — not a failure
+        except Exception:
+            import traceback
+            _log_line("conversation search failed (skipped):\n" + traceback.format_exc())
+            self._status.update("[dim]search failed (see ~/.claude/session-explorer.log)[/dim]")
+            return
+        if gen != self._search_gen:
+            return                          # a newer search superseded this one
+        self._show_results(needle, results)
+
+    def _show_results(self, needle, results) -> None:
+        from . import search as _search
+        from rich.text import Text
+        self._searched_once = True
+        self._results.clear_options()
+        searched = sum(
+            1 for _sid, s in self._rows
+            if (self.include_unnamed or s.get("name_cached")))
+        toggle = "on" if self.include_unnamed else "off"
+        if not results:
+            self._results.display = False   # nothing to Tab into
+            self._status.update(
+                _search.empty_state(needle, self._project_label, searched,
+                                    self.include_unnamed))
+            return
+        self._results_by_sid = {r["sid"]: r for r in results}
+        for r in results:
+            markup = _search.format_session(r, needle)
+            # Trailing blank line separates each session card from the next.
+            self._results.add_option(Option(Text.from_markup(markup + "\n"), id=r["sid"]))
+        self._results.display = True
+        # Keep focus on the input so the query stays editable (edit + Enter to
+        # refine); Tab moves into the now-populated list to pick.
+        self._status.update(
+            f"[dim]{len(results)} sessions ({searched} searched) · Tab to pick · "
+            f"Enter to open · ctrl+u unnamed: [b]{toggle}[/b][/dim]")
+
+
 class SessionExplorerApp(App):
     CSS = """
     #treepane { width: 1fr; }
@@ -833,6 +978,13 @@ class SessionExplorerApp(App):
     HelpScreen { align: center middle; }
     #help { width: 78; max-width: 90%; height: auto; max-height: 90%;
             padding: 1 2; border: round $accent; background: $surface; }
+    SearchScreen { align: center middle; }
+    #search-panel { width: 90; max-width: 95%; height: auto; max-height: 90%;
+                    padding: 1 2; border: round $accent; background: $surface; }
+    #search-input { border: round $accent; }
+    #search-input:focus { border: round $accent; }
+    #search-results { height: auto; max-height: 80%; }
+    #search-status { color: $text-muted; padding: 0 1 1 1; }
     """
 
     BINDINGS = [
@@ -852,6 +1004,7 @@ class SessionExplorerApp(App):
         Binding("f5", "rescan", "Rescan", key_display="F5"),
         Binding("space", "preview", "Preview", priority=True),
         Binding("slash", "filter", "Filter"),
+        Binding("f", "search", "Search"),
         Binding("h", "help", "Help"),
         Binding("q", "toggle_queues", "Queues"),
         Binding("comma", "settings", "Settings"),
@@ -929,16 +1082,20 @@ class SessionExplorerApp(App):
         # `q` press even when nothing is configured (cleared on next toggle-off).
         self._queue_visible: bool = False
         self._queue_hint_forced: bool = False
+        # Last search pick: {sid, needle, snippets} so the preview can show the
+        # match in context after a search selection. Cleared implicitly — the
+        # block only renders while the cursor is on that sid.
+        self._search_match: "dict | None" = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "search", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
             return False
-        # While the filter Input is focused, never let `q`/`x` fire the global
-        # Queues-toggle or Exit bindings — the keystrokes belong in the text.
-        if action in ("quit", "toggle_queues") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+        # While the filter Input is focused, never let `q`/`x`/`f` fire the global
+        # Queues-toggle, Exit, or Search bindings — the keystrokes belong in the text.
+        if action in ("quit", "toggle_queues", "search") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # Tab is a priority binding (it must beat Textual's focus traversal), so
         # explicitly suppress it while the filter Input is focused — there, Tab
@@ -2030,28 +2187,31 @@ class SessionExplorerApp(App):
             lambda ok: self._apply_worktree_removal(sid, path, size) if ok else None)
 
     def action_update_summary(self) -> None:
-        """(Re)generate the selected session's summary now. Session leaves only;
-        refuses a live session (transcript mid-write); bypasses the auto message
-        threshold since it's an explicit user action."""
+        """(Re)generate the selected session's summary now. Works on live sessions
+        too (the transcript is read tolerant of mid-write partial lines); a live
+        summary is a snapshot of the conversation so far, marked provisional so it
+        is regenerated when the session exits. Repeatable — press again for a fresh
+        one. Bypasses the auto message threshold since it's an explicit action."""
         node = self._tree.cursor_node
         data = node.data if (node and node.data) else {}
         sid = data.get("sid")
         if not sid:
             self.bell()
             return
-        running = set(self._running_sids()) if self._tmux_enabled else set()
-        if sid in self._live_states or sid in running or sid == self._docked_sid:
-            self.notify("Stop the session before summarising it.", severity="warning")
+        if sid in self._summarizing:
+            self.notify("Already summarising this session…")
             return
         tp = data.get("transcript_path")
         if not tp or not os.path.exists(tp):
             self.notify("No transcript on disk to summarise yet.", severity="warning")
             return
-        self.notify("Summarising…")
+        running = set(self._running_sids()) if self._tmux_enabled else set()
+        live = sid in self._live_states or sid in running or sid == self._docked_sid
+        self.notify("Summarising the conversation so far…" if live else "Summarising…")
         # Open the preview so the persistent "Summarising…" state (and the result)
         # is visible — otherwise the only signal is the auto-dismissing toast.
         self._preview.display = True
-        self._start_summarize(sid, tp, data.get("message_count") or 0)
+        self._start_summarize(sid, tp, data.get("message_count") or 0, provisional=live)
 
     def action_notes(self) -> None:
         node = self._tree.cursor_node
@@ -2494,40 +2654,54 @@ class SessionExplorerApp(App):
             after)
 
     def _maybe_summarize(self, ended: "set[str]") -> None:
-        """Auto-summarise the docked session when it just stopped, if the user
-        enabled auto-summaries and the session is named + long enough."""
+        """On exit, (re)summarise each just-stopped session that either:
+        • has a *provisional* summary (one made with `u` while it was live — that
+          was only a snapshot, so refresh it to a final one now, regardless of the
+          auto-summaries toggle or length threshold); or
+        • is the docked session and auto-summaries-on-exit is enabled (named +
+          long enough)."""
         from . import summary as _summary
-        if not _summary.auto_enabled(self._claude_dir()):
-            return
-        sid = self._docked_sid
-        if not sid or sid not in ended:
-            return
-        try:
-            entry = _index.load(self._index_path).get("sessions", {}).get(sid) or {}
-        except Exception:
-            return
-        if not entry.get("name_cached"):
-            return
-        if int(entry.get("message_count") or 0) < SUMMARY_MIN_MSGS:
-            return
-        tp = entry.get("transcript_path")
-        if not tp or not os.path.exists(tp):
-            return
-        self._start_summarize(sid, tp, entry.get("message_count") or 0)
+        auto = _summary.auto_enabled(self._claude_dir())
+        spath = _summary.default_path_for(self._index_path)
+        for sid in ended:
+            if sid in self._summarizing:
+                continue
+            provisional = bool((_summary.get(spath, sid) or {}).get("provisional"))
+            if not (provisional or (auto and sid == self._docked_sid)):
+                continue
+            try:
+                entry = _index.load(self._index_path).get("sessions", {}).get(sid) or {}
+            except Exception:
+                continue
+            if not entry.get("name_cached"):
+                continue
+            # Length threshold gates only the pure-auto path; a provisional summary
+            # was explicitly requested, so refresh it whatever the length.
+            if not provisional and int(entry.get("message_count") or 0) < SUMMARY_MIN_MSGS:
+                continue
+            tp = entry.get("transcript_path")
+            if not tp or not os.path.exists(tp):
+                continue
+            # Final (not provisional) — the session has ended.
+            self._start_summarize(sid, tp, entry.get("message_count") or 0)
 
-    def _start_summarize(self, sid: str, transcript_path: str, msg_count: int) -> None:
+    def _start_summarize(self, sid: str, transcript_path: str, msg_count: int,
+                         provisional: bool = False) -> None:
         """Mark the session in-progress (so the Summary field shows a persistent
         'Summarising…' — the transient toast auto-dismisses before the several-
-        second `claude -p` call returns) and dispatch the worker."""
+        second `claude -p` call returns) and dispatch the worker. `provisional`
+        marks a summary made while the session was live (regenerated on exit)."""
         self._summarizing.add(sid)
         self._refresh_preview()
-        self._summarize_worker(sid, transcript_path, msg_count)
+        self._summarize_worker(sid, transcript_path, msg_count, provisional)
 
     @work(thread=True, group="summarize")
-    def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int) -> None:
-        self._summarize_tick(sid, transcript_path, msg_count)
+    def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int,
+                          provisional: bool = False) -> None:
+        self._summarize_tick(sid, transcript_path, msg_count, provisional)
 
-    def _summarize_tick(self, sid: str, transcript_path: str, msg_count: int) -> None:
+    def _summarize_tick(self, sid: str, transcript_path: str, msg_count: int,
+                        provisional: bool = False) -> None:
         """Guarded worker body: build digest -> claude -p -> store -> refresh.
         @work defaults to exit_on_error=True, so a failure here must log + skip,
         never take the app down (see the live-meta worker rule in CLAUDE.md)."""
@@ -2544,6 +2718,7 @@ class SessionExplorerApp(App):
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "msg_count": int(msg_count),
                     "model": _summarize.SUMMARY_MODEL,
+                    "provisional": bool(provisional),
                 })
                 ok = True
         except Exception:
@@ -2675,6 +2850,39 @@ class SessionExplorerApp(App):
         self._filter.disabled = False
         self._filter.focus()
 
+    def _rows_for_project(self, project_root):
+        """All (sid, s) rows whose repo root == project_root (worktrees collapse
+        in), named and unnamed alike — SearchScreen applies the unnamed filter."""
+        from . import tree_model as _tm
+        data = _index.load(self._index_path).get("sessions", {})
+        return [(sid, s) for sid, s in data.items()
+                if _tm.session_root(s) == project_root]
+
+    def action_search(self) -> None:
+        project, _ = self._project_and_prefix_for_cursor()
+        if not project:
+            self.bell(); return
+        rows = self._rows_for_project(project)
+        label = os.path.basename(project) or project
+
+        def after(sid: "str | None") -> None:
+            if not sid:
+                return
+            data = _index.load(self._index_path).get("sessions", {})
+            s = data.get(sid) or {}
+            # Reveal unnamed rows if the pick is unnamed and the tree hides them,
+            # so _populate's pending-select can actually land the cursor.
+            if not s.get("name_cached") and self._view_mode == 0:
+                self._view_mode = 2
+            self._pending_select_sid = sid
+            self._populate()
+            # Open the preview so the pick's details + the matching snippet show
+            # immediately (resume stays a deliberate second Enter on the tree).
+            self._preview.display = True
+            self._refresh_preview()
+
+        self.push_screen(SearchScreen(rows, label), after)
+
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self._filter:
             self._filter_needle = event.value.lower().strip()
@@ -2697,25 +2905,38 @@ class SessionExplorerApp(App):
             self._preview.update("[dim]Select a session to preview.[/]")
             return
         sid = data["sid"]
-        if self._tmux_enabled and sid in self._live_states:
-            self._preview.update(self._render_live_preview(data, sid))
-            return
-        # Merge the summary fresh from the sidecar: it may have been generated
-        # (via `u` or auto-on-exit) *after* this row's data was built by
-        # _populate, so node.data can be stale. Cheap targeted read.
+        # Merge the summary fresh from the sidecar (it may have been generated via
+        # `u`/auto after _populate built this row) and the in-flight flag — before
+        # the live branch, so a *running* session's preview also shows its latest
+        # summary, the provisional tag, and the "Summarising…" indicator.
         from . import summary as _summary
         _se = _summary.get(_summary.default_path_for(self._index_path), sid)
         if _se:
             data = {**data, "summary": _se.get("text"),
-                    "summary_msg_count": _se.get("msg_count")}
+                    "summary_msg_count": _se.get("msg_count"),
+                    "provisional": _se.get("provisional")}
         if sid in self._summarizing:
             data = {**data, "summarizing": True}
+        if self._tmux_enabled and sid in self._live_states:
+            self._preview.update(self._render_live_preview(data, sid))
+            return
         from . import worktree as _wt
         if _wt.MARKER in (data.get("project_path") or ""):
             if sid not in self._wt_size_cache:
                 self._wt_size_cache[sid] = _wt.size(data.get("project_path"))
             data = {**data, "worktree_size": self._wt_size_cache[sid]}
-        self._preview.update(_preview_text(data))
+        text = _preview_text(data)
+        text += self._search_match_suffix(sid)
+        self._preview.update(text)
+
+    def _search_match_suffix(self, sid: str) -> str:
+        """A 'Search matches' block for the preview when this session is the one
+        just picked from search — else empty."""
+        m = self._search_match
+        if not m or m.get("sid") != sid:
+            return ""
+        from . import search as _search
+        return "\n\n" + _search.format_match_block(m["needle"], m["snippets"])
 
     def _render_live_preview(self, data: dict, sid: str):
         """Full metadata block (same as a stopped session) followed by a live
@@ -2727,7 +2948,7 @@ class SessionExplorerApp(App):
             transcript_path=data.get("transcript_path", ""),
             tmux_window_names=_tmux.session_windows(),
             capture_fn=_tmux.capture_pane)
-        meta = Text.from_markup(_preview_text(data))
+        meta = Text.from_markup(_preview_text(data) + self._search_match_suffix(sid))
         state = self._live_states.get(sid, "")
         divider = Text.from_markup(f"\n[dim]──[/] [green]live[/] [dim]({state}) ──────[/]\n")
         # Keep the metadata block visible: cap the live section to its last lines
