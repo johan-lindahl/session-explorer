@@ -76,8 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Delete old unnamed sessions (retention cleanup).")
     index_p.add_argument("--dry-run", action="store_true",
                          help="With --gc: report what would be removed, delete nothing.")
-    index_p.add_argument("--retention-days", type=int, default=30, metavar="N",
-                         help="With --gc: delete unnamed sessions idle longer than N days (default 30).")
+    index_p.add_argument("--retention-days", type=int, default=None, metavar="N",
+                         help="With --gc: delete unnamed sessions idle longer than N days "
+                              "(default: the period configured in the Settings screen, else 30).")
 
     live_p = sub.add_parser("live", help="Record a session lifecycle event (used by hooks).")
     live_p.add_argument("--event", required=True,

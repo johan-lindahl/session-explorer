@@ -281,3 +281,44 @@ def test_collect_worktrees_skips_live(tmp_path):
     assert wt not in result["removed_worktrees"]
     assert result["skipped_live"] == 1
     assert os.path.isdir(wt)
+
+
+def _stub_index(tmp_path, project_path, days_old):
+    """Isolated (tmp_path) index with one unnamed, transcript-less stub aged
+    `days_old` before NOW. tmp_path keeps its ui_state sibling test-private."""
+    import json
+    p = str(tmp_path / "se-index.json")
+    json.dump({"version": 2, "sessions": {"stub": {
+        "name_cached": None, "project_path": project_path,
+        "last_active_at": _iso(NOW - timedelta(days=days_old)),
+    }}}, open(p, "w"))
+    return p
+
+
+def test_gc_reads_retention_days_from_ui_state(tmp_path):
+    from _pkg import ui_state as _ui
+    # 10-day-old stub: kept under the default 30, but removed once the
+    # ui_state period is lowered to 5 — proving gc reads it from ui_state.
+    idx = _stub_index(tmp_path, "/tmp/plain", days_old=10)
+    _ui.set_retention_days(_ui.default_path_for(idx), 5)
+    res = _gc.collect_garbage(idx, now=NOW)
+    assert res["removed"] == ["stub"]
+
+
+def test_gc_keeps_stub_when_period_raised_in_ui_state(tmp_path):
+    from _pkg import ui_state as _ui
+    idx = _stub_index(tmp_path, "/tmp/plain", days_old=10)
+    _ui.set_retention_days(_ui.default_path_for(idx), 40)  # 10 < 40 → kept
+    res = _gc.collect_garbage(idx, now=NOW)
+    assert res["removed"] == []
+
+
+def test_gc_purges_worktree_of_deleted_stub(tmp_path, monkeypatch):
+    wt = "/repo/.claude/worktrees/feat"
+    idx = _stub_index(tmp_path, wt, days_old=60)  # ancient → removed at default 30
+    seen = {}
+    monkeypatch.setattr("_pkg.worktree.purge", lambda p: seen.update(p=p) or "removed")
+    res = _gc.collect_garbage(idx, now=NOW)
+    assert res["removed"] == ["stub"]
+    assert seen["p"] == wt
+    assert wt in res["removed_worktrees"]
