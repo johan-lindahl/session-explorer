@@ -221,9 +221,11 @@ def _column_header() -> str:
 
 
 def _summary_header(s: dict) -> str:
-    """'Summary' header, tagged '(may be stale)' when the session has grown since
-    the stored summary was generated."""
+    """'Summary' header, tagged when the summary is a live snapshot (regenerated
+    on exit) or has gone stale since it was generated."""
     from . import summary as _summary
+    if s.get("summary") and s.get("provisional"):
+        return "[b]Summary[/] [dim](live snapshot — refreshes on exit)[/]"
     if s.get("summary") and _summary.is_stale(
             {"msg_count": s.get("summary_msg_count") or 0}, s.get("message_count") or 0):
         return "[b]Summary (may be stale)[/]"
@@ -374,7 +376,8 @@ def _help_text() -> str:
         "[b]Summaries[/]",
         "Named sessions can carry a short AI summary of what they were about,",
         "shown in the preview pane ([b]Space[/]). Turn on auto-summaries-on-exit in",
-        "Settings ([b],[/]), or press [b]u[/] to summarise the selected session now.",
+        "Settings ([b],[/]), or press [b]u[/] to summarise the selected session now —",
+        "including a [b]running[/] one (a snapshot so far, refreshed when it exits).",
         "",
         "[b]Running sessions in tmux[/]",
         "When launched with tmux, the explorer stays in the left pane and the",
@@ -2184,28 +2187,31 @@ class SessionExplorerApp(App):
             lambda ok: self._apply_worktree_removal(sid, path, size) if ok else None)
 
     def action_update_summary(self) -> None:
-        """(Re)generate the selected session's summary now. Session leaves only;
-        refuses a live session (transcript mid-write); bypasses the auto message
-        threshold since it's an explicit user action."""
+        """(Re)generate the selected session's summary now. Works on live sessions
+        too (the transcript is read tolerant of mid-write partial lines); a live
+        summary is a snapshot of the conversation so far, marked provisional so it
+        is regenerated when the session exits. Repeatable — press again for a fresh
+        one. Bypasses the auto message threshold since it's an explicit action."""
         node = self._tree.cursor_node
         data = node.data if (node and node.data) else {}
         sid = data.get("sid")
         if not sid:
             self.bell()
             return
-        running = set(self._running_sids()) if self._tmux_enabled else set()
-        if sid in self._live_states or sid in running or sid == self._docked_sid:
-            self.notify("Stop the session before summarising it.", severity="warning")
+        if sid in self._summarizing:
+            self.notify("Already summarising this session…")
             return
         tp = data.get("transcript_path")
         if not tp or not os.path.exists(tp):
             self.notify("No transcript on disk to summarise yet.", severity="warning")
             return
-        self.notify("Summarising…")
+        running = set(self._running_sids()) if self._tmux_enabled else set()
+        live = sid in self._live_states or sid in running or sid == self._docked_sid
+        self.notify("Summarising the conversation so far…" if live else "Summarising…")
         # Open the preview so the persistent "Summarising…" state (and the result)
         # is visible — otherwise the only signal is the auto-dismissing toast.
         self._preview.display = True
-        self._start_summarize(sid, tp, data.get("message_count") or 0)
+        self._start_summarize(sid, tp, data.get("message_count") or 0, provisional=live)
 
     def action_notes(self) -> None:
         node = self._tree.cursor_node
@@ -2648,40 +2654,54 @@ class SessionExplorerApp(App):
             after)
 
     def _maybe_summarize(self, ended: "set[str]") -> None:
-        """Auto-summarise the docked session when it just stopped, if the user
-        enabled auto-summaries and the session is named + long enough."""
+        """On exit, (re)summarise each just-stopped session that either:
+        • has a *provisional* summary (one made with `u` while it was live — that
+          was only a snapshot, so refresh it to a final one now, regardless of the
+          auto-summaries toggle or length threshold); or
+        • is the docked session and auto-summaries-on-exit is enabled (named +
+          long enough)."""
         from . import summary as _summary
-        if not _summary.auto_enabled(self._claude_dir()):
-            return
-        sid = self._docked_sid
-        if not sid or sid not in ended:
-            return
-        try:
-            entry = _index.load(self._index_path).get("sessions", {}).get(sid) or {}
-        except Exception:
-            return
-        if not entry.get("name_cached"):
-            return
-        if int(entry.get("message_count") or 0) < SUMMARY_MIN_MSGS:
-            return
-        tp = entry.get("transcript_path")
-        if not tp or not os.path.exists(tp):
-            return
-        self._start_summarize(sid, tp, entry.get("message_count") or 0)
+        auto = _summary.auto_enabled(self._claude_dir())
+        spath = _summary.default_path_for(self._index_path)
+        for sid in ended:
+            if sid in self._summarizing:
+                continue
+            provisional = bool((_summary.get(spath, sid) or {}).get("provisional"))
+            if not (provisional or (auto and sid == self._docked_sid)):
+                continue
+            try:
+                entry = _index.load(self._index_path).get("sessions", {}).get(sid) or {}
+            except Exception:
+                continue
+            if not entry.get("name_cached"):
+                continue
+            # Length threshold gates only the pure-auto path; a provisional summary
+            # was explicitly requested, so refresh it whatever the length.
+            if not provisional and int(entry.get("message_count") or 0) < SUMMARY_MIN_MSGS:
+                continue
+            tp = entry.get("transcript_path")
+            if not tp or not os.path.exists(tp):
+                continue
+            # Final (not provisional) — the session has ended.
+            self._start_summarize(sid, tp, entry.get("message_count") or 0)
 
-    def _start_summarize(self, sid: str, transcript_path: str, msg_count: int) -> None:
+    def _start_summarize(self, sid: str, transcript_path: str, msg_count: int,
+                         provisional: bool = False) -> None:
         """Mark the session in-progress (so the Summary field shows a persistent
         'Summarising…' — the transient toast auto-dismisses before the several-
-        second `claude -p` call returns) and dispatch the worker."""
+        second `claude -p` call returns) and dispatch the worker. `provisional`
+        marks a summary made while the session was live (regenerated on exit)."""
         self._summarizing.add(sid)
         self._refresh_preview()
-        self._summarize_worker(sid, transcript_path, msg_count)
+        self._summarize_worker(sid, transcript_path, msg_count, provisional)
 
     @work(thread=True, group="summarize")
-    def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int) -> None:
-        self._summarize_tick(sid, transcript_path, msg_count)
+    def _summarize_worker(self, sid: str, transcript_path: str, msg_count: int,
+                          provisional: bool = False) -> None:
+        self._summarize_tick(sid, transcript_path, msg_count, provisional)
 
-    def _summarize_tick(self, sid: str, transcript_path: str, msg_count: int) -> None:
+    def _summarize_tick(self, sid: str, transcript_path: str, msg_count: int,
+                        provisional: bool = False) -> None:
         """Guarded worker body: build digest -> claude -p -> store -> refresh.
         @work defaults to exit_on_error=True, so a failure here must log + skip,
         never take the app down (see the live-meta worker rule in CLAUDE.md)."""
@@ -2698,6 +2718,7 @@ class SessionExplorerApp(App):
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "msg_count": int(msg_count),
                     "model": _summarize.SUMMARY_MODEL,
+                    "provisional": bool(provisional),
                 })
                 ok = True
         except Exception:
@@ -2884,19 +2905,21 @@ class SessionExplorerApp(App):
             self._preview.update("[dim]Select a session to preview.[/]")
             return
         sid = data["sid"]
-        if self._tmux_enabled and sid in self._live_states:
-            self._preview.update(self._render_live_preview(data, sid))
-            return
-        # Merge the summary fresh from the sidecar: it may have been generated
-        # (via `u` or auto-on-exit) *after* this row's data was built by
-        # _populate, so node.data can be stale. Cheap targeted read.
+        # Merge the summary fresh from the sidecar (it may have been generated via
+        # `u`/auto after _populate built this row) and the in-flight flag — before
+        # the live branch, so a *running* session's preview also shows its latest
+        # summary, the provisional tag, and the "Summarising…" indicator.
         from . import summary as _summary
         _se = _summary.get(_summary.default_path_for(self._index_path), sid)
         if _se:
             data = {**data, "summary": _se.get("text"),
-                    "summary_msg_count": _se.get("msg_count")}
+                    "summary_msg_count": _se.get("msg_count"),
+                    "provisional": _se.get("provisional")}
         if sid in self._summarizing:
             data = {**data, "summarizing": True}
+        if self._tmux_enabled and sid in self._live_states:
+            self._preview.update(self._render_live_preview(data, sid))
+            return
         from . import worktree as _wt
         if _wt.MARKER in (data.get("project_path") or ""):
             if sid not in self._wt_size_cache:

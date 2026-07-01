@@ -10,11 +10,20 @@ follows [semantic versioning](https://semver.org/).
   project's* transcripts by content — not just their names. It reads the JSONL
   bodies live (your messages and Claude's replies; tool output and thinking are
   skipped) and lists the sessions whose conversations mention your term, each
-  with in-context snippets and a hit count. `Enter` on a result moves the tree
-  cursor to that session (nothing is resumed); `ctrl+u` includes unnamed
-  sessions (off by default, matching the tree). Live scan — no index to build or
-  keep fresh. The `/` filter (name, notes, first prompt, summary) is unchanged;
-  `f` is the deeper, body-searching companion.
+  with in-context snippets and a hit count. Results render as tidy cards (marker
+  + name, `hits · date`, colour-coded `you`/`claude` snippet lines with the match
+  highlighted). `ctrl+u` includes unnamed sessions (off by default, matching the
+  tree). Live scan — no index to build or keep fresh. The `/` filter (name,
+  notes, first prompt, summary) is unchanged; `f` is the deeper, body-searching
+  companion.
+- **Selecting a search result opens the preview** with the session's details and
+  a "Search matches" block showing the matching snippets in context — the
+  feasible "go to the find" (resume stays a deliberate `Enter` on the tree row,
+  since a resumed session can't be scrolled to a message).
+- **Summarise a running session (`u`).** `u` no longer refuses a live/docked
+  session — it summarises the conversation so far (marked a provisional "live
+  snapshot"), is repeatable for a fresh one, and the snapshot is automatically
+  regenerated to a final summary when the session exits.
 
 ## 1.18.3
 
