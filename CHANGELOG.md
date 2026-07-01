@@ -3,6 +3,19 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.19.0
+
+### Added
+- **Full-text conversation search (`f`).** Press `f` to search the *current
+  project's* transcripts by content — not just their names. It reads the JSONL
+  bodies live (your messages and Claude's replies; tool output and thinking are
+  skipped) and lists the sessions whose conversations mention your term, each
+  with in-context snippets and a hit count. `Enter` on a result moves the tree
+  cursor to that session (nothing is resumed); `ctrl+u` includes unnamed
+  sessions (off by default, matching the tree). Live scan — no index to build or
+  keep fresh. The `/` filter (name, notes, first prompt, summary) is unchanged;
+  `f` is the deeper, body-searching companion.
+
 ## 1.18.3
 
 ### Changed
