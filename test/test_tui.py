@@ -3457,3 +3457,62 @@ async def test_refresh_preview_reads_fresh_summary_from_sidecar(index_path):
                       "generated_at": "2026-07-01T00:00:00Z"})
         app._refresh_preview()
         assert "LATE SUMMARY" in str(app._preview.render())
+
+
+def test_preview_text_shows_summarising_progress():
+    from _pkg.tui import _preview_text
+    out = _preview_text({"sid": "s", "name_cached": "x", "summarizing": True,
+                         "message_count": 20})
+    assert "Summarising" in out
+    assert "no summary — press u" not in out
+
+
+async def test_refresh_preview_shows_in_progress_state(index_path):
+    # While a session is being summarised, the Summary field shows a persistent
+    # in-progress line (not the "(no summary)" placeholder), so the user has
+    # feedback after the transient toast auto-dismisses.
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")  # cursor on sid-1
+        await pilot.press("space")                 # open preview
+        await pilot.pause()
+        app._summarizing.add("sid-1")
+        app._refresh_preview()
+        assert "Summarising" in str(app._preview.render())
+
+
+async def test_u_clears_in_progress_flag_when_done(index_path, tmp_path, monkeypatch):
+    import json
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    json.dump(data, open(index_path, "w"))
+    monkeypatch.setattr("_pkg.summarize.run", lambda *a, **k: "DONE SUMMARY")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down", "down", "down")
+        await pilot.press("u")
+        await pilot.pause(); await pilot.pause()
+    assert "sid-1" not in app._summarizing  # cleared on completion
+
+
+async def test_u_opens_preview(index_path, tmp_path, monkeypatch):
+    import json
+    data = json.load(open(index_path))
+    t = tmp_path / "t.jsonl"; t.write_text('{"type":"user","message":{"content":"hi"}}\n')
+    data["sessions"]["sid-1"]["transcript_path"] = str(t)
+    json.dump(data, open(index_path, "w"))
+    monkeypatch.setattr("_pkg.summarize.run", lambda *a, **k: "X")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=index_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._preview.display is False   # closed by default
+        await pilot.press("down", "down", "down")
+        await pilot.press("u")
+        await pilot.pause()
+        assert app._preview.display is True    # 'u' reveals the preview
