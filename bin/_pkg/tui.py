@@ -822,6 +822,103 @@ class HelpScreen(ModalScreen[None]):
         yield VerticalScroll(Static(_help_text(), id="help-body"), id="help")
 
 
+class SearchScreen(ModalScreen):
+    """Live full-text search over one project's transcripts (spec 2026-07-01).
+    Type a term, Enter searches, results are matching sessions with in-context
+    snippets. Enter on a result dismisses with its sid; Esc cancels. ctrl+u
+    toggles including unnamed sessions."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Cancel"),
+        Binding("ctrl+u", "toggle_unnamed", "Incl. unnamed"),
+    ]
+
+    def __init__(self, rows, project_label):
+        super().__init__()
+        self._rows = list(rows)            # all (sid, s) for the project
+        self._project_label = project_label
+        self.include_unnamed = False
+
+    def compose(self) -> ComposeResult:
+        self._input = Input(placeholder=f"search {self._project_label}…",
+                            id="search-input")
+        self._status = Label("", id="search-status")
+        self._results = OptionList(id="search-results")
+        yield Vertical(self._input, self._status, self._results, id="search-panel")
+
+    def on_mount(self) -> None:
+        self._update_status_idle()
+        self._input.focus()
+
+    def _update_status_idle(self) -> None:
+        toggle = "on" if self.include_unnamed else "off"
+        self._status.update(f"[dim]Enter to search · ctrl+u unnamed: {toggle}[/dim]")
+
+    def action_toggle_unnamed(self) -> None:
+        self.include_unnamed = not self.include_unnamed
+        if self._input.value.strip():
+            self.run_worker(self._run_search())
+        else:
+            self._update_status_idle()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input is self._input:
+            self.run_worker(self._run_search())
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list is self._results and event.option.id:
+            self.dismiss(event.option.id)
+
+    async def _run_search(self) -> None:
+        """Scan in a thread, then render on the UI thread. Awaitable so tests can
+        drive it deterministically; guarded so a scan failure can't kill the app
+        (see _summarize_tick / CLAUDE.md worker rule)."""
+        from . import search as _search
+        needle = self._input.value.strip()
+        if not needle:
+            return
+        self._status.update("[dim]searching…[/dim]")
+
+        def progress(done, total):
+            self.app.call_from_thread(
+                self._status.update, f"[dim]searched {done}/{total}[/dim]")
+
+        def scan():
+            return _search.search_project(
+                self._rows, needle, include_unnamed=self.include_unnamed,
+                progress=progress)
+
+        try:
+            results = await self.run_worker(scan, thread=True).wait()
+        except Exception:
+            import traceback
+            _log_line("conversation search failed (skipped):\n" + traceback.format_exc())
+            self._status.update("[dim]search failed (see ~/.claude/session-explorer.log)[/dim]")
+            return
+        self._show_results(needle, results)
+
+    def _show_results(self, needle, results) -> None:
+        from . import search as _search
+        from rich.text import Text
+        self._results.clear_options()
+        searched = sum(
+            1 for _sid, s in self._rows
+            if (self.include_unnamed or s.get("name_cached")))
+        if not results:
+            self._status.update(
+                _search.empty_state(needle, self._project_label, searched,
+                                    self.include_unnamed))
+            return
+        for r in results:
+            markup = _search.format_session(r, needle)
+            self._results.add_option(Option(Text.from_markup(markup), id=r["sid"]))
+        toggle = "on" if self.include_unnamed else "off"
+        self._status.update(
+            f"[dim]{len(results)} sessions · {searched} searched · "
+            f"ctrl+u unnamed: {toggle}[/dim]")
+        self._results.focus()
+
+
 class SessionExplorerApp(App):
     CSS = """
     #treepane { width: 1fr; }
@@ -833,6 +930,11 @@ class SessionExplorerApp(App):
     HelpScreen { align: center middle; }
     #help { width: 78; max-width: 90%; height: auto; max-height: 90%;
             padding: 1 2; border: round $accent; background: $surface; }
+    SearchScreen { align: center middle; }
+    #search-panel { width: 90; max-width: 95%; height: auto; max-height: 90%;
+                    padding: 1 2; border: round $accent; background: $surface; }
+    #search-results { height: auto; max-height: 80%; }
+    #search-status { color: $text-muted; padding: 0 0 1 0; }
     """
 
     BINDINGS = [
