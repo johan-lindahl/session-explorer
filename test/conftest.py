@@ -13,6 +13,12 @@ if _BIN not in sys.path:
 # over every TUI test. The dedicated offer test opts back in via monkeypatch.
 os.environ.setdefault("SESSION_EXPLORER_TMUX_NO_OFFER", "1")
 
+# Suppress the one-time summaries first-run prompt across the suite (it fires
+# on first launch whenever a named session exists, which would pop an
+# unexpected modal over many TUI tests). The dedicated first-run tests opt back
+# in via monkeypatch.delenv.
+os.environ.setdefault("SESSION_EXPLORER_SUMMARY_NO_PROMPT", "1")
+
 import json
 
 import pytest
@@ -78,4 +84,5 @@ def index_path(tmp_path):
     }, open(path, "w"))
     (tmp_path / ".session-explorer.help-seen").write_text("")
     (tmp_path / ".session-explorer.retention-declined").write_text("")
+    (tmp_path / ".session-explorer.summaries-prompted").write_text("")
     yield path

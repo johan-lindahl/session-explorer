@@ -3399,3 +3399,40 @@ async def test_comma_opens_settings_screen(index_path):
         await pilot.press(",")
         await pilot.pause()
         assert isinstance(app.screen, SettingsScreen)
+
+
+async def test_first_run_summaries_prompt_shows_and_enables(tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    monkeypatch.delenv("SESSION_EXPLORER_SUMMARY_NO_PROMPT", raising=False)
+    p = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "sessions": {"sid-1": {
+        "project_label": "demo", "project_path": "/tmp/demo",
+        "name_cached": "planning/x", "message_count": 10,
+    }}}, open(p, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    from _pkg.tui import SessionExplorerApp, ConfirmScreen
+    app = SessionExplorerApp(index_path=p)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)  # the summaries prompt
+        await pilot.press("y")
+        await pilot.pause()
+    assert _summary.auto_enabled(str(tmp_path)) is True
+    assert _summary.prompted(str(tmp_path)) is True
+
+
+async def test_first_run_summaries_prompt_skipped_when_no_named_session(tmp_path, monkeypatch):
+    import json
+    from _pkg import summary as _summary
+    monkeypatch.delenv("SESSION_EXPLORER_SUMMARY_NO_PROMPT", raising=False)
+    p = str(tmp_path / "se-index.json")
+    json.dump({"version": 1, "sessions": {}}, open(p, "w"))
+    (tmp_path / ".session-explorer.help-seen").write_text("")
+    (tmp_path / ".session-explorer.retention-declined").write_text("")
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=p)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+    assert _summary.prompted(str(tmp_path)) is False  # not shown → not marked

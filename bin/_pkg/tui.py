@@ -1108,6 +1108,40 @@ class SessionExplorerApp(App):
         if not os.path.exists(self._help_marker_path()):
             self._mark_help_seen()
             self.action_help()
+        self._maybe_prompt_summaries()
+
+    def _maybe_prompt_summaries(self) -> None:
+        """One-time discoverability nudge: introduce summaries + offer auto-on-exit,
+        then reveal the preview pane once. Only when there's ≥1 named session so a
+        brand-new empty install isn't nagged (it'll appear on a later launch)."""
+        # Escape hatch for automated/non-interactive runs (CI, scripted launch,
+        # the test suite): suppress the one-time nag entirely. Mirrors
+        # SESSION_EXPLORER_TMUX_NO_OFFER.
+        if os.environ.get("SESSION_EXPLORER_SUMMARY_NO_PROMPT"):
+            return
+        from . import summary as _summary
+        cd = self._claude_dir()
+        if _summary.prompted(cd):
+            return
+        try:
+            sessions = _index.load(self._index_path).get("sessions", {})
+        except Exception:
+            return
+        if not any(s.get("name_cached") for s in sessions.values()):
+            return
+
+        def after(ok: bool) -> None:
+            _summary.set_auto(cd, bool(ok))
+            _summary.mark_prompted(cd)
+            self._preview.display = True   # reveal so the user sees where summaries live
+            self._refresh_preview()
+
+        self.push_screen(ConfirmScreen(
+            "session-explorer can summarise what each session was about — shown in the "
+            "details pane (Space).",
+            detail="Auto-summarise sessions when you leave them? "
+                   "(You can also press u to summarise the selected one anytime.)"),
+            after)
 
     def _help_marker_path(self) -> str:
         return os.path.join(
