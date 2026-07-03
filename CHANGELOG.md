@@ -3,6 +3,24 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.19.2
+
+### Fixed
+- **Resuming a session whose worktree was removed no longer blocks the shared
+  root queue.** After a worktree is removed, Claude Code relocates the session to
+  the parent repo, so resuming it would run the session *in the shared installed
+  root* — where it bypasses the lease queue (a root session "owns its tree") and
+  its uncommitted changes make every other agent's lease acquisition refuse,
+  effectively blocking everyone. The explorer now **re-isolates such a session on
+  resume**: it remembers the worktree the session came from (recovered from the
+  transcript's own history — the info survives relocation) and resumes with
+  `claude -w <leaf>`, which rebuilds the worktree on its kept `worktree-<leaf>`
+  branch and runs the session there. The session is once again a normal worktree
+  session that must `queue-run` to touch the root. Verified end-to-end against
+  real Claude Code: the rebuilt session's recorded working directory is the
+  worktree, so the root guard treats it correctly. The explorer never moves a
+  transcript itself — Claude Code owns the relocation.
+
 ## 1.19.1
 
 ### Fixed

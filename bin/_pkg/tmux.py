@@ -47,13 +47,24 @@ def build_base() -> List[str]:
     return ["tmux", "-L", SOCKET]
 
 
-def build_start_window(sid: str, cwd: str) -> List[str]:
+def build_start_window(sid: str, cwd: str,
+                       worktree: "str | None" = None) -> List[str]:
     # The window command is one shell string tmux runs via /bin/sh -c.
     # `exec` replaces the shell so closing the window kills claude directly.
     # `--resume=<sid>` binds the id to the option (injection-safe; see
     # tui._resume_argv for the rationale).
+    #
+    # `worktree` re-isolates a session Claude Code relocated to the shared root
+    # (worktree removed): `claude -w <leaf>` recreates the worktree on its kept
+    # `worktree-<leaf>` branch and resumes there, so the session doesn't run in
+    # (and block the lease queue on) the root. The leaf is shlex-quoted; `cwd`
+    # must be the parent repo root so `--resume` finds the relocated transcript.
+    cmd = "exec claude"
+    if worktree:
+        cmd += f" -w {shlex.quote(worktree)}"
+    cmd += f" --resume={sid}"
     return build_base() + [
-        "new-window", "-d", "-n", sid, "-c", cwd, f"exec claude --resume={sid}"]
+        "new-window", "-d", "-n", sid, "-c", cwd, cmd]
 
 
 def build_new_session_window(sid: str, cwd: str, name: str,
@@ -335,8 +346,9 @@ def detected_version() -> Optional[tuple]:
     return parse_version(_capture(["tmux", "-V"]))
 
 
-def start_window(sid: str, cwd: str, label: "str | None" = None) -> int:
-    rc = _call(build_start_window(sid, cwd))
+def start_window(sid: str, cwd: str, label: "str | None" = None,
+                 worktree: "str | None" = None) -> int:
+    rc = _call(build_start_window(sid, cwd, worktree))
     if label:
         _call(build_set_label(sid, label))
     return rc

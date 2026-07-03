@@ -452,6 +452,17 @@ def reconcile_relocated(index_path: str, projects_root: "str | None" = None,
         if not cwd or not os.path.isdir(cwd):
             continue  # can't resolve a real cwd — never guess a location
         record_session(index_path, sid, transcript, cwd, skip_git=True)
+        # Remember the worktree this session came from (recoverable from the
+        # transcript's pre-relocation cwds) so resume can re-isolate it via
+        # `claude -w <leaf>` instead of running in the shared root.
+        leaf = _jsonl.worktree_origin(transcript)
+        if leaf:
+            def _stamp(data: dict, sid=sid, leaf=leaf) -> dict:
+                row = data["sessions"].get(sid)
+                if row is not None:
+                    row["worktree_leaf"] = leaf
+                return data
+            mutate(index_path, _stamp)
         healed += 1
     return healed
 

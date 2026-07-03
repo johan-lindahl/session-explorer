@@ -1427,7 +1427,7 @@ async def test_resume_dead_worktree_turns_glyph_live(tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
-    monkeypatch.setattr(tuimod._tmux, "start_window", lambda sid, cwd, label=None: 0)
+    monkeypatch.setattr(tuimod._tmux, "start_window", lambda sid, cwd, label=None, worktree=None: 0)
     monkeypatch.setattr(tuimod._tmux, "dock", lambda sid, focus=True: 0)
     app = SessionExplorerApp(index_path=idx)
     async with app.run_test() as pilot:
@@ -1659,7 +1659,7 @@ async def test_enter_starts_and_docks_when_stopped(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # nothing running
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd, label=None: calls.setdefault("start", (sid, cwd, label)) or 0)
+                        lambda sid, cwd, label=None, worktree=None: calls.setdefault("start", (sid, cwd, label)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.update(dock=sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
@@ -1685,7 +1685,7 @@ async def test_double_click_docks_like_enter(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+                        lambda sid, cwd, label=None, worktree=None: calls.setdefault("start", sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.update(dock=sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
@@ -1732,7 +1732,7 @@ async def test_enter_docks_a_running_background_session(index_path, monkeypatch)
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: ["sid-1"])  # already a window
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+                        lambda sid, cwd, label=None, worktree=None: calls.setdefault("start", sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.update(dock=sid) or 0)
     app = SessionExplorerApp(index_path=index_path)
@@ -1756,7 +1756,7 @@ async def test_enter_on_already_docked_session_refocuses_only(index_path, monkey
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])   # it's a pane, not a window
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: "%9")
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd, label=None: calls.setdefault("start", sid) or 0)
+                        lambda sid, cwd, label=None, worktree=None: calls.setdefault("start", sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.update(dock=sid) or 0)
     monkeypatch.setattr(tuimod._tmux, "select_pane",
@@ -1895,7 +1895,7 @@ async def test_enter_refuses_session_live_elsewhere(index_path, monkeypatch):
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd, label=None: calls.setdefault("start", True) or 0)
+                        lambda sid, cwd, label=None, worktree=None: calls.setdefault("start", True) or 0)
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -2220,7 +2220,7 @@ async def test_dock_helper_swaps_docked_session(index_path, monkeypatch):
     monkeypatch.setattr(tuimod._tmux, "undock",
                         lambda pane, sid: calls.append(("undock", pane, sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "start_window",
-                        lambda sid, cwd, label=None: calls.append(("start", sid)) or 0)
+                        lambda sid, cwd, label=None, worktree=None: calls.append(("start", sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "dock",
                         lambda sid, focus=True: calls.append(("dock", sid)) or 0)
     monkeypatch.setattr(tuimod._tmux, "select_pane",
@@ -2267,7 +2267,7 @@ async def test_dock_failure_leaves_no_phantom_docked_sid(index_path, monkeypatch
     from _pkg.tui import SessionExplorerApp
     monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
     monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
-    monkeypatch.setattr(tuimod._tmux, "start_window", lambda sid, cwd, label=None: 0)
+    monkeypatch.setattr(tuimod._tmux, "start_window", lambda sid, cwd, label=None, worktree=None: 0)
     monkeypatch.setattr(tuimod._tmux, "dock", lambda sid, focus=True: 1)   # join-pane fails
     app = SessionExplorerApp(index_path=index_path)
     async with app.run_test() as pilot:
@@ -3558,3 +3558,63 @@ async def test_tui_heals_relocated_session_on_mount(tmp_path):
     assert healed["project_path"] == str(repo)       # parent repo, not the worktree
     assert healed["notes"] == "keepme"               # metadata preserved
     assert healed["message_count"] >= 1
+
+
+def test_resume_argv_plain():
+    from _pkg.tui import _resume_argv
+    assert _resume_argv("sid-9") == ["claude", "--resume=sid-9"]
+
+
+def test_resume_argv_with_worktree():
+    """Non-tmux resume of a relocated worktree-born session adds -w <leaf>."""
+    from _pkg.tui import _resume_argv
+    assert _resume_argv("sid-9", worktree="wt1") == [
+        "claude", "-w", "wt1", "--resume=sid-9"]
+
+
+async def test_enter_reisolates_relocated_worktree_session(tmp_path, monkeypatch):
+    """A session Claude relocated to the shared root (worktree_leaf set,
+    project_path = the root) must resume via `claude -w <leaf>` so it rebuilds
+    the worktree instead of running in the root and blocking the lease queue."""
+    from _pkg import tui as tuimod
+    from _pkg.tui import SessionExplorerApp
+    import json as _json
+    for m in (".session-explorer.help-seen", ".session-explorer.retention-declined",
+              ".session-explorer.summaries-prompted", ".session-explorer.tmux-declined"):
+        (tmp_path / m).write_text("")
+    repo = tmp_path / "repo"; repo.mkdir()          # the (root) project_path
+    tp = tmp_path / "t.jsonl"; tp.write_text('{"type":"user","uuid":"u1"}\n')
+    idx = str(tmp_path / "index.json")
+    _json.dump({"version": 2, "sessions": {"RID": {
+        "name_cached": "planning/reloc-one",
+        "project_path": str(repo),          # relocated to the root (no wt marker)
+        "project_label": "repo",
+        "worktree_leaf": "46415-thing",     # origin worktree, from reconcile
+        "transcript_path": str(tp),
+        "message_count": 12,                # not a stub
+    }}}, open(idx, "w"))
+
+    calls = {}
+    monkeypatch.setenv("SESSION_EXPLORER_TMUX", "1")
+    monkeypatch.setattr(tuimod._tmux, "session_windows", lambda: [])
+    monkeypatch.setattr(tuimod._tmux, "docked_pane", lambda self_pane: None)
+    monkeypatch.setattr(tuimod._tmux, "start_window",
+                        lambda sid, cwd, label=None, worktree=None:
+                        calls.setdefault("start", (sid, cwd, worktree)) or 0)
+    monkeypatch.setattr(tuimod._tmux, "dock", lambda sid, focus=True: calls.update(dock=sid) or 0)
+
+    app = SessionExplorerApp(index_path=idx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")   # project node
+        await pilot.press("down")   # planning/ folder
+        await pilot.press("down")   # session leaf
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert "start" in calls, "session was not started"
+    sid, cwd, wt = calls["start"]
+    assert sid == "RID"
+    assert wt == "46415-thing"        # -w <leaf> → rebuild the worktree
+    assert cwd == str(repo)           # launched from the root (transcript lives there)
+    assert app._resume_target is None  # tmux path, not exit-to-resume

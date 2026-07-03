@@ -1030,6 +1030,7 @@ class SessionExplorerApp(App):
         self._fs_keys_migrated: bool = False
         self._resume_target: str | None = None
         self._resume_cwd: str | None = None
+        self._resume_worktree: str | None = None  # -w <leaf> for a re-isolate
         self._new_session_argv: list[str] | None = None
         self._new_session_cwd: str | None = None
         self._filter_needle: str = ""
@@ -1451,6 +1452,13 @@ class SessionExplorerApp(App):
                     glyph = _glyph(self._live_states.get(sid), self._spinner_frame,
                                    self._ours_flag(sid))
                     wt = _worktree_state(s.get("project_path"))
+                    if wt is None and s.get("worktree_leaf") and s.get("project_path"):
+                        # Relocated worktree-born session: project_path is the
+                        # root, so derive the glyph from its reconstructed
+                        # worktree path (dead until resume rebuilds it).
+                        wt = _worktree_state(os.path.join(
+                            s["project_path"], ".claude", "worktrees",
+                            s["worktree_leaf"]))
                     leaf = parent.add_leaf(
                         _row_label(sid, s, child_depth, glyph, wt),
                         data={"sid": sid, **s, "worktree_state": wt,
@@ -1530,11 +1538,15 @@ class SessionExplorerApp(App):
                         "it's running in the background.", severity="warning")
 
     def _dock(self, sid: str, cwd: "str | None", label: "str | None",
-              *, already_running: bool, focus: bool = True) -> None:
+              *, already_running: bool, focus: bool = True,
+              worktree: "str | None" = None) -> None:
         """Make `sid` the docked right pane. If it is already docked, just
         refocus it (when `focus`); otherwise undock whatever is docked, (re)start
         the session as a background window when needed, and join it in. With
-        `focus=False` the explorer tree keeps focus (cursor-follow sync)."""
+        `focus=False` the explorer tree keeps focus (cursor-follow sync).
+
+        `worktree` (a leaf) re-isolates a relocated worktree-born session via
+        `claude -w <leaf>` when starting it (see build_start_window)."""
         if self._docked_sid == sid:
             # Refocus claude (Enter on the already-docked row). The cursor-follow
             # sync never reaches here — it early-returns on sid == _docked_sid —
@@ -1546,7 +1558,7 @@ class SessionExplorerApp(App):
             return
         self._undock_current()
         if not already_running:
-            _tmux.start_window(sid, cwd, label)    # background window first
+            _tmux.start_window(sid, cwd, label, worktree)  # background window
         self._join_docked(sid, focus=focus)        # join into the explorer
 
     def _schedule_dock_sync(self) -> None:
@@ -1582,6 +1594,20 @@ class SessionExplorerApp(App):
         else:
             self._undock_current()
 
+    def _relocated_worktree_leaf(self, data: dict) -> "str | None":
+        """The origin worktree leaf iff `data` is a worktree-born session that
+        Claude Code relocated to the shared root (worktree removed → transcript
+        moved out of the worktree). Such a session must resume via
+        `claude -w <leaf>` to re-isolate; a normal worktree session — its
+        project_path is still under /.claude/worktrees/ — uses the existing
+        recreate path instead. `worktree_leaf` is stamped by
+        index.reconcile_relocated."""
+        leaf = data.get("worktree_leaf")
+        pp = data.get("project_path")
+        if leaf and pp and worktree.MARKER not in pp:
+            return leaf
+        return None
+
     def action_resume(self) -> None:
         node = self._tree.cursor_node
         if not node or not node.data or "sid" not in node.data:
@@ -1615,7 +1641,8 @@ class SessionExplorerApp(App):
 
         # No tmux → today's behaviour: exit and execvp claude (handled in run()).
         if not self._tmux_enabled:
-            self._exit_to_resume(sid, project_path)
+            self._exit_to_resume(sid, project_path,
+                                 self._relocated_worktree_leaf(data))
             return
 
         running = _tmux.session_windows()
@@ -1633,6 +1660,19 @@ class SessionExplorerApp(App):
                 "Showing its progress here; press space to peek. (y/esc)"))
             return
         # Stopped → start it as a background window and dock it beside the tree.
+        # Relocated worktree-born session first: Claude Code moved its transcript
+        # to the shared root when the worktree was removed, so a plain --resume
+        # would run it IN the root and block the lease queue. Re-isolate it with
+        # `claude -w <leaf>`, which rebuilds the worktree and resumes there.
+        reloc_leaf = self._relocated_worktree_leaf(data)
+        if reloc_leaf:
+            cwd = project_path if (project_path and os.path.isdir(project_path)) \
+                else os.path.expanduser("~")
+            self.notify(f"Rebuilding worktree '{reloc_leaf}' to keep this "
+                        "session isolated from the shared root…")
+            self._dock(sid, cwd, label, already_running=False, worktree=reloc_leaf)
+            self._poll_live()
+            return
         if _dead_worktree_repo(project_path):
             def after(ok: bool) -> None:
                 if ok:
@@ -1651,10 +1691,12 @@ class SessionExplorerApp(App):
             self._dock(sid, cwd, label, already_running=False)
             self._poll_live()
 
-    def _exit_to_resume(self, sid: str, project_path: "str | None") -> None:
+    def _exit_to_resume(self, sid: str, project_path: "str | None",
+                        worktree: "str | None" = None) -> None:
         def proceed() -> None:
             self._resume_target = sid
             self._resume_cwd = project_path
+            self._resume_worktree = worktree
             self.exit()
         if _dead_worktree_repo(project_path):
             self.push_screen(ConfirmScreen(
@@ -3115,7 +3157,7 @@ def _resolve_resume_cwd(project_path: "str | None") -> "str | None":
     return project_path if os.path.isdir(project_path) else None
 
 
-def _resume_argv(target: str) -> list[str]:
+def _resume_argv(target: str, worktree: "str | None" = None) -> list[str]:
     """argv for resuming a session.
 
     `claude --resume` takes an OPTIONAL value (`-r, --resume [value]`), so the
@@ -3124,8 +3166,16 @@ def _resume_argv(target: str) -> list[str]:
     session picker instead of resuming. Bind the id with `=` so it's
     unambiguously the option's value. This is also injection-safe: a session id
     that starts with '-' stays inside the single `--resume=<id>` token and can
-    never be parsed as a separate `claude` flag."""
-    return ["claude", f"--resume={target}"]
+    never be parsed as a separate `claude` flag.
+
+    `worktree` re-isolates a session Claude Code relocated to the shared root:
+    `claude -w <leaf>` recreates the worktree and resumes there (run from the
+    parent repo root so `--resume` finds the relocated transcript)."""
+    argv = ["claude"]
+    if worktree:
+        argv += ["-w", worktree]
+    argv.append(f"--resume={target}")
+    return argv
 
 
 def _new_sid() -> str:
@@ -3265,5 +3315,6 @@ def _handoff_after_exit(app, *, inside_server=None, execvp=None,
         cwd = _resolve_resume_cwd(getattr(app, "_resume_cwd", None))
         if cwd:
             chdir(cwd)
-        execvp("claude", _resume_argv(target))
+        execvp("claude", _resume_argv(target,
+                                      getattr(app, "_resume_worktree", None)))
     return 0
