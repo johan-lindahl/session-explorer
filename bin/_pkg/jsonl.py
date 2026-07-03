@@ -250,3 +250,25 @@ def effective_cwd(path: str) -> Optional[str]:
     resumes the session in the relocated parent-repo directory.
     """
     return relocated_cwd(path) or session_cwd(path)
+
+
+_WORKTREE_MARKER = "/.claude/worktrees/"
+
+
+def worktree_origin(path: str) -> Optional[str]:
+    """The git-worktree LEAF this session lived in, if any.
+
+    Recovered by scanning the transcript's message `cwd`s for a value under
+    `.../.claude/worktrees/<leaf>` — these survive even after Claude Code
+    relocates the transcript to the parent repo, so a relocated worktree session
+    can still be re-isolated by resuming with `claude -w <leaf>`. Returns the
+    leaf (the single path segment after `worktrees/`, even if the cwd points at a
+    subdir of the worktree), or None if the session was never in a worktree.
+    """
+    for msg in _iter_messages(path):
+        cwd = msg.get("cwd")
+        if isinstance(cwd, str) and _WORKTREE_MARKER in cwd:
+            leaf = cwd.split(_WORKTREE_MARKER, 1)[1].split("/", 1)[0].strip()
+            if leaf:
+                return leaf
+    return None

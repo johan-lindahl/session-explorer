@@ -443,3 +443,14 @@ def test_reclaim_explorer_panes_fallback_name_without_sid():
         "%0", panes=lambda: [("%0", 100), ("%5", 999)],
         cmd_of_pid=lambda pid: "claude", break_pane=lambda p, n: broke.append((p, n)))
     assert broke == [("%5", "orphan-999")]
+
+
+def test_build_start_window_with_worktree():
+    """Resuming a relocated worktree-born session re-isolates it: `claude -w
+    <leaf> --resume=<sid>` recreates the worktree instead of running in root."""
+    argv = tmux.build_start_window("sid-123", "/repo", worktree="46415-thing")
+    assert argv == [
+        "tmux", "-L", "session-explorer", "new-window", "-d",
+        "-n", "sid-123", "-c", "/repo",
+        "exec claude -w 46415-thing --resume=sid-123",
+    ]

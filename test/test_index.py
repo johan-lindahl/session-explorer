@@ -902,3 +902,40 @@ def test_reindex_heals_relocated_row_and_keeps_notes(tmp_path):
     assert s["notes"] == "precious"
     assert s["project_path"] == str(repo)
     assert s["transcript_path"] == str(projects / "-repo" / "SID.jsonl")
+
+
+def test_reconcile_relocated_stores_worktree_leaf(tmp_path):
+    """A relocated worktree-born session records its origin worktree leaf so
+    resume can re-isolate it via `claude -w <leaf>`."""
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir()
+    (projects / "-repo").mkdir()
+    real = projects / "-repo" / "SID.jsonl"
+    real.write_text(
+        '{"type":"custom-title","customTitle":"x","sessionId":"S"}\n'
+        '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n'
+        '{"type":"relocated","relocatedCwd":"%s","sessionId":"S"}\n'
+        % (str(repo / ".claude/worktrees/wt-leaf"), str(repo)))
+    idx = str(tmp_path / "index.json")
+    _seed_dangling_row(idx, "SID", str(repo / ".claude/worktrees/wt-leaf"),
+                       tmp_path / "dead.jsonl")
+
+    assert index.reconcile_relocated(idx, projects_root=str(projects)) == 1
+    s = index.load(idx)["sessions"]["SID"]
+    assert s["worktree_leaf"] == "wt-leaf"     # origin tracked
+    assert s["project_path"] == str(repo)       # relocated to the parent root
+
+
+def test_reconcile_relocated_no_leaf_for_plain_root_session(tmp_path):
+    """A session that was never in a worktree gets no worktree_leaf."""
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir()
+    (projects / "-repo").mkdir()
+    real = projects / "-repo" / "SID.jsonl"
+    real.write_text(
+        '{"type":"custom-title","customTitle":"x","sessionId":"S"}\n'
+        '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' % str(repo))
+    idx = str(tmp_path / "index.json")
+    _seed_dangling_row(idx, "SID", str(repo), tmp_path / "dead.jsonl")
+    index.reconcile_relocated(idx, projects_root=str(projects))
+    assert "worktree_leaf" not in index.load(idx)["sessions"]["SID"]

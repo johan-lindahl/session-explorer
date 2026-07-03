@@ -155,3 +155,29 @@ def test_latest_model_none_when_absent(tmp_path):
     p = tmp_path / "t.jsonl"
     p.write_text('{"type":"user","message":{"content":"hi"}}\n')
     assert jsonl.latest_model(str(p)) is None
+
+
+def test_worktree_origin_returns_leaf(tmp_path):
+    """The worktree leaf is recoverable from the session's cwd history even after
+    Claude relocated the transcript to the parent repo (so a relocated session
+    can be re-isolated via `claude -w <leaf>`)."""
+    p = tmp_path / "wt.jsonl"
+    p.write_text(
+        '{"type":"user","cwd":"/repo/.claude/worktrees/46415-thing","message":{"role":"user","content":"hi"}}\n'
+        '{"type":"relocated","relocatedCwd":"/repo","sessionId":"X"}\n'
+        '{"type":"user","cwd":"/repo","message":{"role":"user","content":"more"}}\n'
+    )
+    assert jsonl.worktree_origin(str(p)) == "46415-thing"
+
+
+def test_worktree_origin_none_when_never_in_worktree(tmp_path):
+    p = tmp_path / "root.jsonl"
+    p.write_text('{"type":"user","cwd":"/repo","message":{"role":"user","content":"hi"}}\n')
+    assert jsonl.worktree_origin(str(p)) is None
+
+
+def test_worktree_origin_ignores_deeper_subdir(tmp_path):
+    """A cwd inside a subdir of the worktree still yields just the leaf."""
+    p = tmp_path / "deep.jsonl"
+    p.write_text('{"type":"user","cwd":"/repo/.claude/worktrees/wt1/app/code","message":{"role":"user","content":"hi"}}\n')
+    assert jsonl.worktree_origin(str(p)) == "wt1"
