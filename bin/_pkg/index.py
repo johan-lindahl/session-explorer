@@ -392,6 +392,70 @@ def _reindex_units(index_path: str, projects_root: "str | None") -> int:
     return refresh_n + backfill_n
 
 
+def reconcile_relocated(index_path: str, projects_root: "str | None" = None,
+                        live_ids: "set | None" = None) -> int:
+    """Heal tracked rows whose transcript went missing because Claude Code
+    RELOCATED it (worktree removed → transcript moved to the parent repo's
+    project dir; see jsonl.relocated_cwd). Without this, such a row's
+    transcript_path/project_path dangle and the session drops out of the tree
+    even though its data is intact on disk.
+
+    For each tracked session whose `transcript_path` no longer exists, search for
+    `<sid>.jsonl` elsewhere under `projects_root`; if a non-empty one is found,
+    re-record the session at its true (relocated) cwd. Unlike reindex this NEVER
+    prunes and merges onto the existing row via record_session, so notes /
+    name_shadows / created_at survive.
+
+    `live_ids` are skipped (a live transcript is mid-write; a transient stat miss
+    must not re-record it). Rows with no transcript anywhere on disk (genuine
+    just-created stubs, or truly deleted sessions) are left untouched.
+
+    Returns the number of rows healed. Cheap in steady state: the disk walk runs
+    only when at least one tracked row is actually dangling.
+    """
+    projects_root = projects_root or os.path.expanduser("~/.claude/projects")
+    live = set(live_ids or ())
+    sessions = load(index_path).get("sessions", {})
+    dangling = [
+        sid for sid, s in sessions.items()
+        if sid not in live
+        and not (s.get("transcript_path") and os.path.exists(s["transcript_path"]))
+    ]
+    if not dangling or not os.path.isdir(projects_root):
+        return 0
+    wanted = {sid + ".jsonl": sid for sid in dangling}
+    # One pass over the project dirs; per dangling sid keep the largest non-empty
+    # match (a relocated transcript can leave a 0-byte husk behind).
+    best = {}  # sid -> (transcript_path, size)
+    for project_dir in os.listdir(projects_root):
+        full = os.path.join(projects_root, project_dir)
+        if not os.path.isdir(full):
+            continue
+        try:
+            names = os.listdir(full)
+        except OSError:
+            continue
+        for fname in names:
+            sid = wanted.get(fname)
+            if not sid:
+                continue
+            cand = os.path.join(full, fname)
+            try:
+                size = os.path.getsize(cand)
+            except OSError:
+                continue
+            if size > 0 and size > best.get(sid, (None, -1))[1]:
+                best[sid] = (cand, size)
+    healed = 0
+    for sid, (transcript, _size) in best.items():
+        cwd = _jsonl.effective_cwd(transcript)
+        if not cwd or not os.path.isdir(cwd):
+            continue  # can't resolve a real cwd — never guess a location
+        record_session(index_path, sid, transcript, cwd, skip_git=True)
+        healed += 1
+    return healed
+
+
 def reindex(index_path: str, projects_root: "str | None" = None,
             progress: "Callable[[int, int], None] | None" = None) -> dict:
     """Recompute tracked sessions (pruning dead JSONLs), then import any
@@ -406,6 +470,10 @@ def reindex(index_path: str, projects_root: "str | None" = None,
     user-facing "rescan" the TUI binds to F5; nothing imports pre-install
     sessions automatically.
     """
+    # Heal relocated transcripts FIRST: this re-points dangling rows at their
+    # moved transcript, so refresh_all's prune below keeps them (their
+    # transcript_path now exists) instead of dropping the row + its notes.
+    reconcile_relocated(index_path, projects_root=projects_root)
     units = _reindex_units(index_path, projects_root)
     done = [0]
     if progress:

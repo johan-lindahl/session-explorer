@@ -781,3 +781,124 @@ def test_set_name_shadows_replaced_name_without_transcript(tmp_path):
     row = index.load(idx_path)["sessions"]["S9"]
     assert row["name_cached"] == "renamed"
     assert "feature/x" in row.get("name_shadows", [])
+
+
+# --- reconcile_relocated: heal rows whose transcript Claude Code moved when the
+#     worktree was removed (transcript relocated to the parent repo project dir).
+
+def _write_relocated_transcript(path, worktree_cwd, relocated_to=None,
+                                title="user-story/x"):
+    lines = [
+        '{"type":"custom-title","customTitle":"%s","sessionId":"S"}' % title,
+        ('{"type":"user","cwd":"%s","timestamp":"2026-07-02T10:00:00Z",'
+         '"message":{"role":"user","content":"hi"}}' % worktree_cwd),
+    ]
+    if relocated_to:
+        lines.append('{"type":"relocated","relocatedCwd":"%s","sessionId":"S"}'
+                     % relocated_to)
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _seed_dangling_row(idx_path, sid, project_path, dead_transcript, **extra):
+    row = {"name_cached": "user-story/x", "project_path": project_path,
+           "project_label": "repo", "transcript_path": str(dead_transcript)}
+    row.update(extra)
+    index.mutate(idx_path, lambda d: d["sessions"].update({sid: row}) or d)
+
+
+def test_reconcile_relocated_heals_moved_transcript(tmp_path):
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir()          # relocated cwd must exist
+    parent_proj = projects / "-repo"; parent_proj.mkdir()
+    real = parent_proj / "SID.jsonl"
+    _write_relocated_transcript(real, worktree_cwd=str(repo / ".claude/worktrees/wt"),
+                                relocated_to=str(repo))
+    idx = str(tmp_path / "index.json")
+    dead = projects / "-repo--claude-worktrees-wt" / "SID.jsonl"  # never created
+    _seed_dangling_row(idx, "SID", str(repo / ".claude/worktrees/wt"), dead,
+                       notes="keep me")
+
+    healed = index.reconcile_relocated(idx, projects_root=str(projects))
+
+    assert healed == 1
+    s = index.load(idx)["sessions"]["SID"]
+    assert s["transcript_path"] == str(real)
+    assert s["project_path"] == str(repo)     # parent, not the dead worktree
+    assert s["project_label"] == "repo"
+    assert s["notes"] == "keep me"            # metadata preserved (no prune)
+    assert s["message_count"] >= 1
+
+
+def test_reconcile_relocated_is_idempotent(tmp_path):
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir()
+    (projects / "-repo").mkdir()
+    _write_relocated_transcript(projects / "-repo" / "SID.jsonl",
+                                worktree_cwd=str(repo / ".claude/worktrees/wt"),
+                                relocated_to=str(repo))
+    idx = str(tmp_path / "index.json")
+    _seed_dangling_row(idx, "SID", str(repo / ".claude/worktrees/wt"),
+                       tmp_path / "dead.jsonl")
+    assert index.reconcile_relocated(idx, projects_root=str(projects)) == 1
+    assert index.reconcile_relocated(idx, projects_root=str(projects)) == 0
+
+
+def test_reconcile_relocated_skips_live_sessions(tmp_path):
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir()
+    (projects / "-repo").mkdir()
+    _write_relocated_transcript(projects / "-repo" / "SID.jsonl",
+                                worktree_cwd=str(repo / ".claude/worktrees/wt"),
+                                relocated_to=str(repo))
+    idx = str(tmp_path / "index.json")
+    dead = tmp_path / "dead.jsonl"
+    _seed_dangling_row(idx, "SID", str(repo / ".claude/worktrees/wt"), dead)
+
+    healed = index.reconcile_relocated(idx, projects_root=str(projects),
+                                       live_ids={"SID"})
+    assert healed == 0
+    assert index.load(idx)["sessions"]["SID"]["transcript_path"] == str(dead)
+
+
+def test_reconcile_relocated_leaves_transcriptless_stub_alone(tmp_path):
+    """A just-created stub (no transcript anywhere yet) must NOT be touched."""
+    projects = tmp_path / "projects"; projects.mkdir()
+    idx = str(tmp_path / "index.json")
+    _seed_dangling_row(idx, "STUB", "/somewhere", tmp_path / "never.jsonl")
+    assert index.reconcile_relocated(idx, projects_root=str(projects)) == 0
+
+
+def test_reconcile_relocated_skips_when_relocated_cwd_missing(tmp_path):
+    """If the transcript's effective cwd isn't a real dir, don't guess a home."""
+    projects = tmp_path / "projects"; projects.mkdir()
+    (projects / "-gone").mkdir()
+    _write_relocated_transcript(projects / "-gone" / "SID.jsonl",
+                                worktree_cwd="/gone/wt",
+                                relocated_to=str(tmp_path / "does-not-exist"))
+    idx = str(tmp_path / "index.json")
+    dead = tmp_path / "dead.jsonl"
+    _seed_dangling_row(idx, "SID", "/gone/wt", dead)
+    assert index.reconcile_relocated(idx, projects_root=str(projects)) == 0
+    assert index.load(idx)["sessions"]["SID"]["transcript_path"] == str(dead)
+
+
+def test_reindex_heals_relocated_row_and_keeps_notes(tmp_path):
+    """Regression: before the reconcile step, reindex's prune deleted the
+    dangling row (losing notes) and backfill re-added it under the dead worktree
+    cwd. It must now survive with notes intact and point at the parent repo."""
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir()
+    (projects / "-repo").mkdir()
+    _write_relocated_transcript(projects / "-repo" / "SID.jsonl",
+                                worktree_cwd=str(repo / ".claude/worktrees/wt"),
+                                relocated_to=str(repo))
+    idx = str(tmp_path / "index.json")
+    _seed_dangling_row(idx, "SID", str(repo / ".claude/worktrees/wt"),
+                       tmp_path / "dead.jsonl", notes="precious")
+
+    index.reindex(idx, projects_root=str(projects))
+
+    s = index.load(idx)["sessions"]["SID"]
+    assert s["notes"] == "precious"
+    assert s["project_path"] == str(repo)
+    assert s["transcript_path"] == str(projects / "-repo" / "SID.jsonl")

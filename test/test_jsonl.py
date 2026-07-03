@@ -78,6 +78,42 @@ def test_session_cwd_none_when_no_envelope(tmp_path):
     assert jsonl.session_cwd(str(p)) is None
 
 
+def test_relocated_cwd_returns_last_relocated_value(tmp_path):
+    """Claude Code writes a `relocated` line when it moves a worktree session's
+    transcript to the parent repo; the LAST one is the current cwd."""
+    p = tmp_path / "reloc.jsonl"
+    p.write_text(
+        '{"type":"user","cwd":"/repo/.claude/worktrees/wt","message":{"role":"user","content":"hi"}}\n'
+        '{"type":"relocated","relocatedCwd":"/repo","sessionId":"X"}\n'
+        '{"type":"relocated","relocatedCwd":"/repo-moved-again","sessionId":"X"}\n'
+    )
+    assert jsonl.relocated_cwd(str(p)) == "/repo-moved-again"
+
+
+def test_relocated_cwd_none_when_never_relocated(tmp_path):
+    p = tmp_path / "plain.jsonl"
+    p.write_text('{"type":"user","cwd":"/repo","message":{"role":"user","content":"hi"}}\n')
+    assert jsonl.relocated_cwd(str(p)) is None
+
+
+def test_effective_cwd_prefers_relocated_over_first_cwd(tmp_path):
+    """effective_cwd must return the parent (relocatedCwd), not the dead worktree
+    cwd that session_cwd() would return."""
+    p = tmp_path / "eff.jsonl"
+    p.write_text(
+        '{"type":"user","cwd":"/repo/.claude/worktrees/wt","message":{"role":"user","content":"hi"}}\n'
+        '{"type":"relocated","relocatedCwd":"/repo","sessionId":"X"}\n'
+    )
+    assert jsonl.session_cwd(str(p)) == "/repo/.claude/worktrees/wt"
+    assert jsonl.effective_cwd(str(p)) == "/repo"
+
+
+def test_effective_cwd_falls_back_to_first_cwd_when_not_relocated(tmp_path):
+    p = tmp_path / "eff2.jsonl"
+    p.write_text('{"type":"user","cwd":"/repo/proj","message":{"role":"user","content":"hi"}}\n')
+    assert jsonl.effective_cwd(str(p)) == "/repo/proj"
+
+
 def test_tokens_estimate_named_uses_cache_read():
     # Latest assistant message has cache_read_input_tokens=15234
     assert jsonl.tokens_estimate(os.path.join(_FIX, "named.jsonl")) == 15234
