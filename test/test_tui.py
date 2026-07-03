@@ -3515,3 +3515,46 @@ async def test_u_opens_preview(index_path, tmp_path, monkeypatch):
         await pilot.press("u")
         await pilot.pause()
         assert app._preview.display is True    # 'u' reveals the preview
+
+
+async def test_tui_heals_relocated_session_on_mount(tmp_path):
+    """A session Claude Code relocated out of a removed worktree (its index
+    transcript_path now dangles) must be re-linked on mount and reappear —
+    notes preserved. Regression for the 'exit + remove worktree = lost session'
+    report."""
+    # Keep first-run prompts quiet (mirrors conftest's index_path fixture).
+    for m in (".session-explorer.help-seen", ".session-explorer.retention-declined",
+              ".session-explorer.summaries-prompted", ".session-explorer.tmux-declined"):
+        (tmp_path / m).write_text("")
+
+    projects = tmp_path / "projects"; projects.mkdir()
+    repo = tmp_path / "myrepo"; repo.mkdir()          # relocated cwd must exist
+    (projects / "-myrepo").mkdir()
+    real = projects / "-myrepo" / "RELOC.jsonl"
+    real.write_text(
+        '{"type":"custom-title","customTitle":"work/thing","sessionId":"RELOC"}\n'
+        '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n'
+        '{"type":"relocated","relocatedCwd":"%s","sessionId":"RELOC"}\n'
+        % (str(repo / ".claude/worktrees/wt"), str(repo)))
+    idx = str(tmp_path / "index.json")
+    dead = projects / "-myrepo--claude-worktrees-wt" / "RELOC.jsonl"  # never made
+    json.dump({"version": 2, "sessions": {"RELOC": {
+        "name_cached": "work/thing",
+        "project_path": str(repo / ".claude/worktrees/wt"),
+        "project_label": "myrepo",
+        "transcript_path": str(dead),
+        "notes": "keepme",
+    }}}, open(idx, "w"))
+
+    from _pkg.tui import SessionExplorerApp
+    app = SessionExplorerApp(index_path=idx, projects_root=str(projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()   # let the reconcile thread finish
+        await pilot.pause()
+
+    healed = json.load(open(idx))["sessions"]["RELOC"]
+    assert healed["transcript_path"] == str(real)   # re-linked to the moved file
+    assert healed["project_path"] == str(repo)       # parent repo, not the worktree
+    assert healed["notes"] == "keepme"               # metadata preserved
+    assert healed["message_count"] >= 1

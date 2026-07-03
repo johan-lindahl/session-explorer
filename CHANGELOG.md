@@ -3,6 +3,26 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.19.1
+
+### Fixed
+- **Sessions no longer disappear after removing a worktree.** As of a recent
+  Claude Code change (~2.1.x, observed 2026-07), removing a git worktree and
+  then resuming its session via native `/resume` makes Claude Code *relocate*
+  the transcript — it moves the JSONL out of the worktree's project folder into
+  the parent repo's project folder (writing a `relocated` event). The explorer
+  still pointed at the old location, so the session's row went stale and dropped
+  out of the tree even though the conversation was fully intact on disk (native
+  `/resume` still found it). The explorer now **follows the relocation**: a new
+  `reconcile_relocated` pass re-links any row whose transcript went missing to
+  the moved file at its true parent-repo directory, so the session reappears
+  under the right project. It runs automatically at launch and on a slow
+  background timer (to catch relocations triggered from another terminal while
+  the explorer is open), and merges onto the existing row so your **notes and
+  renames survive** (an F5 rescan previously pruned the dangling row, losing
+  them). No data was ever deleted by worktree removal — only the explorer's
+  link to it.
+
 ## 1.19.0
 
 ### Added

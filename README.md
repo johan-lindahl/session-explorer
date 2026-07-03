@@ -257,7 +257,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.19.0.** Released and installable from the Claude Code marketplace. Textual
+**v1.19.1.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders

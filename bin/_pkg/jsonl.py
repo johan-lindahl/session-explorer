@@ -221,3 +221,32 @@ def session_cwd(path: str) -> Optional[str]:
         if v:
             return v
     return None
+
+
+def relocated_cwd(path: str) -> Optional[str]:
+    """The most recent `relocatedCwd` if Claude Code relocated this transcript.
+
+    When a worktree is removed and its session is later resumed, Claude Code
+    MOVES the transcript out of the worktree's project dir into the parent
+    repo's project dir and writes a `{"type":"relocated","relocatedCwd":...}`
+    line recording the new working directory. The LAST such line is the
+    session's current effective cwd. Returns None if it was never relocated.
+    """
+    last = None
+    for msg in _iter_messages(path):
+        if msg.get("type") == "relocated":
+            v = msg.get("relocatedCwd")
+            if v:
+                last = v
+    return last
+
+
+def effective_cwd(path: str) -> Optional[str]:
+    """The session's current working directory: the last `relocatedCwd` if the
+    transcript was relocated (worktree removed), else the first envelope `cwd`.
+
+    Prefer this over session_cwd() whenever a transcript may have been relocated
+    — the first cwd points at the now-dead worktree, whereas Claude actually
+    resumes the session in the relocated parent-repo directory.
+    """
+    return relocated_cwd(path) or session_cwd(path)

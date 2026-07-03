@@ -135,6 +135,7 @@ SPINNER_INTERVAL = 0.2   # seconds between spinner frames
 LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
+RECONCILE_POLL_INTERVAL = 60.0  # seconds between relocated-transcript heals
 SUMMARY_MIN_MSGS = 8  # skip auto-summaries for sessions shorter than this
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
@@ -1233,6 +1234,12 @@ class SessionExplorerApp(App):
         self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
         self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
+        # Heal sessions Claude Code relocated out of a removed worktree (their
+        # index row's transcript_path dangles, so they'd vanish from the tree).
+        # Once at launch, then on a slow timer to catch out-of-band relocations
+        # (a native `/resume` in another terminal) while the explorer is open.
+        self._reconcile_relocated()
+        self.set_interval(RECONCILE_POLL_INTERVAL, self._reconcile_relocated)
         # Usage bar: restore it if the user left it enabled, but only in the
         # tmux-hosted layout (it has nowhere to render otherwise).
         if self._tmux_enabled and self._usage_enabled():
@@ -2795,6 +2802,41 @@ class SessionExplorerApp(App):
                              "worktree_state": (leaf.data or {}).get("worktree_state")}
         self._relabel_live_rows()
         self._refresh_preview()
+
+    def _reconcile_relocated(self) -> None:
+        """UI-thread interval callback: snapshot the live sids (owned by this
+        thread), then heal relocated transcripts off-thread. Live sessions are
+        skipped so a mid-write transcript isn't re-recorded."""
+        self._reconcile_relocated_worker(set(self._live_states))
+
+    @work(thread=True, exclusive=True, group="reconcile")
+    def _reconcile_relocated_worker(self, live_ids: set) -> None:
+        """Off-thread wrapper. `exclusive` so a slow disk walk can't stack."""
+        self._reconcile_relocated_tick(live_ids)
+
+    def _reconcile_relocated_tick(self, live_ids: set) -> None:
+        """Guarded body: re-point rows whose transcript Claude Code moved (see
+        index.reconcile_relocated), then repopulate if anything was healed. Same
+        rule as _live_meta_tick — @work exits the app on an escaping exception,
+        so a failed heal must log and skip, never take the explorer down."""
+        try:
+            healed = _index.reconcile_relocated(
+                self._index_path, projects_root=self._projects_root,
+                live_ids=live_ids)
+            if healed:
+                _log_line("reconcile: re-linked %d relocated session(s)" % healed)
+                self.call_from_thread(self._repopulate_preserving_cursor)
+        except Exception:
+            import traceback
+            _log_line("reconcile relocated failed (tick skipped):\n"
+                      + traceback.format_exc())
+
+    def _repopulate_preserving_cursor(self) -> None:
+        """Rebuild the tree (so newly-healed rows appear) without losing the
+        user's place. Main thread."""
+        sid = self._selected_sid()
+        self._populate()
+        self._restore_cursor_to_sid(sid)
 
     def _tick_spinner(self) -> None:
         """Advance the spinner frame and relabel only the working rows."""
