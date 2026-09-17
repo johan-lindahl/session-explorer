@@ -3223,20 +3223,41 @@ def _new_session_argv(sid: str, name: str, worktree: "str | None" = None) -> lis
     return argv
 
 
-def _run_app(app) -> None:
+def _run_app(app) -> int:
     """app.run() with crash persistence: any exception that tears the app down
     is written to ~/.claude/session-explorer.log (with full traceback) before
     re-raising. The TUI's stderr is a tmux pane that historically closed on
     death, so without this a crash leaves no trace anywhere — three production
     crashes shipped zero tracebacks. KeyboardInterrupt stays unlogged (^C is a
     user action, not a crash); the re-raise keeps the exit code non-zero so the
-    pane's remain-on-exit=failed retains the traceback on screen too."""
+    pane's remain-on-exit=failed retains the traceback on screen too.
+
+    MOST crashes never escape app.run(), though: Textual catches an exception
+    raised in a message handler / timer callback / `@work` worker, renders the
+    traceback into `_exit_renderables`, sets `return_code = 1` and returns
+    *normally*. So the `except` below is the rare path; the common one is a
+    zero-exception, non-zero-return_code exit, which this function must ALSO
+    log and report — otherwise the whole crash-visibility invariant is dead for
+    exactly the failures that hit it most (an unguarded `set_interval`/
+    `set_timer` callback). Returns the process exit code."""
     try:
         app.run()
     except Exception:
         import traceback
         _log_line("TUI crashed:\n" + traceback.format_exc())
         raise
+    # getattr: the attribute is always present on a real App, but stays optional
+    # so a lightweight fake in a test needn't model it.
+    code = getattr(app, "return_code", 0)
+    if code:
+        import traceback
+        exc = getattr(app, "_exception", None)
+        detail = ("".join(traceback.format_exception(type(exc), exc,
+                                                     exc.__traceback__))
+                  if exc is not None else "(no exception recorded)\n")
+        _log_line(f"TUI crashed (return_code={code}):\n" + detail)
+        return int(code)
+    return 0
 
 
 def _inside_dedicated_server(env=None, socket=None) -> bool:
@@ -3266,7 +3287,16 @@ def _detect_tmux_hosted(env=None, socket=None) -> bool:
 
 def run() -> int:
     app = SessionExplorerApp()
-    _run_app(app)
+    code = _run_app(app)
+    if code:
+        # A crashed app never reaches the deliberate hand-off paths, and
+        # execvp'ing claude here would replace the pane and wipe the traceback
+        # Textual just printed. Exit non-zero instead: remain-on-exit=failed
+        # then KEEPS the dead pane (traceback on screen) and the launcher
+        # respawns it on the next /open. Returning 0 here — as this did before
+        # — closed the pane, handed the window to the docked claude, and left
+        # the log empty: a crash with no evidence anywhere.
+        return code
     return _handoff_after_exit(app)
 
 
