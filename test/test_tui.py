@@ -3054,6 +3054,63 @@ def test_run_app_logs_crash_traceback(monkeypatch):
     assert "Traceback" in logged[0]
 
 
+def test_run_app_logs_crash_textual_swallowed(monkeypatch):
+    """Textual catches an exception raised in a timer/message callback, renders
+    the traceback into _exit_renderables, sets return_code=1 and returns from
+    run() NORMALLY. That is the common crash shape, and it used to be invisible:
+    nothing escaped run(), so nothing was logged."""
+    from _pkg import tui as tuimod
+    logged = []
+    monkeypatch.setattr(tuimod, "_log_line", lambda m: logged.append(m))
+
+    class Swallowed:
+        return_code = 1
+
+        def __init__(self):
+            try:
+                raise ValueError("kaboom in a timer callback")
+            except ValueError as exc:
+                self._exception = exc
+
+        def run(self):
+            return None
+
+    assert tuimod._run_app(Swallowed()) == 1
+    assert logged, "a Textual-swallowed crash must be logged too"
+    assert "ValueError" in logged[0] and "kaboom" in logged[0]
+    assert "Traceback" in logged[0]
+
+
+def test_run_app_clean_exit_returns_zero(monkeypatch):
+    from _pkg import tui as tuimod
+    logged = []
+    monkeypatch.setattr(tuimod, "_log_line", lambda m: logged.append(m))
+
+    class Clean:
+        return_code = 0
+
+        def run(self):
+            return None
+
+    assert tuimod._run_app(Clean()) == 0
+    assert not logged, "a clean exit must log nothing"
+
+
+def test_run_skips_handoff_and_exits_nonzero_on_crash(monkeypatch):
+    """A crashed app must NOT execvp claude: that would replace the pane and
+    wipe the traceback. Exiting non-zero keeps the remain-on-exit=failed pane
+    (traceback on screen) for the user and the next /open to respawn."""
+    from _pkg import tui as tuimod
+    monkeypatch.setattr(tuimod, "SessionExplorerApp", lambda: object())
+    monkeypatch.setattr(tuimod, "_run_app", lambda app: 1)
+
+    def boom(app, **kw):  # pragma: no cover - must never be reached
+        raise AssertionError("handoff must not run after a crash")
+
+    monkeypatch.setattr(tuimod, "_handoff_after_exit", boom)
+    assert tuimod.run() == 1
+
+
 async def test_live_meta_tick_survives_refresh_error(index_path, monkeypatch):
     from _pkg import tui as tuimod
     from _pkg.tui import SessionExplorerApp

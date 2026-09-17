@@ -3,6 +3,28 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.19.3
+
+### Fixed
+- **A crashing explorer once again leaves evidence.** The crash-visibility
+  guarantee added in v1.17.4 covered only exceptions that *escaped* `app.run()`
+  — but Textual catches an exception raised in a message handler, a
+  `set_interval`/`set_timer` callback or a worker, renders the traceback into
+  its exit renderables, sets `return_code = 1` and returns from `run()`
+  **normally**. So the most common crash class (an unguarded periodic callback)
+  logged nothing at all, and because `run()` returned `_handoff_after_exit`'s
+  unconditional `0`, the process exited *clean* — which let the
+  `remain-on-exit=failed` pane close, destroying the traceback Textual had just
+  printed to it, and handed the explorer window to the docked claude. The result
+  was a TUI that vanished after a few seconds leaving an empty log, a swallowed
+  window, and nothing to debug. `_run_app` now also inspects `return_code` /
+  `_exception` after a normal return and writes that traceback to
+  `~/.claude/session-explorer.log`, and `run()` propagates the non-zero exit code
+  instead of falling through to the execvp hand-off (which would replace the pane
+  and wipe the traceback). A crashed explorer therefore keeps its dead pane with
+  the traceback on screen *and* records the full traceback in the log, and the
+  launcher's existing respawn rebuilds it on the next `/open`.
+
 ## 1.19.2
 
 ### Fixed
