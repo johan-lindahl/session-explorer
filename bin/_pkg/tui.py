@@ -26,6 +26,7 @@ from . import tmux as _tmux
 from . import usage as _usage
 from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
+from .markup import escape as _esc
 from .tree_model import build_nested_tree, split_path, session_root
 
 
@@ -210,7 +211,10 @@ def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ", wt_state: "str 
     pct = fmt_pct(s.get("tokens_window_pct", 0))
     msgs = str(s.get("message_count", 0))
     prompt = (s.get("first_prompt") or "").replace("\n", " ")[:40]
-    return glyph + f"{display:<{name_w}}" + _wt_cell(wt_state) + _stat_suffix(age, tokens, pct, msgs, "msgs", prompt)
+    # Pad first, escape second — see _esc: backslashes are zero-width, so the
+    # column width computed on the raw name is what actually renders.
+    return glyph + _esc(f"{display:<{name_w}}") + _wt_cell(wt_state) + _stat_suffix(
+        age, tokens, pct, msgs, "msgs", _esc(prompt))
 
 
 def _column_header() -> str:
@@ -246,10 +250,10 @@ def _preview_text(s: dict) -> str:
     context = f"{fmt_tokens(s.get('tokens_estimate', 0))} {fmt_pct(s.get('tokens_window_pct', 0))}"
 
     def field(label: str, value: str) -> str:
-        return f"[b]{label:<10}[/]{value}"
+        return f"[b]{label:<10}[/]{_esc(value)}"
 
     lines = [
-        f"[b]{headline}[/]",
+        f"[b]{_esc(headline)}[/]",
         "",
         field("Project", s.get("project_display") or s.get("project_label") or "(unknown)"),
         field("Path", s.get("project_path") or "(unknown)"),
@@ -267,21 +271,21 @@ def _preview_text(s: dict) -> str:
         field("Session", sid or "—"),
     ]
     if s.get("last_launch_error"):
-        lines += ["", "[b]Launch[/]", f"failed: {s['last_launch_error']}"]
+        lines += ["", "[b]Launch[/]", f"failed: {_esc(s['last_launch_error'])}"]
     lines += [
         "",
         "[b]Notes[/]",
-        s.get("notes") or "(no notes)",
+        _esc(s.get("notes") or "(no notes)"),
         "",
         _summary_header(s),
         ("[dim]⏳ Summarising… (takes a few seconds)[/]" if s.get("summarizing")
-         else s.get("summary") or "(no summary — press u to generate)"),
+         else _esc(s.get("summary") or "(no summary — press u to generate)")),
         "",
         "[b]First prompt[/]",
-        s.get("first_prompt") or "(no first prompt recorded)",
+        _esc(s.get("first_prompt") or "(no first prompt recorded)"),
         "",
         "[b]Transcript[/]",
-        s.get("transcript_path") or "(unknown path)",
+        _esc(s.get("transcript_path") or "(unknown path)"),
     ]
     return "\n".join(lines)
 
@@ -439,21 +443,25 @@ def _render_queue_rows(rows: list) -> str:
     """Render queue_view.snapshot() rows as pane markup (spec §9 mockup)."""
     lines = ["[b]Queues[/] [dim]— experimental[/]"]
     for r in rows:
-        name = f"{_basename(r['project'])} / {r['resource']}"
+        # Project/resource/holder names are user text — escape AFTER truncating
+        # and padding (see _esc). A holder named `…-[ADMIN] …` used to take the
+        # whole explorer down from here.
+        label = f"{_basename(r['project'])} / {r['resource']}"
+        name = _esc(f"{label:<26}")
         if r["live_root_block"]:
-            who = _trunc(r["live_root_block"].get("name", "?"))
-            lines.append(f"  {name:<26}⛔ held by live session ‹{who}›")
+            who = _esc(_trunc(r["live_root_block"].get("name", "?")))
+            lines.append(f"  {name}⛔ held by live session ‹{who}›")
             continue
         if r["holder"]:
             h = r["holder"]
             lines.append(
-                f"  {name:<26}● holder: ‹{_trunc(h['name'])}› ({h['elapsed']})")
+                f"  {name}● holder: ‹{_esc(_trunc(h['name']))}› ({_esc(h['elapsed'])})")
             if r["waiting"]:
-                waits = " · ".join(f"‹{_trunc(w['name'])}› ({w['pos']})"
+                waits = " · ".join(f"‹{_esc(_trunc(w['name']))}› ({_esc(w['pos'])})"
                                    for w in r["waiting"])
                 lines.append(f"  {'':<26}waiting: {waits}")
         else:
-            lines.append(f"  {name:<26}○ free")
+            lines.append(f"  {name}○ free")
     lines.append("[dim]press [b]s[/] to set up sharing · "
                  "guide: docs/queue-guide.md[/]")
     return "\n".join(lines)
@@ -526,7 +534,8 @@ class MoveScreen(_PanelScreen):
             Option(p, id=p) for p in self._existing
         ]
         yield Vertical(
-            Label(f"Move within '{self._project}'  (current: {self._current or '(none)'})",
+            Label(f"Move within '{_esc(self._project)}'  "
+                  f"(current: {_esc(self._current or '(none)')})",
                   classes="dialog-title"),
             OptionList(*opts, id="move-list"),
             Input(placeholder="…or type a new path (e.g. team/planning)", id="move-input"),
@@ -555,7 +564,8 @@ class NewFolderScreen(_PanelScreen):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label(f"New folder under '{self._project}' (use / to nest)", classes="dialog-title"),
+            Label(f"New folder under '{_esc(self._project)}' (use / to nest)",
+                  classes="dialog-title"),
             Input(value=self._prefix, id="newfolder-input"),
             Label("enter create · esc cancel", classes="dialog-hint"),
             id="panel",
@@ -586,7 +596,7 @@ class NewSessionScreen(_PanelScreen):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label(f"New session in '{self._project}' (use / to nest)",
+            Label(f"New session in '{_esc(self._project)}' (use / to nest)",
                   classes="dialog-title"),
             Input(value=self._name_prefix, placeholder="session name", id="ns-name"),
             Input(value=self._cwd, placeholder="working directory", id="ns-cwd"),
@@ -678,7 +688,7 @@ class QuitScreen(_PanelScreen):
         self._names = names
 
     def compose(self) -> ComposeResult:
-        listing = "\n".join(f"  • {n}" for n in self._names)
+        listing = "\n".join(f"  • {_esc(n)}" for n in self._names)
         yield Vertical(
             Label(f"{len(self._names)} Claude session(s) still running:\n{listing}",
                   classes="dialog-title"),
@@ -868,7 +878,7 @@ class SearchScreen(ModalScreen):
         yield Vertical(self._input, self._status, self._results, id="search-panel")
 
     def on_mount(self) -> None:
-        self._input.border_title = f"Search {self._project_label}"
+        self._input.border_title = f"Search {_esc(self._project_label)}"
         self._results.display = False       # no empty box to Tab into pre-search
         self._update_status_idle()
         self._input.focus()
@@ -1668,7 +1678,7 @@ class SessionExplorerApp(App):
         if reloc_leaf:
             cwd = project_path if (project_path and os.path.isdir(project_path)) \
                 else os.path.expanduser("~")
-            self.notify(f"Rebuilding worktree '{reloc_leaf}' to keep this "
+            self.notify(f"Rebuilding worktree '{_esc(reloc_leaf)}' to keep this "
                         "session isolated from the shared root…")
             self._dock(sid, cwd, label, already_running=False, worktree=reloc_leaf)
             self._poll_live()
@@ -1972,9 +1982,9 @@ class SessionExplorerApp(App):
                                  resource_id=rid or SHARED_ROOT_RESOURCE_ID,
                                  resource=res)
             except ValueError as e:
-                self.notify(str(e), severity="error")
+                self.notify(_esc(str(e)), severity="error")
                 return
-            self.notify(f"Sharing the installed root of {name}.")
+            self.notify(f"Sharing the installed root of {_esc(name)}.")
             self._render_queues()
 
         self.push_screen(ConfirmScreen(prompt, detail=_share_enable_detail()),
@@ -1986,11 +1996,11 @@ class SessionExplorerApp(App):
                 return
             from . import queue_config as _qc
             _qc.remove_resource(cfg, pid, rid)
-            self.notify(f"Stopped sharing the installed root ('{rid}').")
+            self.notify(f"Stopped sharing the installed root ('{_esc(rid)}').")
             self._render_queues()
 
         self.push_screen(
-            ConfirmScreen(f"Stop sharing the installed root ('{rid}')?",
+            ConfirmScreen(f"Stop sharing the installed root ('{_esc(rid)}')?",
                           detail="Queue config only — no files are touched."),
             after)
 
@@ -2106,7 +2116,7 @@ class SessionExplorerApp(App):
                 pass
             msg = _summarize_launch_error(raw) or "Session failed to start."
             _log_line(f"launch failed sid={sid} name={name!r}: {raw!r}")
-            self.notify(f"Couldn't start “{name or sid[:8]}”: {msg}",
+            self.notify(f"Couldn't start “{_esc(name or sid[:8])}”: {_esc(msg)}",
                         severity="warning", timeout=10)
             _index.set_launch_error(self._index_path, sid, msg)
             self._populate()
@@ -2176,7 +2186,7 @@ class SessionExplorerApp(App):
                 self._populate()
 
             self.push_screen(
-                ConfirmScreen(f"Delete '{name}'? This removes the JSONL too."), after
+                ConfirmScreen(f"Delete '{_esc(name)}'? This removes the JSONL too."), after
             )
             return
 
@@ -2206,7 +2216,8 @@ class SessionExplorerApp(App):
             _fs.remove_subtree(_fs.default_path_for(self._index_path), project, folder_path)
             self._populate()
 
-        self.push_screen(ConfirmScreen(f"Delete empty folder '{folder_path}'?"), after)
+        self.push_screen(
+            ConfirmScreen(f"Delete empty folder '{_esc(folder_path)}'?"), after)
 
     def action_remove_worktree(self) -> None:
         """Reclaim the selected session's worktree directory (keeps branch +

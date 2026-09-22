@@ -454,3 +454,40 @@ def test_build_start_window_with_worktree():
         "-n", "sid-123", "-c", "/repo",
         "exec claude -w 46415-thing --resume=sid-123",
     ]
+
+
+def test_heal_leaves_a_crashed_explorer_for_the_launchers_respawn():
+    """Since v1.19.3 a CRASHED TUI leaves a dead pane in the explorer window
+    (remain-on-exit=failed) so the traceback stays on screen and the launcher
+    respawns it in place. That window has no *live* TUI pane, so heal used to
+    mistake it for a claude-swallowed impostor and rename it aside — which
+    removed the `explorer:explorer` target the respawn needs and stranded the
+    docked claude under a name the tree can't map ("this session is already
+    running in another terminal"). Only the TUI pane can be dead; claude panes
+    keep remain-on-exit=off."""
+    renames = []
+    tmux.heal_explorer_impostors(
+        list_windows=lambda: ["explorer"],
+        # pane 0: the dead TUI (crash). pane 1: the claude that was docked.
+        panes_of=lambda w: [("SESSION_EXPLORER_TMUX=1", 28458, 1),
+                            ("2.1.278", 21967, 0)],
+        cmd_of_pid=lambda pid: (
+            "claude --session-id 6b3d0dab-a542-4280-973b-180c34bcc478 -n x -w y"
+            if pid == 21967 else ""),
+        rename=lambda old, new: renames.append((old, new)),
+    )
+    assert renames == []
+
+
+def test_heal_finds_the_sid_on_a_later_pane():
+    """A swallowed window's claude need not be pane 0 — scan every pane rather
+    than trusting the first (the old bug produced `orphan-<pid>` names)."""
+    sid = "6b3d0dab-a542-4280-973b-180c34bcc478"
+    renames = []
+    tmux.heal_explorer_impostors(
+        list_windows=lambda: ["explorer"],
+        panes_of=lambda w: [("zsh", 111, 0), ("2.1.278", 222, 0)],
+        cmd_of_pid=lambda pid: f"claude --resume={sid}" if pid == 222 else "zsh",
+        rename=lambda old, new: renames.append((old, new)),
+    )
+    assert renames == [("explorer", sid)]

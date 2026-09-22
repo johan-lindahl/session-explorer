@@ -99,7 +99,7 @@ def search_project(rows, needle, *, include_unnamed,
 
 
 def _highlight(snippet, start, end):
-    from rich.markup import escape
+    from .markup import escape
     return (escape(snippet[:start]) + "[reverse]" + escape(snippet[start:end])
             + "[/reverse]" + escape(snippet[end:]))
 
@@ -109,7 +109,7 @@ def format_session(result, needle):
     scans cleanly: a title line (accent ▌ marker + bold name), a dim metadata
     line (hit count · date), then the snippet lines (speaker-coloured role label
     + normal-weight text with the match reverse-highlighted)."""
-    from rich.markup import escape
+    from .markup import escape
     hits = result["hit_count"]
     plural = "hit" if hits == 1 else "hits"
     when = (result.get("last_active_at") or "")[:10]
@@ -136,7 +136,7 @@ def format_match_block(needle, snippets):
     """Markup for a 'Search matches' block in the preview pane — the feasible
     version of 'jump to the find' (a resumed live session can't be scrolled to
     a message, but the matching snippets can be shown here)."""
-    from rich.markup import escape
+    from .markup import escape
     lines = [f"[b]Search matches[/] [dim]for '{escape(needle)}'[/]"]
     for h in snippets:
         role = "[green]you   [/green]" if h["role"] == "user" else "[cyan]claude[/cyan]"
@@ -146,7 +146,7 @@ def format_match_block(needle, snippets):
 
 
 def empty_state(needle, project_label, searched, include_unnamed):
-    from rich.markup import escape
+    from .markup import escape
     toggle = "on" if include_unnamed else "off"
     return (f"[dim]No matches for[/dim] '{escape(needle)}' [dim]in[/dim] "
             f"{escape(project_label)} [dim]({searched} sessions searched, "

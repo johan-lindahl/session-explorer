@@ -35,6 +35,35 @@ These are the constraints to preserve — violating any breaks the spec's contra
 - **`--gc` skips live sessions.** Skip any JSONL with an active flock or `mtime` within 60s.
 - **Hooks never block startup.** `SessionStart` logs failures to `~/.claude/session-explorer.log` and exits 0.
 - **The explorer's own death must be visible and self-healing.** `_run_app` logs every crash traceback to `~/.claude/session-explorer.log` — including the ones Textual *swallows*: an exception in a message handler / `set_interval`/`set_timer` callback / worker never escapes `app.run()`, Textual just sets `return_code = 1` and returns normally, so `_run_app` inspects `return_code`/`_exception` after a clean return too, and `run()` propagates that non-zero code instead of running the execvp hand-off (v1.19.3 — returning 0 there closed the `remain-on-exit=failed` pane, wiped the on-screen traceback and ceded the window to the docked claude, leaving a crash with no evidence anywhere). Don't make `run()` return 0 on a crash; the TUI marks its own pane `remain-on-exit failed` at mount (crash → dead pane with traceback on screen, never a claude-swallowed window; clean exit still closes); the launcher respawns a dead explorer pane before `new-session -A`. The periodic thread workers (live-meta, usage) call guarded `_*_tick` bodies — `@work` defaults to exit_on_error=True and `call_from_thread` re-raises UI-side exceptions in the worker, so an unguarded periodic tick failure kills the entire app. Don't add a new `@work` worker without the same guard, and don't "simplify" the tick wrappers away.
+- **User text is DATA, never markup — escape it at every render site.** Session
+  names, notes, summaries, first prompts, branches, paths, dialog strings and
+  search terms all reach the screen through markup templates, and Textual emits
+  a `[` run it can't tokenize as *literal text* — which swallows the `]` of the
+  next real tag and leaves the template's trailing `[/]`s with nothing to close
+  (`MarkupError` out of `Static.update`, inside an interval callback → the app
+  dies; that is how `feature/51010-[ADMIN] …` killed the explorer — fixed
+  v1.19.4).
+  Route every user-derived value through `markup.escape` (`bin/_pkg/markup.py`,
+  Textual-free so `search.py` can share it). It escapes **every** `[`: don't
+  "simplify" it to `rich.markup.escape`/`textual.markup.escape`, which only
+  cover `[a-z#/@]`-initial tags and let `[ADMIN]` through — Rich ignores that
+  too, but Textual parses it as a tag, and `_preview_text` is rendered by
+  **both** engines (`Static.update` → Textual, `_render_live_preview` →
+  `Text.from_markup`). Escape LAST, after truncation and column padding: the
+  backslashes render as zero cells, so widths computed on the raw text stay
+  aligned, and truncating escaped text can cut a `\[` in half.
+- **A crashed explorer is not a claude-swallowed impostor.** v1.19.3's
+  `remain-on-exit=failed` leaves a *dead* TUI pane in the `explorer` window so
+  the traceback stays on screen and the launcher respawns it in place — but that
+  window has no *live* TUI pane, which is precisely `heal_explorer_impostors`'s
+  test for a window a docked claude took over. Renaming it aside deletes the
+  `explorer:explorer` target the respawn needs and strands the docked claude
+  under a name the tree can't map ("this session is already running in another
+  terminal"). `heal_explorer_impostors` therefore skips any window containing a
+  dead pane — only the TUI pane can be dead, since claude panes keep the default
+  `remain-on-exit=off` — and derives the sid by scanning *every* pane, never
+  `panes[0]` (after a crash that's the dead TUI, which is what produced
+  `orphan-<pid>` window names). Don't reintroduce a live-TUI-only test here.
 - **TUI runs in a separate terminal**, not inside Claude Code. Claude holds the terminal in raw mode; an interactive TUI must have its own TTY. Slash command spawns it via OS-detected launcher (`osascript` on macOS; `$TERMINAL` / `x-terminal-emulator` / known emulators on Linux).
 - **One Python dep: vendored Textual.** Bundled under `bin/_pkg/_vendor/`. No `pip install` runs on either install path. Don't add other deps casually.
 - **Don't sum `input_tokens` / `output_tokens` from the JSONL for context-size stats.** Those are streaming-time estimates and have been observed to be order-of-magnitude wrong. Use `cache_read_input_tokens` from the latest assistant message; fall back to `bytes / 4` when caching wasn't active. UI labels the value with `~` to set expectations.
