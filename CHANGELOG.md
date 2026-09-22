@@ -3,6 +3,45 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.19.4
+
+### Fixed
+- **A session name containing `[` could kill the explorer.** Session names,
+  notes, summaries, first prompts, branches, paths, dialog text and search
+  terms were interpolated straight into Textual/Rich markup templates, so user
+  text was parsed as markup. A real name — `feature/51010-[ADMIN] Extract a
+  shared SSO base module …` — was truncated by the Queues pane to
+  `feature/51010-[ADMI…`, and Textual emits a `[` run it cannot tokenize as
+  *literal text*: that swallowed the `]` of the next real tag (`[dim]`) and
+  left the template's trailing `[/]`s with nothing to close, raising
+  `MarkupError` from `Static.update` inside the `_poll_live` interval callback
+  — which kills the app. A new Textual-free `markup.escape` escapes every `[`
+  and is applied at every render site (`_render_queue_rows`, `_preview_text`,
+  `_row_label`, the move/new-folder/new-session/delete/quit dialogs, and the
+  `notify()` calls). `rich.markup.escape` / `textual.markup.escape` are
+  deliberately not used: both only escape `[a-z#/@]`-initial tags, so they let
+  `[ADMIN]` through — which Textual's parser *does* treat as a tag. The same
+  rule replaces `rich.markup.escape` in `search.py`, which on the
+  Textual-rendered surfaces had been silently swallowing the user's own search
+  term ("No matches for ''") and bracketed text inside snippets. The preview
+  pane feeds both parsers, so the escape is verified lossless through each.
+- **"This session is already running in another terminal" after a crash.**
+  Since v1.19.3 a crashed TUI deliberately leaves a *dead* pane in the
+  `explorer` window (`remain-on-exit=failed`) so the traceback stays on screen
+  and the launcher respawns it in place. But that window also has no *live* TUI
+  pane, which is exactly how `heal_explorer_impostors` recognises a window a
+  docked claude has swallowed — so `/open` renamed it aside, deriving the new
+  name from `panes[0]`, which after a crash is the dead pane rather than the
+  claude, producing `orphan-<pid>`. That removed the `explorer:explorer` target
+  the launcher's respawn needs *and* stranded the still-running docked claude
+  under a window name the tree cannot map, so selecting that session reported it
+  as running in another terminal and offered only a read-only peek. Heal now
+  skips any window containing a dead pane (only the TUI pane can be dead —
+  claude panes keep the default `remain-on-exit=off`), leaving the crash for the
+  respawn and letting `reclaim_explorer_panes` break the inherited claude out to
+  its own session-id window at mount; it also scans *every* pane for a session
+  id instead of trusting pane 0.
+
 ## 1.19.3
 
 ### Fixed

@@ -222,6 +222,14 @@ def sid_from_claude_cmd(cmd) -> "str | None":
     return m.group(0) if m else None
 
 
+def _pane_parts(pane):
+    """Normalise a pane tuple to `(cmd, pid, dead)`. `_panes_of_window` reports
+    the dead flag; older/injected 2-tuples default to not-dead."""
+    cmd, pid = pane[0], pane[1]
+    dead = bool(pane[2]) if len(pane) > 2 else False
+    return cmd, pid, dead
+
+
 def heal_explorer_impostors(*, list_windows=None, panes_of=None,
                             cmd_of_pid=None, rename=None):
     """Recover a claude-swallowed explorer window. When a window named
@@ -235,7 +243,20 @@ def heal_explorer_impostors(*, list_windows=None, panes_of=None,
     non-'explorer' fallback when no id is derivable. The launcher's recreate
     step then builds a fresh explorer window. Best-effort; all tmux/ps access
     is injected so the decision logic is unit-tested. Returns the (old, new)
-    renames performed."""
+    renames performed.
+
+    A CRASHED explorer is NOT an impostor (v1.19.4). Since v1.19.3 the TUI pane
+    is remain-on-exit=failed, so a crash leaves a *dead* pane in this window
+    with the traceback on screen, and the launcher respawns it in place before
+    attaching. That window also has no live TUI pane, so renaming it aside
+    would delete the `explorer:explorer` target the respawn needs AND strand
+    the docked claude under a name the tree can't map. Only the TUI pane can be
+    dead (claude panes keep remain-on-exit=off), so any dead pane here means
+    "crashed explorer, awaiting respawn" — leave it alone.
+
+    Panes are `(cmd, pid)` or `(cmd, pid, dead)`; the sid is looked for on
+    EVERY pane, since the claude need not be pane 0 (after a crash, pane 0 is
+    the dead TUI — the bug that produced `orphan-<pid>` window names)."""
     list_windows = _list_windows_fn() if list_windows is None else list_windows
     panes_of = _panes_of_window if panes_of is None else panes_of
     cmd_of_pid = _cmd_of_pid if cmd_of_pid is None else cmd_of_pid
@@ -244,12 +265,14 @@ def heal_explorer_impostors(*, list_windows=None, panes_of=None,
     for w in list_windows():
         if w != EXPLORER_WINDOW:
             continue
-        panes = panes_of(w)
-        if not panes or explorer_window_has_tui([c for c, _ in panes]):
+        panes = [_pane_parts(p) for p in panes_of(w)]
+        if not panes or explorer_window_has_tui([c for c, _, _ in panes]):
             continue                      # empty/odd, or a healthy explorer
-        first_pid = panes[0][1]
-        sid = sid_from_claude_cmd(cmd_of_pid(first_pid))
-        new_name = sid or f"orphan-{first_pid}"
+        if any(dead for _, _, dead in panes):
+            continue                      # crashed TUI — the launcher respawns it
+        sid = next((s for s in (sid_from_claude_cmd(cmd_of_pid(pid))
+                                for _, pid, _ in panes) if s), None)
+        new_name = sid or f"orphan-{panes[0][1]}"
         rename(w, new_name)
         renames.append((w, new_name))
     return renames
@@ -455,23 +478,28 @@ def _list_windows_fn():
 
 
 def _panes_of_window(window: str):
-    """[(pane_current_command, pane_pid:int), ...] for `window`; [] on error.
-    pane_current_command is a single token (e.g. 'Python', 'claude', a claude
-    version like '2.1.196'), so a right-split cleanly separates it from pid."""
+    """[(pane_current_command, pane_pid:int, dead:bool), ...] for `window`; []
+    on error. pane_current_command is a single token (e.g. 'Python', 'claude',
+    a claude version like '2.1.196'), so a right-split cleanly separates it
+    from the trailing fields. `dead` distinguishes a crashed TUI pane (kept by
+    remain-on-exit=failed) from a window a claude really swallowed — see
+    heal_explorer_impostors."""
     out = _capture(build_base() + [
-        "list-panes", "-t", window, "-F", "#{pane_current_command} #{pane_pid}"])
+        "list-panes", "-t", window, "-F",
+        "#{pane_current_command} #{pane_pid} #{pane_dead}"])
     panes = []
     for ln in out.splitlines():
         ln = ln.strip()
         if not ln:
             continue
-        parts = ln.rsplit(" ", 1)
+        parts = ln.rsplit(" ", 2)
         cmd = parts[0]
         try:
-            pid = int(parts[1]) if len(parts) == 2 else 0
+            pid = int(parts[1]) if len(parts) == 3 else 0
         except ValueError:
             pid = 0
-        panes.append((cmd, pid))
+        dead = len(parts) == 3 and parts[2].strip() == "1"
+        panes.append((cmd, pid, dead))
     return panes
 
 
