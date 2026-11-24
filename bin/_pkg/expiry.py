@@ -46,26 +46,25 @@ def resolve(rules: Dict[str, dict], segments: List[str]) -> Tuple[Optional[dict]
 
 
 def idle_reference(entry: dict) -> Optional[datetime]:
-    """When the session was last active: the later of last_active_at and the
-    transcript's mtime (guards against an index restored with stale values)."""
-    best = None
+    """When the session was last active — the SAME clock the AGE column shows
+    (last_active_at). The transcript mtime is only a fallback when no activity
+    is recorded: non-activity writes (an explorer rename/move appending a
+    custom-title, Claude re-emitting its title) bump the mtime, and using it
+    would silently reset the expiry clock while AGE kept counting."""
     la = entry.get("last_active_at")
     if la:
         try:
-            best = datetime.fromisoformat(la.replace("Z", "+00:00"))
-            if best.tzinfo is None:
-                best = best.replace(tzinfo=timezone.utc)
+            dt = datetime.fromisoformat(la.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         except ValueError:
-            best = None
+            pass
     tp = entry.get("transcript_path")
     if tp:
         try:
-            m = datetime.fromtimestamp(os.path.getmtime(tp), tz=timezone.utc)
-            if best is None or m > best:
-                best = m
+            return datetime.fromtimestamp(os.path.getmtime(tp), tz=timezone.utc)
         except OSError:
-            pass
-    return best
+            return None
+    return None
 
 
 def status(entry: dict, rules: Dict[str, dict], now: datetime) -> dict:

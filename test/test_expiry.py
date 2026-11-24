@@ -52,13 +52,18 @@ def test_status_kinds_and_remaining():
                   rules, NOW)["kind"] == "none"
 
 
-def test_idle_reference_prefers_newer_transcript_mtime(tmp_path):
+def test_idle_reference_matches_age_column_not_transcript_mtime(tmp_path):
+    # A rename/move appends to the JSONL (fresh mtime) without being activity;
+    # the expiry clock must follow last_active_at like the AGE column does.
     from _pkg.expiry import idle_reference
     t = tmp_path / "t.jsonl"
     t.write_text("{}\n")
     ref = idle_reference({"last_active_at": "2020-01-01T00:00:00Z",
                           "transcript_path": str(t)})
-    assert ref.year >= 2026
+    assert ref.year == 2020
+    # mtime is only the fallback when no activity is recorded.
+    assert idle_reference({"transcript_path": str(t)}).year >= 2026
+    assert idle_reference({}) is None
 
 
 def test_preview_line_and_badge():
