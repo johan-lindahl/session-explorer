@@ -3,6 +3,29 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.21.0
+
+### Added
+- **Folder expiry rules (`t`).** Sessions serve different purposes — a planning
+  session is revisited for months, a bugfix session is junk days after it
+  merges — and the folder you file a session in already says which. Press `t`
+  on a folder (or on the project node, for a project-wide default) to choose
+  *inherit*, *keep forever*, or *delete after N days idle*. Subfolders inherit
+  the nearest rule; with no rule anywhere a session is kept forever, so
+  nothing changes until you set one. Idle time counts from last activity, so
+  waking a session restarts its clock; moving a session (`m`) into a keep
+  folder is how you rescue it. Expired sessions are **deleted** (no archive)
+  through the same path as `d` — transcript, index row, summary, and the
+  worktree (merged branch only) — at explorer launch, hourly, and as part of
+  `session-explorer index --gc` (`--dry-run` lists them). Running sessions and
+  worktrees with uncommitted changes are never deleted (the latter are flagged
+  in the preview). Saving a rule that would delete sessions right away asks
+  first, listing the count and names. Folders show their rule (`bugfix/ ⏱14d`,
+  `planning/ ∞`), the preview shows each session's countdown
+  (`Expires  in 3d (bugfix/ · 14d idle)`), and the AGE cell turns red in the
+  last 48 hours. Rules live in the folder store per project and move with
+  their folder on rename/move.
+
 ## 1.20.0
 
 ### Added

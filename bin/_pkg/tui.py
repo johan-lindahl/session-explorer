@@ -27,6 +27,7 @@ from . import usage as _usage
 from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .markup import escape as _esc
+from . import expiry as _expiry
 from .tree_model import (build_nested_tree, filter_open_projects, launch_root,
                          project_catalog, split_path, session_root)
 
@@ -138,6 +139,7 @@ LIVE_POLL_INTERVAL = 2.0  # seconds between registry polls
 USAGE_POLL_INTERVAL = 300.0  # seconds between usage-bar refreshes (5 min)
 SNAPSHOT_POLL_INTERVAL = 1.0  # seconds between preview snapshot refreshes
 RECONCILE_POLL_INTERVAL = 60.0  # seconds between relocated-transcript heals
+EXPIRY_POLL_INTERVAL = 3600.0   # seconds between folder-expiry-rule passes
 SUMMARY_MIN_MSGS = 8  # skip auto-summaries for sessions shorter than this
 LIVE_PREVIEW_LINES = 24  # max lines of live snapshot shown below the metadata
 DOCK_SYNC_DEBOUNCE = 0.2  # seconds the tree cursor must settle before the
@@ -208,6 +210,12 @@ def _row_label(sid: str, s: dict, depth: int, glyph: str = "  ", wt_state: "str 
     if len(display) > name_w:
         display = display[: name_w - 1] + "…"
     age = fmt_age(s.get("last_active_at"))
+    st = s.get("expiry")
+    if (st and st.get("kind") == "expires" and st.get("remaining") is not None
+            and st["remaining"] <= _expiry.WARN_SECONDS and not st.get("skip_reason")):
+        # Last warning before a folder expiry rule deletes it: pad, then tint
+        # (markup is zero-width, so the column stays aligned).
+        age = f"[red]{age:>4}[/]"
     tokens = fmt_tokens(s.get("tokens_estimate", 0))
     pct = fmt_pct(s.get("tokens_window_pct", 0))
     msgs = str(s.get("message_count", 0))
@@ -265,6 +273,12 @@ def _preview_text(s: dict) -> str:
         field("Folder", "/".join(segments) or "(none)"),
         field("Branch", s.get("branch") or "(none)"),
         field("Active", fmt_age(s.get("last_active_at"))),
+    ]
+    st = s.get("expiry")
+    if st and st.get("kind") != "none":
+        lines.append(field("Expires", _expiry.preview_line(
+            st, s.get("project_display") or s.get("project_label") or "")))
+    lines += [
         field("Created", (s.get("created_at") or "")[:10] or "—"),
         field("Messages", str(s.get("message_count", 0))),
         field("Context", context),
@@ -365,6 +379,12 @@ def _help_text() -> str:
         "them (or tick [b]All projects[/]). A running session in a closed project",
         "still shows, marked [dim]· not open[/], so you can always reach it.",
         "",
+        "[b]Expiry rules[/]",
+        "Press [b]t[/] on a folder (or project) to set how long its sessions live:",
+        "keep forever, or [b]delete after N days idle[/]. Subfolders inherit. Where",
+        "you file a session decides its fate — move it ([b]m[/]) to keep it. Running",
+        "sessions and worktrees with uncommitted changes are never deleted.",
+        "",
         "[b]Search[/]",
         "Press [b]f[/] to full-text search the current project's conversations —",
         "it reads the transcripts and lists sessions whose messages match, with",
@@ -427,6 +447,7 @@ def _help_text() -> str:
         key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
         key("/", "Live filter across name, notes, first prompt, summary"),
         key("o", "Open projects — choose which projects the tree shows"),
+        key("t", "Expiry rule for the folder/project: inherit, keep, or delete after N days idle"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
         key("q", "Toggle the Queues pane (shared-resource leases)"),
@@ -858,6 +879,58 @@ class HelpScreen(ModalScreen[None]):
         yield VerticalScroll(Static(_help_text(), id="help-body"), id="help")
 
 
+class ExpiryRuleScreen(_PanelScreen):
+    """Choose the expiry rule for one folder/project node. Dismisses with
+    "inherit" | "keep" | "days" (the app then asks for N) or None."""
+
+    # Enter is bound on the screen (like SettingsScreen): the app's priority
+    # Enter→resume binding is vetoed under a modal and never reaches the list.
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Cancel"),
+        Binding("enter", "choose", "Choose", show=False),
+    ]
+
+    def action_choose(self) -> None:
+        ol = self.query_one("#expiry-list", OptionList)
+        if ol.highlighted is not None:
+            self.dismiss(ol.get_option_at_index(ol.highlighted).id)
+
+    def __init__(self, where: str, effective: str, own) -> None:
+        super().__init__()
+        self._where = where
+        self._effective = effective
+        self._own = own
+
+    def compose(self) -> ComposeResult:
+        ol = OptionList(id="expiry-list")
+        mark = lambda on: "●" if on else " "
+        own = self._own or {}
+        ol.add_option(Option(f"{mark(not own)} Inherit from parent", id="inherit"))
+        ol.add_option(Option(f"{mark(bool(own.get('keep')))} Keep forever", id="keep"))
+        days = own.get("expire_days")
+        ol.add_option(Option(
+            f"{mark(bool(days))} Delete after N days idle…" + (f"  (now {days}d)" if days else ""),
+            id="days"))
+        yield Vertical(
+            Label(f"Expiry rule — {_esc(self._where)}", classes="dialog-title"),
+            Label(f"Now: {_esc(self._effective)}", classes="dialog-hint"),
+            ol,
+            Label("Sessions idle longer than the rule are deleted; subfolders inherit.\n"
+                  "Running sessions and dirty worktrees are never deleted.",
+                  classes="dialog-hint"),
+            Label("↑↓ move · enter choose · esc cancel", classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        ol = self.query_one("#expiry-list", OptionList)
+        ol.highlighted = 0
+        ol.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+
 class _PickerInput(Input):
     """Filter box for ProjectPickerScreen. Space ticks the highlighted row
     instead of typing: the app's priority Space→preview binding is vetoed by
@@ -1195,6 +1268,7 @@ class SessionExplorerApp(App):
         Binding("q", "toggle_queues", "Queues"),
         Binding("comma", "settings", "Settings"),
         Binding("o", "open_projects", "Projects", show=False),
+        Binding("t", "expiry_rule", "Expiry rule", show=False),
         Binding("x", "quit", "Exit"),
         Binding("s", "resource_setup", "Shared resources", show=False),
         Binding("escape", "close_preview", "Close preview", show=False),
@@ -1246,6 +1320,9 @@ class SessionExplorerApp(App):
         # accumulate at most O(projects × folder-depth) per session.
         self._collapse_mode: bool = False
         self._expanded: set[str] = set()
+        # sid -> reason a session past its folder expiry rule was kept (dirty
+        # worktree); filled by _apply_expiry_result, shown in the preview.
+        self._expiry_skips: dict = {}
         # tmux-hosted interaction layer (spec §1). The launcher sets
         # SESSION_EXPLORER_TMUX=1 when it wrapped us in the dedicated server;
         # _detect_tmux_hosted also recognises "running inside the dedicated
@@ -1279,11 +1356,11 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "search", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings", "open_projects") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "search", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings", "open_projects", "expiry_rule") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q`/`x`/`f` fire the global
         # Queues-toggle, Exit, or Search bindings — the keystrokes belong in the text.
-        if action in ("quit", "toggle_queues", "search", "open_projects") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+        if action in ("quit", "toggle_queues", "search", "open_projects", "expiry_rule") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # Tab is a priority binding (it must beat Textual's focus traversal), so
         # explicitly suppress it while the filter Input is focused — there, Tab
@@ -1430,6 +1507,9 @@ class SessionExplorerApp(App):
         # (a native `/resume` in another terminal) while the explorer is open.
         self._reconcile_relocated()
         self.set_interval(RECONCILE_POLL_INTERVAL, self._reconcile_relocated)
+        # Folder expiry rules: one pass at launch, then hourly.
+        self._expiry_pass()
+        self.set_interval(EXPIRY_POLL_INTERVAL, self._expiry_pass)
         # Usage bar: restore it if the user left it enabled, but only in the
         # tmux-hosted layout (it has nowhere to render otherwise).
         if self._tmux_enabled and self._usage_enabled():
@@ -1620,6 +1700,15 @@ class SessionExplorerApp(App):
                 _s["summary_msg_count"] = _se.get("msg_count")
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
         live_ids = set(self._live_states)
+        from datetime import datetime as _dt, timezone as _tz
+        _now = _dt.now(_tz.utc)
+        _rules_cache: dict = {}
+
+        def rules_for(project):
+            r = _rules_cache.get(project)
+            if r is None:
+                r = _rules_cache[project] = _expiry.project_rules(fs_data, project)
+            return r
         full_tree = build_nested_tree(
             data, fs_data,
             include_unnamed=(self._view_mode == 2),
@@ -1722,6 +1811,11 @@ class SessionExplorerApp(App):
                         wt = _worktree_state(os.path.join(
                             s["project_path"], ".claude", "worktrees",
                             s["worktree_leaf"]))
+                    rules = rules_for(project)
+                    st = _expiry.status(s, rules, _now) if rules else None
+                    if st and _expiry.is_expired(st) and sid in self._expiry_skips:
+                        st["skip_reason"] = self._expiry_skips[sid]
+                    s = {**s, "expiry": st}
                     leaf = parent.add_leaf(
                         _row_label(sid, s, child_depth, glyph, wt),
                         data={"sid": sid, **s, "worktree_state": wt,
@@ -1731,8 +1825,9 @@ class SessionExplorerApp(App):
                 child = node["_folders"][name]
                 child_segs = segments + [name]
                 fkey = self._node_key(project, child_segs)
+                fbadge = _expiry.badge(rules_for(project).get("/".join(child_segs)))
                 folder_node = parent.add(
-                    f"{_esc(name)}/",
+                    f"{_esc(name)}/" + (f" [dim]{fbadge}[/]" if fbadge else ""),
                     expand=self._should_expand(fkey),
                     data={"project": project, "segments": child_segs},
                 )
@@ -1742,6 +1837,9 @@ class SessionExplorerApp(App):
             node = tree[project]
             label = node["_label"]
             suffix = " [dim]· not open[/]" if node.get("_not_open") else ""
+            pbadge = _expiry.badge(rules_for(project).get(""))
+            if pbadge:
+                suffix = f" [dim]{pbadge}[/]" + suffix
             proj_node = root.add(
                 f"{_esc(label)} ({count(node)}){suffix}",
                 expand=self._should_expand(project),
@@ -3146,6 +3244,148 @@ class SessionExplorerApp(App):
             import traceback
             _log_line("reconcile relocated failed (tick skipped):\n"
                       + traceback.format_exc())
+
+    # -- folder expiry rules (spec "Folder expiry rules (`t`)") ------------
+    def _expiry_live_ids(self) -> set:
+        return set(self._live_states) | set(getattr(self, "_our_windows", set()) or set())
+
+    def _expiry_pass(self) -> None:
+        """UI-thread trigger: snapshot live sids, apply rules off-thread."""
+        self._expiry_worker(self._expiry_live_ids())
+
+    @work(thread=True, exclusive=True, group="expiry")
+    def _expiry_worker(self, live_ids: set) -> None:
+        self._expiry_tick(live_ids)
+
+    def _expiry_tick(self, live_ids: set) -> None:
+        """Guarded body (worker rule: an escaping exception exits the app)."""
+        try:
+            from . import gc as _gc
+            result = _gc.collect_expired(self._index_path, live_ids=live_ids)
+            self.call_from_thread(self._apply_expiry_result, result)
+        except Exception:
+            import traceback
+            _log_line("expiry pass failed (tick skipped):\n" + traceback.format_exc())
+
+    def _apply_expiry_result(self, result: dict) -> None:
+        skips = {sid: "worktree has uncommitted changes"
+                 for sid in result.get("skipped_dirty", [])}
+        removed = result.get("removed", [])
+        changed = skips != self._expiry_skips
+        self._expiry_skips = skips
+        if removed:
+            from collections import Counter
+            groups = Counter(f"{(it['source'] + '/') if it['source'] else 'project'} {it['days']}d"
+                             for it in removed)
+            detail = ", ".join(f"{k}" for k in groups)
+            msg = f"Deleted {len(removed)} expired session(s) ({detail})"
+            _log_line("expiry: " + msg + ": " + ", ".join(
+                str(it.get("name")) for it in removed))
+            self.notify(_esc(msg))
+        if removed or changed:
+            self._repopulate_preserving_cursor()
+
+    def action_expiry_rule(self) -> None:
+        from . import folder_store as _fs
+        project, prefix = self._project_and_prefix_for_cursor()
+        if project is None:
+            self.bell()
+            return
+        segments = [p for p in prefix.rstrip("/").split("/") if p]
+        if segments and segments[0] == "(unnamed)":
+            self.notify("Unnamed sessions have no folder — name one to file it.",
+                        severity="warning")
+            return
+        folder = "/".join(segments)
+        rules = _expiry.project_rules(_fs.load(_fs.default_path_for(self._index_path)), project)
+        own = rules.get(folder)
+        inherited, src = (_expiry.resolve(rules, segments[:-1]) if segments
+                          else (None, None))
+        label = self._project_label_for(project)
+        where = f"{folder}/" if folder else label
+        if own:
+            effective = f"{_expiry.rule_label(own)} (set here)"
+        elif inherited:
+            effective = (f"{_expiry.rule_label(inherited)} "
+                         f"(inherited from {_expiry.source_label(src, label)})")
+        else:
+            effective = "keep forever (no rule)"
+
+        def after(choice) -> None:
+            if choice is None:
+                return
+            if choice == "inherit":
+                self._save_expiry_rule(project, folder, None)
+            elif choice == "keep":
+                self._save_expiry_rule(project, folder, {"keep": True})
+            elif choice == "days":
+                cur = (own or {}).get("expire_days") or (inherited or {}).get("expire_days") or 14
+
+                def got(val: str) -> None:
+                    try:
+                        n = int((val or "").strip())
+                    except ValueError:
+                        n = 0
+                    if n < 1:
+                        if (val or "").strip():
+                            self.notify("Enter a whole number of days (1 or more).",
+                                        severity="warning")
+                        return
+                    self._save_expiry_rule(project, folder, {"expire_days": n})
+                self.push_screen(RenameScreen(str(cur),
+                                 title=f"Delete sessions in {_esc(where)} idle for how many days?"), got)
+
+        self.push_screen(ExpiryRuleScreen(where, effective, own), after)
+
+    def _project_label_for(self, project: str) -> str:
+        for node in self._tree.root.children:
+            d = node.data or {}
+            if d.get("project") == project and not d.get("segments"):
+                return str(node.label).split(" (")[0]
+        return os.path.basename(project.rstrip("/")) or project
+
+    def _save_expiry_rule(self, project: str, folder: str, rule) -> None:
+        """Save a rule — after a confirm when it would delete sessions right now."""
+        import copy
+        from datetime import datetime as _dt, timezone as _tz
+        from . import folder_store as _fs
+        store = _fs.default_path_for(self._index_path)
+        hyp = copy.deepcopy(_fs.load(store))
+        prules = hyp.setdefault("rules", {}).setdefault(project, {})
+        if rule is None:
+            prules.pop(folder, None)
+        else:
+            prules[folder] = dict(rule)
+        live = self._expiry_live_ids()
+        now = _dt.now(_tz.utc)
+        idx_data = _index.load(self._index_path)
+        # Only what THIS change newly expires — sessions already expired under
+        # the current rules are the regular pass's business, not this rule's.
+        already = {sid for sid, _e, _st in _expiry.expired_sessions(
+            idx_data, _fs.load(store), now, project)}
+        doomed = [(sid, e) for sid, e, _st in _expiry.expired_sessions(
+                      idx_data, hyp, now, project)
+                  if sid not in live and sid not in already]
+
+        def commit(ok: bool = True) -> None:
+            if not ok:
+                return
+            _fs.set_rule(store, project, folder, rule)
+            self._repopulate_preserving_cursor()
+            self.notify(_esc(f"Expiry rule saved: {folder + '/' if folder else 'project'} → "
+                             f"{_expiry.rule_label(rule) if rule else 'inherit'}"))
+            if doomed:
+                self._expiry_pass()
+
+        if not doomed:
+            commit()
+            return
+        names = [e.get("name_cached") or sid[:8] for sid, e in doomed]
+        shown = "\n".join(f"  • {_esc(n)}" for n in names[:6])
+        more = f"\n  … and {len(names) - 6} more" if len(names) > 6 else ""
+        self.push_screen(ConfirmScreen(
+            f"This rule deletes {len(doomed)} session(s) now:\n{shown}{more}\n\n"
+            "(Worktrees with uncommitted changes are kept.) Save the rule?"), commit)
 
     def _repopulate_preserving_cursor(self) -> None:
         """Rebuild the tree (so newly-healed rows appear) without losing the

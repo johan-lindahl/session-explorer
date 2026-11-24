@@ -1,8 +1,9 @@
 """Retention GC for session-explorer.
 
 Native Claude cleanup is neutralised (cleanupPeriodDays=36500); this does the
-deletion instead. Only UNNAMED sessions are eligible — a named session is
-"kept" by definition and never touched.
+deletion instead. collect_garbage only touches UNNAMED sessions. Named
+sessions are deleted only by an explicit folder expiry rule the user set
+(collect_expired, see expiry.py / SPEC "Folder expiry rules").
 
 Deletion criteria (SPEC §Disabling native auto-cleanup):
   name_cached IS NULL
@@ -204,3 +205,48 @@ def collect_worktrees(index_path: str, *, idle_days: int = _WORKTREE_IDLE_DAYS,
             skipped_dirty += 1
     return {"removed_worktrees": removed, "skipped_dirty": skipped_dirty,
             "skipped_live": skipped_live, "dry_run": dry_run}
+
+
+def collect_expired(index_path: str, *, now: "datetime | None" = None,
+                    dry_run: bool = False, live_ids: "set | None" = None,
+                    folder_store_data: "dict | None" = None,
+                    project: "str | None" = None) -> dict:
+    """Apply folder expiry rules (SPEC: "Folder expiry rules (`t`)").
+
+    Deletes every named session idle past its folder rule, via the same
+    primitive as the TUI's `d` (delete.delete_session: transcript + index row +
+    summary + worktree.purge). Never touches: live sessions (`live_ids` from the
+    live registry, plus the flock/60s-mtime test) or sessions whose worktree has
+    uncommitted/untracked changes. `folder_store_data` lets the TUI evaluate a
+    rule before saving it (dry_run=True); `project` restricts to one root.
+
+    Returns {"removed": [{"sid","name","source","days"}], "skipped_live": [sid],
+             "skipped_dirty": [sid], "dry_run": bool}.
+    """
+    from . import expiry as _expiry
+    from . import folder_store as _fs
+    now = now or datetime.now(timezone.utc)
+    live_ids = live_ids or set()
+    if folder_store_data is None:
+        folder_store_data = _fs.load(_fs.default_path_for(index_path))
+    result = {"removed": [], "skipped_live": [], "skipped_dirty": [], "dry_run": dry_run}
+    if not folder_store_data.get("rules"):
+        return result
+    data = _index.load(index_path)
+    for sid, entry, st in _expiry.expired_sessions(data, folder_store_data, now, project):
+        transcript = entry.get("transcript_path")
+        if sid in live_ids or (transcript and os.path.exists(transcript)
+                               and _is_live(transcript, now)):
+            result["skipped_live"].append(sid)
+            continue
+        wt = entry.get("project_path") or ""
+        if _worktree.MARKER in wt and os.path.isdir(wt) and not _worktree.removable(wt):
+            result["skipped_dirty"].append(sid)
+            continue
+        item = {"sid": sid, "name": entry.get("name_cached"),
+                "source": st["source"], "days": st["days"]}
+        if not dry_run:
+            from .delete import delete_session
+            delete_session(index_path, sid)
+        result["removed"].append(item)
+    return result
