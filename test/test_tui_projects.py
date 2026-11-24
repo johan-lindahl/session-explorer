@@ -212,3 +212,20 @@ async def test_picker_keyboard_tick_with_arrows(tmp_path, monkeypatch):
         await pilot.press("enter")
         await pilot.pause()
     assert ui_state.get_open_projects(_ui(tmp_path)) == ["/w/beta"]
+
+
+async def test_first_run_picker_sees_live_sessions(tmp_path, monkeypatch):
+    # The picker opens from on_mount; the live registry must already be read so
+    # a project with a running session is pre-ticked and marked ●.
+    from _pkg.tui import SessionExplorerApp, ProjectPickerScreen
+    from _pkg import live as _live
+    monkeypatch.delenv("SESSION_EXPLORER_PROJECTS_NO_PROMPT", raising=False)
+    monkeypatch.setattr(_live, "poll", lambda path: {"b1": "idle"})
+    app = SessionExplorerApp(index_path=_write_index(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        scr = app.screen
+        assert isinstance(scr, ProjectPickerScreen)
+        assert scr._ticked == {"/w/beta"}
+        beta = [p for p in scr._catalog if p["root"] == "/w/beta"][0]
+        assert beta["live"] is True

@@ -1392,6 +1392,10 @@ class SessionExplorerApp(App):
         self._render_queues()  # content-gated; renders nothing if empty
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
+        # Read the live registry before any first-run dialog: the open-projects
+        # picker pre-ticks (and marks ●) projects with a running session, and
+        # would otherwise see none on the very first frame.
+        self._poll_live()
         # Opt-in retention: neutralising cleanupPeriodDays modifies the user's
         # settings.json, so ask once on first launch rather than have the hook
         # do it silently. Then (after the choice) pop the first-run help.
@@ -1416,8 +1420,7 @@ class SessionExplorerApp(App):
             )
         else:
             self._maybe_pick_projects(self._maybe_open_help)
-        # Live-session indicator: poll the registry, then animate working rows.
-        self._poll_live()
+        # Live-session indicator: animate working rows (first poll ran above).
         self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
         self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
