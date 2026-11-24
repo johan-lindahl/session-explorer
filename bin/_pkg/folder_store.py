@@ -109,6 +109,10 @@ def remove_subtree(path: str, project: str, folder: str) -> None:
                 f for f in projects[project]
                 if f != folder and not f.startswith(prefix)
             ]
+        rules = (data.get("rules") or {}).get(project)
+        if rules:
+            for k in [k for k in rules if k == folder or k.startswith(prefix)]:
+                del rules[k]
         return data
     mutate(path, mutator)
 
@@ -125,6 +129,7 @@ def rename_subtree(path: str, project: str, old_path: str, new_path: str) -> Non
     prefix = old_path + "/"
 
     def mutator(data: dict) -> dict:
+        _rekey_rules(data, project, old_path, new_path)
         projects = data.get("projects", {})
         if project not in projects:
             return data
@@ -148,3 +153,48 @@ def list_paths(path: str, project: str) -> List[str]:
     data = load(path)
     paths = data.get("projects", {}).get(project, [])
     return sorted(paths)
+
+
+# ---------------------------------------------------------------------------
+# Folder expiry rules (SPEC: "Folder expiry rules (`t`)")
+# Stored beside the folder paths: {"rules": {project_root: {folder: rule}}},
+# folder "" = the project node. See expiry.py for the rule shape.
+# ---------------------------------------------------------------------------
+
+def _rekey_rules(data: dict, project: str, old_path: str, new_path: str) -> None:
+    rules = (data.get("rules") or {}).get(project)
+    if not rules or not old_path:
+        return
+    prefix = old_path + "/"
+    moved = {}
+    for k in list(rules):
+        if k == old_path:
+            moved[new_path] = rules.pop(k)
+        elif k.startswith(prefix):
+            moved[new_path + k[len(old_path):]] = rules.pop(k)
+    rules.update(moved)
+
+
+def get_rules(path: str, project: str) -> Dict[str, dict]:
+    return dict((load(path).get("rules") or {}).get(project) or {})
+
+
+def set_rule(path: str, project: str, folder: str, rule) -> None:
+    """Set (or with rule=None, clear → inherit) the rule on `folder` ("" =
+    project node). Setting a rule on a folder also stores the folder path, so
+    the rule's folder survives being emptied."""
+    def mutator(data: dict) -> dict:
+        rules_all = data.setdefault("rules", {})
+        rules = rules_all.setdefault(project, {})
+        if rule is None:
+            rules.pop(folder, None)
+            if not rules:
+                rules_all.pop(project, None)
+        else:
+            rules[folder] = dict(rule)
+            if folder:
+                folders = data.setdefault("projects", {}).setdefault(project, [])
+                if folder not in folders:
+                    folders.append(folder)
+        return data
+    mutate(path, mutator)

@@ -222,6 +222,22 @@ def _cmd_index(args) -> int:
             print(f"[dry-run] Would remove {n} old unnamed session(s){suffix}")
         else:
             print(f"Removed {n} old unnamed session(s){suffix}")
+        # Folder expiry rules (explicit user config — independent of the
+        # unnamed-retention period above). Live registry sids are skipped too.
+        try:
+            from _pkg import live as _live
+            live_ids = set(_live.poll(_live.default_path_for(path)))
+        except Exception:
+            live_ids = set()
+        ex = _gc.collect_expired(path, dry_run=args.dry_run, live_ids=live_ids)
+        if ex["removed"] or ex["skipped_dirty"]:
+            en = len(ex["removed"])
+            ex_suffix = (f" ({len(ex['skipped_dirty'])} kept: worktree has uncommitted changes)"
+                         if ex["skipped_dirty"] else "")
+            verb = "[dry-run] Would delete" if args.dry_run else "Deleted"
+            print(f"{verb} {en} expired session(s) by folder rule{ex_suffix}")
+            for it in ex["removed"]:
+                print(f"  {it['name']}  ({it['source'] or 'project'}/ · {it['days']}d)")
         wt_result = _gc.collect_worktrees(path, dry_run=args.dry_run)
         if wt_result["removed_worktrees"]:
             wn = len(wt_result["removed_worktrees"])

@@ -168,6 +168,7 @@ session-explorer tui       # run the TUI in the current terminal
 | `F9` | *(tmux-hosted)* Switch focus between the explorer and the docked session pane — also by mouse click |
 | `F12` | *(tmux-hosted)* Zoom the focused pane fullscreen and back |
 | `/` | Live filter across name, notes, first prompt, summary |
+| `t` | **Expiry rule** for a folder or project: keep forever, or delete sessions idle more than *N* days (subfolders inherit). File a session in a keep folder to keep it; running sessions and worktrees with uncommitted changes are never deleted |
 | `o` | **Open projects** — choose which projects the tree shows (asked on first launch; `All projects` shows everything). A running session in a closed project still appears, marked `· not open` |
 | `f` | Full-text **search** the current project's conversations — reads the transcripts and lists sessions whose messages match, with snippets (`ctrl+u` to include unnamed) |
 | `h` | Show help (auto-opens once on first launch) |
@@ -258,7 +259,7 @@ bash -c 'F="$HOME/.claude/plugins/installed_plugins.json"; CLI=$(python3 -c "imp
 
 ## Status
 
-**v1.20.0.** Released and installable from the Claude Code marketplace. Textual
+**v1.21.0.** Released and installable from the Claude Code marketplace. Textual
 TUI with a live-session indicator (animated spinner = working, dim `○` = idle,
 `● N active` subtitle, live-refreshing stats) and centered-overlay dialogs
 (including the rescan progress); rename/move on both sessions and whole folders
