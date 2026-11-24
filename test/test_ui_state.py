@@ -41,3 +41,38 @@ def test_retention_days_default_and_roundtrip(tmp_path):
     assert ui_state.get_retention_days(p) == 30
     ui_state.set_retention_days(p, 7)
     assert ui_state.get_retention_days(p) == 7
+
+
+def test_open_projects_unset_by_default(tmp_path):
+    from _pkg import ui_state
+    p = str(tmp_path / "ui.json")
+    assert ui_state.get_open_projects(p) is None
+
+
+def test_open_projects_roundtrip_list_and_all(tmp_path):
+    from _pkg import ui_state
+    p = str(tmp_path / "ui.json")
+    ui_state.set_open_projects(p, ["/b", "/a", "/a"])
+    assert ui_state.get_open_projects(p) == ["/a", "/b"]
+    ui_state.set_open_projects(p, "*")
+    assert ui_state.get_open_projects(p) == "*"
+    ui_state.set_open_projects(p, None)
+    assert ui_state.get_open_projects(p) is None
+
+
+def test_open_projects_empty_selection_rejected_and_ignored(tmp_path):
+    import json, pytest
+    from _pkg import ui_state
+    p = str(tmp_path / "ui.json")
+    with pytest.raises(ValueError):
+        ui_state.set_open_projects(p, [])
+    json.dump({"open_projects": []}, open(p, "w"))
+    assert ui_state.get_open_projects(p) is None   # empty == unset, not "show nothing"
+
+
+def test_open_projects_preserves_other_keys(tmp_path):
+    from _pkg import ui_state
+    p = str(tmp_path / "ui.json")
+    ui_state.set_retention_days(p, 12)
+    ui_state.set_open_projects(p, ["/a"])
+    assert ui_state.get_retention_days(p) == 12

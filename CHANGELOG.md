@@ -3,6 +3,34 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.20.0
+
+### Added
+- **Open projects (`o`).** With many repos the project level itself became
+  noise, so the tree now shows only the projects you've *opened*. A
+  multi-select picker (`ProjectPickerScreen`) lists every project with its
+  named-session count, last activity and a `●` when something is running
+  there, sorted by recent activity, with a type-to-filter box (`Space` ticks,
+  `ctrl+a` ticks the shown rows, `Enter` opens, `Esc` cancels) and an
+  **All projects** row that restores the unfiltered view and includes
+  projects that appear later. The selection is saved as `open_projects` in
+  `session-explorer-ui.json` (keyed by repo root path, not the display label)
+  and re-applied on every launch; until one is saved the picker is shown on
+  each launch, pre-ticking the project `/open` was invoked from (recorded by
+  `launch` in `~/.claude/.session-explorer.launch-cwd`) and any project with a
+  running session. Also reachable from Settings (`,` → Projects). The header
+  reads `N sessions across X of Y projects (o)` while a selection is active,
+  and an empty open set shows a "press o" empty-state.
+- A running session in a project you haven't opened is never hidden: its
+  project renders with only its live sessions and a dim `· not open` label.
+  Filtering is view-only — the hook, `--gc`, F5 rescan, relocation healing and
+  worktree cleanup keep covering every project.
+
+### Fixed
+- Project and folder names in the tree are now markup-escaped like session
+  rows (a `[` in a folder segment or repo directory name could be parsed as
+  markup).
+
 ## 1.19.4
 
 ### Fixed

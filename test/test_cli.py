@@ -205,8 +205,9 @@ def test_launch_wraps_in_tmux_when_available(tmp_path, monkeypatch):
     assert "tmux -L session-explorer" in captured["cmd"]
 
 
-def test_launch_plain_when_tmux_absent(monkeypatch):
+def test_launch_plain_when_tmux_absent(tmp_path, monkeypatch):
     from _pkg import cli, tmux, launcher
+    monkeypatch.setenv("HOME", str(tmp_path))   # launch-cwd marker stays out of ~/.claude
     monkeypatch.setattr(tmux, "available", lambda which=None: False)
     captured = {}
     monkeypatch.setattr(launcher, "launch",
@@ -546,3 +547,18 @@ def test_queue_overlay_out_nonzero_when_restore_fails(tmp_path):
                        capture_output=True, text=True)
     assert r.returncode != 0
     assert (state / overlay.MANIFEST_NAME).exists()            # preserved on failure
+
+
+def test_launch_records_invoking_cwd(tmp_path, monkeypatch):
+    # /open's cwd is remembered so the first-run open-projects picker can
+    # pre-tick the project the user launched from.
+    from _pkg import cli, tmux, launcher
+    monkeypatch.setenv("HOME", str(tmp_path))
+    work = tmp_path / "repo"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(tmux, "available", lambda which=None: False)
+    monkeypatch.setattr(launcher, "launch", lambda cmd: 0)
+    cli._cmd_launch()
+    marker = tmp_path / ".claude" / ".session-explorer.launch-cwd"
+    assert os.path.realpath(marker.read_text()) == os.path.realpath(str(work))

@@ -19,6 +19,10 @@ os.environ.setdefault("SESSION_EXPLORER_TMUX_NO_OFFER", "1")
 # in via monkeypatch.delenv.
 os.environ.setdefault("SESSION_EXPLORER_SUMMARY_NO_PROMPT", "1")
 
+# Same for the open-projects picker, which shows on every launch until a
+# selection is saved. Dedicated tests opt back in via monkeypatch.delenv.
+os.environ.setdefault("SESSION_EXPLORER_PROJECTS_NO_PROMPT", "1")
+
 import json
 
 import pytest

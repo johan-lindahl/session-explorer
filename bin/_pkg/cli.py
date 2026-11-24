@@ -277,6 +277,17 @@ def _cmd_launch() -> int:
     bin_path = os.path.normpath(os.path.join(here, "..", "session-explorer"))
     # `exec` so closing the TUI closes the spawned terminal window cleanly.
     target = f"exec {_shlex.quote(bin_path)} tui"
+    # Remember where /open was invoked so the first-run open-projects picker can
+    # pre-tick that project. A file (not an env var) because the target string
+    # is interpolated raw into AppleScript, where quoting an arbitrary path is
+    # fragile — and a reattached TUI couldn't receive a new env anyway.
+    try:
+        _cd = os.path.expanduser("~/.claude")
+        os.makedirs(_cd, exist_ok=True)
+        with open(os.path.join(_cd, ".session-explorer.launch-cwd"), "w") as f:
+            f.write(os.getcwd())
+    except OSError:
+        pass
     if _tmux.available() and _tmux.meets_floor(_tmux.detected_version()):
         claude_dir = os.path.expanduser("~/.claude")
         os.makedirs(claude_dir, exist_ok=True)   # may not exist yet (CI / first run)
