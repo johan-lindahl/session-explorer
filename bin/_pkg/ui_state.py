@@ -67,3 +67,34 @@ def set_retention_days(path: str, days: int) -> None:
     data = load(path)
     data["retention_days"] = int(days)
     save(path, data)
+
+
+# Open-project selection (spec: "Open projects (`o`)"). Three states:
+#   None  — nothing saved yet → the TUI shows the picker on launch
+#   "*"   — all projects (no filtering; new projects included automatically)
+#   list  — repo root paths to show
+ALL_PROJECTS = "*"
+
+
+def get_open_projects(path: str):
+    val = load(path).get("open_projects")
+    if val == ALL_PROJECTS:
+        return ALL_PROJECTS
+    if isinstance(val, list):
+        roots = [r for r in val if isinstance(r, str) and r]
+        return roots or None      # an empty list is not a valid selection
+    return None
+
+
+def set_open_projects(path: str, value) -> None:
+    data = load(path)
+    if value == ALL_PROJECTS:
+        data["open_projects"] = ALL_PROJECTS
+    elif value is None:
+        data.pop("open_projects", None)
+    else:
+        roots = sorted({r for r in value if isinstance(r, str) and r})
+        if not roots:
+            raise ValueError("open_projects selection must not be empty")
+        data["open_projects"] = roots
+    save(path, data)

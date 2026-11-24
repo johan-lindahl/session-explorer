@@ -226,3 +226,103 @@ def build_nested_tree(index_data: dict, folder_store_data: dict,
         sort_node(proj)
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Open projects (spec: "Open projects (`o`)")
+# ---------------------------------------------------------------------------
+
+def project_catalog(index_data: dict, folder_store_data: dict,
+                    live_ids: "set[str] | None" = None) -> List[dict]:
+    """Every project root the tree could show, for the open-projects picker.
+
+    Returns dicts ``{root, label, named, last_active, live}`` sorted by most
+    recent activity (projects with no sessions — folder-store-only — last, by
+    label). Labels come from the same disambiguation the tree uses, computed
+    over *all* roots so they match the unfiltered tree.
+    """
+    live_ids = live_ids or set()
+    tree = build_nested_tree(index_data, folder_store_data,
+                             include_unnamed=True, live_ids=live_ids)
+    stats: Dict[str, dict] = {
+        root: {"root": root, "label": node["_label"], "named": 0,
+               "last_active": "", "live": False}
+        for root, node in tree.items()
+    }
+    for sid, s in index_data.get("sessions", {}).items():
+        st = stats.get(session_root(s))
+        if st is None:
+            continue
+        if s.get("name_cached"):
+            st["named"] += 1
+        la = s.get("last_active_at") or ""
+        if la > st["last_active"]:
+            st["last_active"] = la
+        if sid in live_ids:
+            st["live"] = True
+    out = list(stats.values())
+    out.sort(key=lambda d: d["label"].lower())
+    out.sort(key=lambda d: d["last_active"], reverse=True)   # stable: ties by label
+    return out
+
+
+def _prune_to(node: dict, keep_sids: "set[str]") -> "dict | None":
+    """Copy of `node` holding only sessions in `keep_sids`; empty folders
+    dropped. None when nothing survives."""
+    sessions = [(sid, s) for sid, s in node["_sessions"] if sid in keep_sids]
+    folders = {}
+    for name, child in node["_folders"].items():
+        pruned = _prune_to(child, keep_sids)
+        if pruned is not None:
+            folders[name] = pruned
+    if not sessions and not folders:
+        return None
+    out = dict(node)
+    out["_sessions"] = sessions
+    out["_folders"] = folders
+    return out
+
+
+def filter_open_projects(tree: Dict[str, dict], open_projects,
+                         live_ids: "set[str] | None" = None) -> Dict[str, dict]:
+    """Restrict a built tree to the open-project selection.
+
+    ``open_projects`` is None/"*" (no filtering — the tree is returned as is)
+    or a list of root paths. A root outside the selection is dropped, except
+    that one holding a live session is kept with *only* its live sessions and
+    flagged ``_not_open`` — a running session must never become unreachable.
+    Selected roots that no longer exist are simply ignored.
+    """
+    if open_projects is None or open_projects == "*":
+        return tree
+    selected = set(open_projects)
+    live_ids = live_ids or set()
+    out: Dict[str, dict] = {}
+    for root, node in tree.items():
+        if root in selected:
+            out[root] = node
+            continue
+        pruned = _prune_to(node, live_ids)
+        if pruned is not None:
+            pruned["_not_open"] = True
+            out[root] = pruned
+    return out
+
+
+def launch_root(roots, cwd: "str | None") -> "str | None":
+    """The project root containing `cwd` (deepest match wins, so a project at
+    $HOME doesn't claim every repo beneath it). Worktree cwds resolve to their
+    repo root first. None when nothing matches."""
+    if not cwd:
+        return None
+    if _WORKTREE_MARKER in cwd:
+        cwd = cwd.split(_WORKTREE_MARKER, 1)[0]
+    cwd = cwd.rstrip("/") or cwd
+    best = None
+    for r in roots:
+        if not r.startswith("/"):
+            continue
+        if cwd == r or cwd.startswith(r.rstrip("/") + "/"):
+            if best is None or len(r) > len(best):
+                best = r
+    return best

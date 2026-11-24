@@ -532,3 +532,69 @@ def test_build_nested_tree_folder_store_keyed_by_root():
     t = build_nested_tree(idx, fs)
     assert "planning" in t["/u/acme/magento2"]["_folders"]
     assert "planning" not in t["/u/globex/magento2"]["_folders"]
+
+
+# --- open projects ---------------------------------------------------------
+
+def _op_index():
+    return {"sessions": {
+        "a1": {"project_path": "/w/alpha", "name_cached": "x/one",
+               "last_active_at": "2026-11-20T00:00:00Z"},
+        "a2": {"project_path": "/w/alpha/.claude/worktrees/feat", "name_cached": "two",
+               "last_active_at": "2026-11-23T00:00:00Z"},
+        "a3": {"project_path": "/w/alpha", "name_cached": None,
+               "last_active_at": "2026-11-24T00:00:00Z"},
+        "b1": {"project_path": "/w/beta", "name_cached": "bugfix/live-one",
+               "last_active_at": "2026-11-01T00:00:00Z"},
+        "b2": {"project_path": "/w/beta", "name_cached": "bugfix/old",
+               "last_active_at": "2026-10-01T00:00:00Z"},
+    }}
+
+
+def test_project_catalog_counts_sorts_and_flags_live():
+    from _pkg.tree_model import project_catalog
+    fs = {"projects": {"(unfiled)": ["misc"]}}
+    cat = project_catalog(_op_index(), fs, live_ids={"b1"})
+    assert [c["root"] for c in cat] == ["/w/alpha", "/w/beta", "(unfiled)"]
+    alpha, beta, unfiled = cat
+    assert alpha["named"] == 2 and alpha["last_active"] == "2026-11-24T00:00:00Z"
+    assert alpha["live"] is False and beta["live"] is True
+    assert unfiled["named"] == 0 and unfiled["last_active"] == ""
+
+
+def test_filter_open_projects_passthrough_when_unset_or_all():
+    from _pkg.tree_model import build_nested_tree, filter_open_projects
+    tree = build_nested_tree(_op_index(), {})
+    assert filter_open_projects(tree, None) is tree
+    assert filter_open_projects(tree, "*") is tree
+
+
+def test_filter_open_projects_keeps_selected_and_live_only_of_others():
+    from _pkg.tree_model import build_nested_tree, filter_open_projects
+    tree = build_nested_tree(_op_index(), {}, live_ids={"b1"})
+    out = filter_open_projects(tree, ["/w/alpha", "/gone"], live_ids={"b1"})
+    assert set(out) == {"/w/alpha", "/w/beta"}
+    assert not out["/w/alpha"].get("_not_open")
+    beta = out["/w/beta"]
+    assert beta["_not_open"] is True
+    assert [sid for sid, _ in beta["_folders"]["bugfix"]["_sessions"]] == ["b1"]
+    # The original tree is not mutated.
+    assert len(tree["/w/beta"]["_folders"]["bugfix"]["_sessions"]) == 2
+
+
+def test_filter_open_projects_drops_unselected_without_live():
+    from _pkg.tree_model import build_nested_tree, filter_open_projects
+    tree = build_nested_tree(_op_index(), {})
+    out = filter_open_projects(tree, ["/w/beta"], live_ids=set())
+    assert set(out) == {"/w/beta"}
+
+
+def test_launch_root_deepest_match_and_worktree():
+    from _pkg.tree_model import launch_root
+    roots = ["/Users/me", "/Users/me/w/alpha", "(unfiled)"]
+    assert launch_root(roots, "/Users/me/w/alpha/src") == "/Users/me/w/alpha"
+    assert launch_root(roots, "/Users/me/w/alpha/.claude/worktrees/x/y") == "/Users/me/w/alpha"
+    assert launch_root(roots, "/Users/me/other") == "/Users/me"
+    assert launch_root(roots, "/opt/elsewhere") is None
+    assert launch_root(roots, "/Users/me/w/alphabet") == "/Users/me"
+    assert launch_root(roots, None) is None

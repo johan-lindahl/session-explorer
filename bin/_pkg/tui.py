@@ -27,7 +27,8 @@ from . import usage as _usage
 from . import worktree
 from .format import fmt_age, fmt_pct, fmt_tokens
 from .markup import escape as _esc
-from .tree_model import build_nested_tree, split_path, session_root
+from .tree_model import (build_nested_tree, filter_open_projects, launch_root,
+                         project_catalog, split_path, session_root)
 
 
 LAUNCH_CHECK_DELAY = 1.5  # seconds after a new-session launch to verify it stuck
@@ -309,7 +310,8 @@ def _folder_has_sessions(index_data: dict, project: str, folder_segments: list) 
 
 def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
                       filter_active: bool, scanned: bool,
-                      view_mode: int = 0) -> "str | None":
+                      view_mode: int = 0,
+                      projects_filtered: bool = False) -> "str | None":
     """Message for the tree pane when no rows are visible, else None.
 
     Pure so it can be unit-tested. Branch order is deliberate: an active filter
@@ -326,6 +328,9 @@ def _empty_state_text(total_indexed: int, visible: int, unnamed_hidden: int,
     if unnamed_hidden > 0:
         return (f"{unnamed_hidden} unnamed session(s) hidden.\n"
                 "Press Tab to cycle views, then r to name one.")
+    if projects_filtered and total_indexed > 0:
+        return ("No sessions in your open projects.\n"
+                "Press o to choose which projects to show.")
     if total_indexed == 0:
         if scanned:
             return "No sessions found under ~/.claude/projects/."
@@ -354,6 +359,11 @@ def _help_text() -> str:
         "[b]What you see[/]",
         "Only named (renamed) sessions show by default. Press [b]Tab[/] to cycle",
         "the view: named+active → active only → all (incl. unnamed) → back.",
+        "",
+        "[b]Open projects[/]",
+        "The tree shows only the projects you've opened. Press [b]o[/] to choose",
+        "them (or tick [b]All projects[/]). A running session in a closed project",
+        "still shows, marked [dim]· not open[/], so you can always reach it.",
         "",
         "[b]Search[/]",
         "Press [b]f[/] to full-text search the current project's conversations —",
@@ -416,11 +426,12 @@ def _help_text() -> str:
         key("z", "Collapse the tree to project roots (toggle)"),
         key("F5", "Rescan ~/.claude/projects/ — import pre-existing sessions"),
         key("/", "Live filter across name, notes, first prompt, summary"),
+        key("o", "Open projects — choose which projects the tree shows"),
         key("h", "Show this help"),
         key("Esc", "Close the preview, filter, or this help"),
         key("q", "Toggle the Queues pane (shared-resource leases)"),
         key("s", "Toggle shared-root queueing for the selected project"),
-        key(",", "Settings — auto-summaries, retention, usage, queues, tmux"),
+        key(",", "Settings — auto-summaries, retention, usage, queues, projects, tmux"),
         key("x", "Exit"),
         "",
         "[dim]Esc, q, h, or Space closes this help.[/]",
@@ -720,6 +731,11 @@ class SettingsScreen(_PanelScreen):
     def on_mount(self) -> None:
         self._rebuild()
 
+    def on_screen_resume(self) -> None:
+        # A row can push its own dialog (projects picker, retention days);
+        # reflect its result when we're back on top.
+        self._rebuild()
+
     def _rebuild(self) -> None:
         ol = self.query_one("#settings-list", OptionList)
         highlighted = ol.highlighted
@@ -840,6 +856,165 @@ class HelpScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(Static(_help_text(), id="help-body"), id="help")
+
+
+class _PickerInput(Input):
+    """Filter box for ProjectPickerScreen. Space ticks the highlighted row
+    instead of typing: the app's priority Space→preview binding is vetoed by
+    check_action while a modal is up, after which Textual hands the key to the
+    focused Input (a screen-level priority binding never sees it)."""
+
+    async def _on_key(self, event) -> None:
+        if event.key == "space":
+            event.stop()
+            event.prevent_default()
+            self.screen.action_toggle()
+            return
+        await super()._on_key(event)
+
+
+class ProjectPickerScreen(_PanelScreen):
+    """Choose which projects the tree shows (spec: "Open projects (`o`)").
+
+    Focus stays in the filter input: typing narrows the list, ↑/↓ move, Space
+    ticks, ctrl+a ticks/unticks every visible row, Enter confirms, Esc cancels.
+    The first row is *All projects*. Dismisses with "*" (all), a list of root
+    paths, or None (cancelled). Confirming with nothing ticked is refused."""
+
+    ALL_ID = "__all__"
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Cancel"),
+        # priority: these keys must beat the focused filter Input (Space is
+        # handled by _PickerInput — see its docstring).
+        Binding("ctrl+a", "toggle_visible", "Toggle all", show=False, priority=True),
+        Binding("up", "move(-1)", "Up", show=False, priority=True),
+        Binding("down", "move(1)", "Down", show=False, priority=True),
+    ]
+
+    DEFAULT_CSS = """
+    ProjectPickerScreen #picker-list { height: auto; max-height: 24; }
+    ProjectPickerScreen #panel Input, ProjectPickerScreen #panel OptionList { width: 76; }
+    """
+
+    def __init__(self, catalog, current=None, title: str = "Open projects") -> None:
+        super().__init__()
+        self._catalog = list(catalog)
+        self._title = title
+        self._all = current == "*"
+        known = {p["root"] for p in self._catalog}
+        self._ticked: set = (set(current) & known) if isinstance(current, (list, set, tuple)) else set()
+
+    def compose(self) -> ComposeResult:
+        self._input = _PickerInput(placeholder="type to filter projects…", id="picker-filter")
+        self._list = OptionList(id="picker-list")
+        self._list.can_focus = False
+        self._status = Label("", classes="dialog-hint", id="picker-status")
+        yield Vertical(
+            Label(self._title, classes="dialog-title"),
+            self._input,
+            self._list,
+            self._status,
+            Label("↑↓ move · space tick · ctrl+a tick shown · enter open · esc cancel",
+                  classes="dialog-hint"),
+            id="panel",
+        )
+
+    def on_mount(self) -> None:
+        self._rebuild()
+        self._input.focus()
+
+    # -- rendering ---------------------------------------------------------
+    def _visible(self) -> list:
+        needle = self._input.value.strip().lower() if hasattr(self, "_input") else ""
+        if not needle:
+            return self._catalog
+        return [p for p in self._catalog
+                if needle in p["label"].lower() or needle in p["root"].lower()]
+
+    def _row_text(self, p: dict):
+        from rich.text import Text
+        box = "[x]" if (self._all or p["root"] in self._ticked) else "[ ]"
+        label = p["label"]
+        if len(label) > 40:
+            label = label[:39] + "…"
+        t = Text(f"{box} {label:<40} ")
+        t.append(f"{p['named']:>4} named  ", style="dim")
+        t.append(f"{fmt_age(p['last_active']):>5}", style="dim")
+        if p["live"]:
+            t.append("  ●", style="green")
+        return t
+
+    def _rebuild(self) -> None:
+        from rich.text import Text
+        hl = self._list.highlighted
+        self._list.clear_options()
+        self._list.add_option(Option(Text(f"{'[x]' if self._all else '[ ]'} All projects "
+                                          "(including new ones)"), id=self.ALL_ID))
+        for p in self._visible():
+            self._list.add_option(Option(self._row_text(p), id=p["root"]))
+        n = self._list.option_count
+        self._list.highlighted = min(hl if hl is not None else (1 if n > 1 else 0), n - 1)
+        if self._all:
+            self._status.update("All projects — every project shows, new ones too.")
+        else:
+            self._status.update(f"{len(self._ticked)} of {len(self._catalog)} projects ticked")
+
+    # -- actions -----------------------------------------------------------
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._list.highlighted = None
+        self._rebuild()
+
+    def action_move(self, delta: int) -> None:
+        n = self._list.option_count
+        if not n:
+            return
+        cur = self._list.highlighted or 0
+        self._list.highlighted = max(0, min(n - 1, cur + delta))
+
+    def _toggle_id(self, oid) -> None:
+        if oid == self.ALL_ID:
+            self._all = not self._all
+        elif oid:
+            if self._all:
+                # Leaving "all" by unticking one project: start from everything
+                # except it, which is what the screen was showing.
+                self._all = False
+                self._ticked = {p["root"] for p in self._catalog}
+            self._ticked ^= {oid}
+        self._rebuild()
+
+    def action_toggle(self) -> None:
+        hl = self._list.highlighted
+        if hl is None:
+            return
+        self._toggle_id(self._list.get_option_at_index(hl).id)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Mouse click on a row ticks it (keyboard Enter goes to the input → confirm).
+        self._toggle_id(event.option.id)
+
+    def action_toggle_visible(self) -> None:
+        roots = {p["root"] for p in self._visible()}
+        if self._all:
+            self._all = False
+            self._ticked = {p["root"] for p in self._catalog} - roots
+        elif roots <= self._ticked:
+            self._ticked -= roots
+        else:
+            self._ticked |= roots
+        self._rebuild()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_confirm()
+
+    def action_confirm(self) -> None:
+        if self._all:
+            self.dismiss("*")
+        elif self._ticked:
+            self.dismiss(sorted(self._ticked))
+        else:
+            self._status.update("[b]Tick at least one project[/b] (or All projects).")
 
 
 class SearchScreen(ModalScreen):
@@ -1019,6 +1194,7 @@ class SessionExplorerApp(App):
         Binding("h", "help", "Help"),
         Binding("q", "toggle_queues", "Queues"),
         Binding("comma", "settings", "Settings"),
+        Binding("o", "open_projects", "Projects", show=False),
         Binding("x", "quit", "Exit"),
         Binding("s", "resource_setup", "Shared resources", show=False),
         Binding("escape", "close_preview", "Close preview", show=False),
@@ -1103,11 +1279,11 @@ class SessionExplorerApp(App):
         # App-level bindings (especially priority ones like Enter→resume) must
         # not fire while a modal screen is up; otherwise the modal's own Enter
         # handler (e.g. Input submit) never runs.
-        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "search", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings") and isinstance(self.screen, ModalScreen):
+        if action in ("resume", "rename", "move", "new_folder", "new_session", "delete", "notes", "update_summary", "preview", "close_preview", "filter", "search", "cycle_view", "toggle_collapse", "toggle_usage", "rescan", "help", "expand_node", "collapse_node", "quit", "toggle_queues", "resource_setup", "settings", "open_projects") and isinstance(self.screen, ModalScreen):
             return False
         # While the filter Input is focused, never let `q`/`x`/`f` fire the global
         # Queues-toggle, Exit, or Search bindings — the keystrokes belong in the text.
-        if action in ("quit", "toggle_queues", "search") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
+        if action in ("quit", "toggle_queues", "search", "open_projects") and getattr(self, "_filter", None) is not None and self._filter.has_focus:
             return False
         # Tab is a priority binding (it must beat Textual's focus traversal), so
         # explicitly suppress it while the filter Input is focused — there, Tab
@@ -1216,6 +1392,10 @@ class SessionExplorerApp(App):
         self._render_queues()  # content-gated; renders nothing if empty
         # Belt-and-braces: ensure preview is hidden after first compose pass.
         self._preview.display = False
+        # Read the live registry before any first-run dialog: the open-projects
+        # picker pre-ticks (and marks ●) projects with a running session, and
+        # would otherwise see none on the very first frame.
+        self._poll_live()
         # Opt-in retention: neutralising cleanupPeriodDays modifies the user's
         # settings.json, so ask once on first launch rather than have the hook
         # do it silently. Then (after the choice) pop the first-run help.
@@ -1227,7 +1407,7 @@ class SessionExplorerApp(App):
                     retention.enable(cd)
                 else:
                     retention.decline(cd)
-                self._maybe_open_help()
+                self._maybe_pick_projects(self._maybe_open_help)
             self.push_screen(
                 ConfirmScreen(
                     "Let session-explorer manage session retention?\n\n"
@@ -1239,9 +1419,8 @@ class SessionExplorerApp(App):
                 after,
             )
         else:
-            self._maybe_open_help()
-        # Live-session indicator: poll the registry, then animate working rows.
-        self._poll_live()
+            self._maybe_pick_projects(self._maybe_open_help)
+        # Live-session indicator: animate working rows (first poll ran above).
         self.set_interval(LIVE_POLL_INTERVAL, self._poll_live)
         self.set_interval(SPINNER_INTERVAL, self._tick_spinner)
         self.set_interval(SNAPSHOT_POLL_INTERVAL, self._refresh_preview)
@@ -1285,6 +1464,69 @@ class SessionExplorerApp(App):
             "Run multiple sessions and monitor them live inside the explorer?\n"
             "This needs tmux, which isn't installed. Set it up? (y = how, n = no)"),
             after)
+
+    # -- open projects (spec "Open projects (`o`)") ------------------------
+    def _open_projects(self):
+        """The saved selection: None (unset), "*" (all) or a list of roots."""
+        from . import ui_state as _ui
+        try:
+            return _ui.get_open_projects(self._ui_path())
+        except Exception:
+            return None
+
+    def _launch_cwd(self) -> "str | None":
+        try:
+            with open(os.path.join(self._claude_dir(),
+                                   ".session-explorer.launch-cwd")) as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
+    def _project_catalog(self) -> list:
+        from . import folder_store as _fs
+        data = _index.load(self._index_path)
+        fs_data = _fs.load(_fs.default_path_for(self._index_path))
+        return project_catalog(data, fs_data, set(self._live_states))
+
+    def _open_project_picker(self, first_run: bool = False, then=None) -> None:
+        from . import ui_state as _ui
+        catalog = self._project_catalog()
+        current = self._open_projects()
+        if current is None:
+            # First run: pre-tick projects with a running session and the
+            # project /open was invoked from.
+            pre = {p["root"] for p in catalog if p["live"]}
+            lr = launch_root([p["root"] for p in catalog], self._launch_cwd())
+            if lr:
+                pre.add(lr)
+            current = sorted(pre)
+
+        def after(val) -> None:
+            if val is not None:
+                try:
+                    _ui.set_open_projects(self._ui_path(), val)
+                except Exception:
+                    import traceback
+                    _log_line("saving open projects failed:\n" + traceback.format_exc())
+                self._populate()
+            if then is not None:
+                then()
+
+        title = ("Which projects do you want to open?" if first_run
+                 else "Open projects")
+        self.push_screen(ProjectPickerScreen(catalog, current, title=title), after)
+
+    def _maybe_pick_projects(self, then) -> None:
+        """Every launch with no saved selection shows the picker (Esc skips it
+        for this run only). Suppressible for non-interactive runs / tests."""
+        if (self._open_projects() is not None
+                or os.environ.get("SESSION_EXPLORER_PROJECTS_NO_PROMPT")):
+            then()
+            return
+        self._open_project_picker(first_run=True, then=then)
+
+    def action_open_projects(self) -> None:
+        self._open_project_picker()
 
     def _maybe_open_help(self) -> None:
         self._maybe_offer_tmux()
@@ -1378,18 +1620,26 @@ class SessionExplorerApp(App):
                 _s["summary_msg_count"] = _se.get("msg_count")
         fs_data = _fs.load(_fs.default_path_for(self._index_path))
         live_ids = set(self._live_states)
-        tree = build_nested_tree(
+        full_tree = build_nested_tree(
             data, fs_data,
             include_unnamed=(self._view_mode == 2),
             live_ids=live_ids,
             live_only=(self._view_mode == 1),
         )
+        # Open-project selection (spec "Open projects (`o`)"): applied at the
+        # project level before the view mode / filter / collapse act within it.
+        open_sel = self._open_projects()
+        tree = filter_open_projects(full_tree, open_sel, live_ids)
+        selected = set(open_sel) if isinstance(open_sel, list) else None
         # Only mode 0 hides unnamed stubs; surface the count so the subtitle and
-        # empty-state can advertise the Tab cycle.
+        # empty-state can advertise the Tab cycle. Counted within the open
+        # projects only — hidden projects' stubs aren't the user's concern.
         unnamed_hidden = 0
         if self._view_mode == 0:
             unnamed_hidden = sum(
-                1 for s in data.get("sessions", {}).values() if not s.get("name_cached")
+                1 for s in data.get("sessions", {}).values()
+                if not s.get("name_cached")
+                and (selected is None or session_root(s) in selected)
             )
         root = self._tree.root
         root.expand()
@@ -1398,6 +1648,8 @@ class SessionExplorerApp(App):
             return len(node["_sessions"]) + sum(count(c) for c in node["_folders"].values())
 
         total = sum(count(p) for p in tree.values())
+        projects = (f"{len(tree)} of {len(full_tree)} projects (o)"
+                    if selected is not None else f"{len(tree)} projects")
         active = len(self._live_states)
         active_suffix = f" · ● {active} active" if active else ""
         if self._view_mode == 1:
@@ -1406,12 +1658,12 @@ class SessionExplorerApp(App):
             self.sub_title = f"Active only — {total} sessions (Tab)"
         elif self._view_mode == 2:
             self.sub_title = (f"All sessions incl. unnamed — {total} across "
-                              f"{len(tree)} projects{active_suffix} (Tab)")
+                              f"{projects}{active_suffix} (Tab)")
         elif unnamed_hidden:
-            self.sub_title = (f"{total} sessions across {len(tree)} projects · "
+            self.sub_title = (f"{total} sessions across {projects} · "
                               f"{unnamed_hidden} unnamed hidden (Tab){active_suffix}")
         else:
-            self.sub_title = f"{total} sessions across {len(tree)} projects{active_suffix}"
+            self.sub_title = f"{total} sessions across {projects}{active_suffix}"
 
         # Empty-state: when no session rows would render (after the filter),
         # show an actionable message in place of the tree instead of blank space.
@@ -1427,6 +1679,7 @@ class SessionExplorerApp(App):
             filter_active=bool(self._filter_needle),
             scanned=self._scanned,
             view_mode=self._view_mode,
+            projects_filtered=(selected is not None and len(tree) < len(full_tree)),
         )
         if msg is None:
             self._empty.display = False
@@ -1479,7 +1732,7 @@ class SessionExplorerApp(App):
                 child_segs = segments + [name]
                 fkey = self._node_key(project, child_segs)
                 folder_node = parent.add(
-                    f"{name}/",
+                    f"{_esc(name)}/",
                     expand=self._should_expand(fkey),
                     data={"project": project, "segments": child_segs},
                 )
@@ -1488,8 +1741,9 @@ class SessionExplorerApp(App):
         for project in sorted(tree, key=lambda r: tree[r]["_label"].lower()):
             node = tree[project]
             label = node["_label"]
+            suffix = " [dim]· not open[/]" if node.get("_not_open") else ""
             proj_node = root.add(
-                f"{label} ({count(node)})",
+                f"{_esc(label)} ({count(node)}){suffix}",
                 expand=self._should_expand(project),
                 data={"project": project, "segments": []},
             )
@@ -2477,6 +2731,13 @@ class SessionExplorerApp(App):
         if self._tmux_enabled:
             rows.append(("usage", f"{box(self._usage_enabled())} Usage bar"))
         rows.append(("queues", f"{box(self._queue_visible)} Queues pane"))
+        sel = self._open_projects()
+        if isinstance(sel, list):
+            known = {p["root"] for p in self._project_catalog()}
+            proj = f"{len(set(sel) & known)} of {len(known)} open"
+        else:
+            proj = "all"
+        rows.append(("projects", f"    Projects: {proj}  — Enter to choose"))
         if self._tmux_installed():
             rows.append(("tmux", "    tmux hosting: on"))
         else:
@@ -2510,6 +2771,8 @@ class SessionExplorerApp(App):
             self.action_toggle_usage()
         elif row_id == "queues":
             self.action_toggle_queues()
+        elif row_id == "projects":
+            self._open_project_picker()
         elif row_id == "tmux":
             if not self._tmux_installed():
                 marker = self._tmux_decline_marker()
