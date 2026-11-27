@@ -3,6 +3,23 @@
 All notable changes to session-explorer are documented here. This project
 follows [semantic versioning](https://semver.org/).
 
+## 1.21.1
+
+### Fixed
+- **Moving a running session no longer starts an unrelated old one.** After
+  `m` (or a slash-rename with `r`) the tree was rebuilt with the cursor left on
+  its old *line*, which now held a different — usually stopped — session. The
+  docked pane closed (cursor-follow), and the next Enter, meant to get back
+  into the moved session, resumed that old session instead. The cursor now
+  follows the moved session into its new folder (opening it if collapsed), a
+  moved/renamed folder keeps the cursor on itself, and every other tree rebuild
+  keeps the cursor on the same session or folder rather than the same line.
+- **Double-clicking in a dialog no longer resumes the row beneath it.**
+  Double-clicking a folder in the Move dialog picked it on the first click and,
+  once the dialog closed, the second click counted as a double-click on the
+  tree row under the mouse — resuming it. A double-click now resumes only when
+  both clicks land on the tree.
+
 ## 1.21.0
 
 ### Added
