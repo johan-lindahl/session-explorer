@@ -1314,6 +1314,12 @@ class SessionExplorerApp(App):
         # sid to move the cursor to on the next populate where its row exists
         # (set after creating a new session). Cleared once honored.
         self._pending_select_sid: str | None = None
+        # Same, for a folder/project node: (project, segments) of a folder that
+        # was just moved/renamed, so the cursor follows it to its new path.
+        self._pending_select_node: "tuple[str, tuple[str, ...]] | None" = None
+        # Widget the previous click landed on (see on_click): a double-click
+        # resumes only when BOTH of its clicks hit the tree.
+        self._last_click_widget = None
         # Collapse-to-roots view: when on, projects/folders render collapsed
         # except those the user has drilled into (tracked in _expanded by key).
         # Stale keys (renamed/deleted nodes) are benign — they never match and
@@ -1381,7 +1387,15 @@ class SessionExplorerApp(App):
         # that precedes it has already moved the tree cursor to that row, so
         # action_resume acts on the right session. Scoped to the tree so clicks
         # elsewhere (preview pane, etc.) don't resume.
-        if getattr(event, "chain", 1) == 2 and event.widget is self._tree:
+        #
+        # Both clicks must hit the tree: Textual chains clicks by screen cell +
+        # time alone, so double-clicking an option in a modal (e.g. a folder in
+        # the Move dialog) dismisses it on click 1 and click 2 lands on the tree
+        # beneath as chain=2 — resuming whatever stopped session is under the
+        # mouse.
+        prev, self._last_click_widget = self._last_click_widget, event.widget
+        if (getattr(event, "chain", 1) == 2 and event.widget is self._tree
+                and prev is self._tree):
             node = self._tree.cursor_node
             if node and node.data and "sid" in node.data:
                 self.action_resume()
@@ -1678,6 +1692,13 @@ class SessionExplorerApp(App):
 
     def _populate(self) -> None:
         from . import folder_store as _fs
+        # The cursor is an identity (a session, or a project/folder node), not a
+        # line number: Tree.clear() keeps cursor_line, so without this a rebuild
+        # that shifts rows (a move, a rename, a new session above) silently
+        # leaves the cursor on whichever row now occupies that line —
+        # cursor-follow then closes the docked pane and the next Enter resumes
+        # that stranger. Re-applied at the end of the rebuild.
+        prev_cursor = self._cursor_identity()
         self._tree.clear()
         self._row_nodes = {}
         if not self._fs_keys_migrated:
@@ -1850,20 +1871,85 @@ class SessionExplorerApp(App):
             # tree depth 1.
             render(proj_node, project, label, [], node, child_depth=1)
 
-        # Honor a pending select (e.g. just-created session) once its row exists.
+        # Honor a pending select (a just-created / just-moved session, or a
+        # just-moved folder) once its row exists: open its ancestors so it is
+        # visible, then put the cursor on it. Otherwise keep the cursor on the
+        # same session/folder it was on before the rebuild.
         if self._pending_select_sid and self._pending_select_sid in self._row_nodes:
             leaf = self._row_nodes[self._pending_select_sid][0]
-            # Open every ancestor so the row is visible before moving the cursor
-            # (needed when collapse mode collapsed the enclosing project/folder).
-            anc = leaf.parent
-            while anc is not None and anc is not self._tree.root:
-                anc.expand()
-                d = anc.data or {}
-                if "project" in d:
-                    self._expanded.add(self._node_key(d["project"], d.get("segments") or []))
-                anc = anc.parent
-            self._restore_cursor_to_sid(self._pending_select_sid)
+            self._reveal(leaf)
+            self._move_cursor_to(leaf)
             self._pending_select_sid = None
+        elif (self._pending_select_node
+              and (fnode := self._find_node(*self._pending_select_node)) is not None):
+            self._reveal(fnode)
+            self._move_cursor_to(fnode)
+            self._pending_select_node = None
+        elif prev_cursor is not None:
+            kind, *key = prev_cursor
+            if kind == "sid":
+                self._restore_cursor_to_sid(key[0])
+            else:
+                fnode = self._find_node(key[0], key[1])
+                if fnode is not None:
+                    self._move_cursor_to(fnode)
+
+    def _cursor_identity(self) -> "tuple | None":
+        """What the cursor is on, independent of line: ("sid", sid) for a
+        session row, ("node", project, segments) for a project/folder node."""
+        node = self._tree.cursor_node
+        d = (node.data or {}) if node is not None else {}
+        if d.get("sid"):
+            return ("sid", d["sid"])
+        if "project" in d:
+            return ("node", d["project"], tuple(d.get("segments") or ()))
+        return None
+
+    def _find_node(self, project: str, segments: "tuple[str, ...]"):
+        """The project (segments == ()) or folder node for `project`/`segments`
+        in the current tree, or None."""
+        want = tuple(segments)
+        stack = list(self._tree.root.children)
+        while stack:
+            n = stack.pop()
+            d = n.data or {}
+            if "sid" in d or "project" not in d:
+                continue
+            if d["project"] == project and tuple(d.get("segments") or ()) == want:
+                return n
+            stack.extend(n.children)
+        return None
+
+    def _reveal(self, node) -> None:
+        """Expand every ancestor of `node` (recording them as user-opened so a
+        collapse-mode rebuild keeps them open) so its row is visible."""
+        anc = node.parent
+        while anc is not None and anc is not self._tree.root:
+            anc.expand()
+            d = anc.data or {}
+            if "project" in d:
+                self._expanded.add(self._node_key(d["project"], d.get("segments") or []))
+            anc = anc.parent
+
+    def _move_cursor_to(self, node) -> None:
+        """Put the cursor on `node`, or — if it sits inside a collapsed
+        project/folder and so has no line — on its nearest visible ancestor.
+        (move_cursor on a line-less node would reset the cursor to -1.)"""
+        try:
+            # A fresh _populate() clears the tree's line cache, leaving every
+            # TreeNode._line at -1 until the next layout pass. move_cursor reads
+            # node._line, so force the line cache to rebuild first. Accessing
+            # _tree_lines triggers _build(), which assigns _line to every
+            # *visible* node; nodes under a collapsed parent stay at -1.
+            self._tree._tree_lines  # noqa: B018  (property access rebuilds the cache)
+            while (node is not None and node is not self._tree.root
+                   and node._line < 0):
+                node = node.parent
+            if node is None or node is self._tree.root:
+                return
+            self._tree.move_cursor(node)
+        except Exception:
+            pass
 
     def action_expand_node(self) -> None:
         node = self._tree.cursor_node
@@ -2138,6 +2224,9 @@ class SessionExplorerApp(App):
             # to stop the next re-emit reverting the name (see index.set_name).
             from . import index as _index
             _index.set_name(self._index_path, sid, new_name, transcript)
+            # Follow the renamed row (a slash-rename can move it to another,
+            # possibly collapsed, folder).
+            self._pending_select_sid = sid
             self._populate()
 
         self.push_screen(RenameScreen(current), after)
@@ -2177,6 +2266,7 @@ class SessionExplorerApp(App):
             # by moving any store entries under the old path.
             _fs.rename_subtree(_fs.default_path_for(self._index_path),
                                project, old_path, new_path)
+            self._pending_select_node = (project, tuple(new_segs))  # follow it
             self._populate()
 
         n = len(affected)
@@ -2240,6 +2330,11 @@ class SessionExplorerApp(App):
             # Authoritative rename (shadows the prior title so a live re-emit
             # can't revert the move — see index.set_name).
             _index.set_name(self._index_path, sid, new_name, transcript)
+            # The cursor follows the moved session into its new folder (opening
+            # it if collapsed). Left on its old line it would sit on another —
+            # usually stopped — session: cursor-follow closes the docked pane
+            # and the next Enter resumes that stranger.
+            self._pending_select_sid = sid
             self._populate()
 
         self.push_screen(MoveScreen(project, sorted(paths), current_folder), after)
@@ -2976,17 +3071,7 @@ class SessionExplorerApp(App):
         node = self._row_nodes.get(sid)
         if node is None:
             return
-        leaf = node[0]
-        try:
-            # A fresh _populate() clears the tree's line cache, leaving every
-            # TreeNode._line at -1 until the next layout pass. move_cursor reads
-            # leaf._line, so force the line cache to rebuild first; otherwise it
-            # would set cursor_line to -1 (top/reset). Accessing _tree_lines
-            # triggers _build(), which assigns _line to every node.
-            self._tree._tree_lines  # noqa: B018  (property access rebuilds the cache)
-            self._tree.move_cursor(leaf)
-        except Exception:
-            pass
+        self._move_cursor_to(node[0])
 
     def _visibility_changed(self, old: dict, new: dict) -> bool:
         """True if a live-set change alters which rows are visible.
